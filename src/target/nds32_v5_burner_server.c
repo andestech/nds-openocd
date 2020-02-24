@@ -446,7 +446,9 @@ static int ndsv5_burner_input(struct connection *connection)
 
 		case BURNER_SELECT_TARGET:
 			name_len = get_u32(buf_p+1);
-			target_name = (char*)malloc(name_len*sizeof(char));
+			/* use calloc can initial to 0 and let length = name_len + 1(the end of string need be 0),
+			 * target_name should be a string for generic function get_target() */
+			target_name = (char *)calloc(name_len+1, sizeof(char));
 			memcpy(target_name, buf_p+5, name_len);
 			target = get_target(target_name);
 			if (target == NULL) {
