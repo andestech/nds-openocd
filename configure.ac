@@ -402,6 +402,7 @@ AS_CASE([$host],
       is_cygwin=no
     ], [
       is_cygwin=yes
+      AC_DEFINE([FD_SETSIZE], [4096], [set fd size to 4096])
       # sys/io.h needed under cygwin for parport access
       AS_IF([test "x$build_parport" = "xyes"], [
         AC_CHECK_HEADERS([sys/io.h],[],AC_MSG_ERROR([Please install the cygwin ioperm package]))
@@ -750,6 +751,8 @@ AS_IF([test "x${has_environ}" != "xyes" ], [
 ])
 
 AC_DEFINE([_GNU_SOURCE],[1],[Use GNU C library extensions (e.g. stdndup).])
+AC_DEFINE([_NDS32_ONLY_],[1], [nds32 only])
+AC_DEFINE([_NDS_V5_ONLY_],[1], [ndsv5 only])
 
 # set default gcc warnings
 GCC_WARNINGS="-Wall -Wstrict-prototypes -Wformat-security -Wshadow"
