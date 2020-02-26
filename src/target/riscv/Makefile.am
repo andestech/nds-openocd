@@ -14,3 +14,10 @@ noinst_LTLIBRARIES += %D%/libriscv.la
        %D%/riscv-013.c \
        %D%/riscv.c \
        %D%/riscv_semihosting.c
+
+## NDSV5
+%C%_libriscv_la_SOURCES += \
+	%D%/ndsv5_encoding.h \
+	%D%/ndsv5.h \
+	%D%/ndsv5.c \
+	%D%/ndsv5-013.h

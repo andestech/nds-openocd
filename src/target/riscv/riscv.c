@@ -25,6 +25,10 @@
 #include "debug_defines.h"
 #include <helper/bits.h>
 
+#if _NDS_V5_ONLY_
+#include "ndsv5.h"
+#endif
+
 #define get_field(reg, mask) (((reg) & (mask)) / ((mask) & ~((mask) << 1)))
 #define set_field(reg, mask, val) (((reg) & ~(mask)) | (((val) * ((mask) & ~((mask) << 1))) & (mask)))
 
@@ -117,6 +121,9 @@ uint32_t bscan_tunnel_nested_tap_select_dmi_num_fields = ARRAY_SIZE(_bscan_tunne
 struct scan_field *bscan_tunnel_data_register_select_dmi = _bscan_tunnel_data_register_select_dmi;
 uint32_t bscan_tunnel_data_register_select_dmi_num_fields = ARRAY_SIZE(_bscan_tunnel_data_register_select_dmi);
 
+#if _NDS_V5_ONLY_
+/* Move this struct declaration to riscv.h */
+#else /* _NDS_V5_ONLY_ */
 struct trigger {
 	uint64_t address;
 	uint32_t length;
@@ -125,6 +132,7 @@ struct trigger {
 	bool read, write, execute;
 	int unique_id;
 };
+#endif /* _NDS_V5_ONLY_ */
 
 /* Wall-clock timeout for a command/access. Settable via RISC-V Target commands.*/
 int riscv_command_timeout_sec = DEFAULT_COMMAND_TIMEOUT_SEC;
@@ -296,7 +304,11 @@ uint32_t dtmcontrol_scan_via_bscan(struct target *target, uint32_t out)
 	return in;
 }
 
+#if _NDS_V5_ONLY_
+uint32_t dtmcontrol_scan(struct target *target, uint32_t out)
+#else
 static uint32_t dtmcontrol_scan(struct target *target, uint32_t out)
+#endif
 {
 	struct scan_field field;
 	uint8_t in_value[4];
@@ -330,7 +342,11 @@ static uint32_t dtmcontrol_scan(struct target *target, uint32_t out)
 	return in;
 }
 
+#if _NDS_V5_ONLY_
+struct target_type *get_target_type(struct target *target)
+#else
 static struct target_type *get_target_type(struct target *target)
+#endif
 {
 	riscv_info_t *info = (riscv_info_t *) target->arch_info;
 
@@ -1102,8 +1118,13 @@ static int oldriscv_step(struct target *target, int current, uint32_t address,
 	return tt->step(target, current, address, handle_breakpoints);
 }
 
+#if _NDS_V5_ONLY_
+int old_or_new_riscv_step(struct target *target, int current,
+		target_addr_t address, int handle_breakpoints)
+#else
 static int old_or_new_riscv_step(struct target *target, int current,
 		target_addr_t address, int handle_breakpoints)
+#endif
 {
 	RISCV_INFO(r);
 	LOG_DEBUG("handle_breakpoints=%d", handle_breakpoints);
@@ -1113,7 +1134,11 @@ static int old_or_new_riscv_step(struct target *target, int current,
 		return riscv_openocd_step(target, current, address, handle_breakpoints);
 }
 
+#if _NDS_V5_ONLY_
+int riscv_examine(struct target *target)
+#else
 static int riscv_examine(struct target *target)
+#endif
 {
 	LOG_DEBUG("[%s]", target_name(target));
 	if (target_was_examined(target)) {
@@ -1146,7 +1171,11 @@ static int oldriscv_poll(struct target *target)
 	return tt->poll(target);
 }
 
+#if _NDS_V5_ONLY_
+int old_or_new_riscv_poll(struct target *target)
+#else
 static int old_or_new_riscv_poll(struct target *target)
+#endif
 {
 	RISCV_INFO(r);
 	if (!r->is_halted)
@@ -3203,7 +3232,11 @@ COMMAND_HANDLER(handle_info)
 	return 0;
 }
 
+#if _NDS_V5_ONLY_
+const struct command_registration riscv_exec_command_handlers[] = {
+#else /* _NDS_V5_ONLY_ */
 static const struct command_registration riscv_exec_command_handlers[] = {
+#endif /* _NDS_V5_ONLY_ */
 	{
 		.name = "dump_sample_buf",
 		.handler = handle_dump_sample_buf_command,
@@ -4247,7 +4280,11 @@ static int register_set(struct reg *reg, uint8_t *buf)
 	return ERROR_OK;
 }
 
+#if _NDS_V5_ONLY_
+struct reg_arch_type riscv_reg_arch_type = {
+#else
 static struct reg_arch_type riscv_reg_arch_type = {
+#endif
 	.get = register_get,
 	.set = register_set
 };
@@ -4928,3 +4965,61 @@ void riscv_add_bscan_tunneled_scan(struct target *target, struct scan_field *fie
 	}
 	jtag_add_dr_scan(target->tap, ARRAY_SIZE(ctxt->tunneled_dr), ctxt->tunneled_dr, TAP_IDLE);
 }
+
+#if _NDS_V5_ONLY_
+extern const struct command_registration ndsv5_command_handlers[];
+struct target_type ndsv5_target = {
+	.name = "nds_v5",
+
+	.init_target = riscv_init_target,
+	.deinit_target = riscv_deinit_target,
+	.examine = ndsv5_examine,
+
+	/* poll current target status */
+	.poll = ndsv5_poll,
+
+	.halt = ndsv5_halt,
+	.resume = ndsv5_resume,
+	.step = ndsv5_step,
+
+	.assert_reset = riscv_assert_reset,
+	.deassert_reset = riscv_deassert_reset,
+
+	.read_memory = riscv_read_memory,
+	.write_memory = riscv_write_memory,
+	.read_phys_memory = riscv_read_phys_memory,
+	.write_phys_memory = riscv_write_phys_memory,
+
+	.write_buffer = ndsv5_writebuffer,
+
+	.checksum_memory = riscv_checksum_memory,
+
+	.mmu = riscv_mmu,
+	.virt2phys = riscv_virt2phys,
+
+	.get_gdb_reg_list = riscv_get_gdb_reg_list,
+	.get_gdb_reg_list_noread = riscv_get_gdb_reg_list_noread,
+	.get_gdb_arch = ndsv5_get_gdb_arch,
+
+	.add_breakpoint = riscv_add_breakpoint,
+	.remove_breakpoint = riscv_remove_breakpoint,
+
+	.add_watchpoint = riscv_add_watchpoint,
+	.remove_watchpoint = riscv_remove_watchpoint,
+
+	.arch_state = riscv_arch_state,
+
+	.run_algorithm = riscv_run_algorithm,
+
+	.address_bits = riscv_xlen_nonconst,
+	.data_bits = riscv_data_bits,
+
+	.commands = ndsv5_command_handlers,
+	.target_create = ndsv5_target_create,
+	.get_gdb_fileio_info = ndsv5_get_gdb_fileio_info,
+	.gdb_fileio_end = ndsv5_gdb_fileio_end,
+	.hit_watchpoint = ndsv5_hit_watchpoint,
+};
+#endif /* _NDS_V5_ONLY_ */
+
+

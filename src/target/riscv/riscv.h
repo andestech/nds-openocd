@@ -12,6 +12,12 @@ struct riscv_program;
 #include "target/register.h"
 #include <helper/command.h>
 
+#if _NDS_V5_ONLY_
+#include "target/breakpoints.h"	/* FIXED compiler warning */
+#include "target/target.h"	/* FIXED compiler warning */
+#endif /* _NDS_V5_ONLY_ */
+
+
 /* The register cache is statically allocated. */
 #define RISCV_MAX_HARTS 1024
 #define RISCV_MAX_REGISTERS 5000
@@ -420,5 +426,17 @@ int riscv_write_by_any_size(struct target *target, target_addr_t address, uint32
 
 int riscv_interrupts_disable(struct target *target, uint64_t ie_mask, uint64_t *old_mstatus);
 int riscv_interrupts_restore(struct target *target, uint64_t old_mstatus);
+
+#if _NDS_V5_ONLY_
+/* Move this struct declaration from riscv.c */
+struct trigger {
+	uint64_t address;
+	uint32_t length;
+	uint64_t mask;
+	uint64_t value;
+	bool read, write, execute;
+	int unique_id;
+};
+#endif /* _NDS_V5_ONLY_ */
 
 #endif

@@ -8,8 +8,10 @@ include %D%/hla/Makefile.am
 endif
 
 if AICE
-include %D%/aice/Makefile.am
-%C%_libjtag_la_LIBADD += $(top_builddir)/%D%/aice/libocdaice.la
+#include %D%/aice/Makefile.am
+#%C%_libjtag_la_LIBADD += $(top_builddir)/%D%/aice/libocdaice.la
+include %D%/aice2/Makefile.am
+%C%_libjtag_la_LIBADD += $(top_builddir)/%D%/aice2/libocdaice.la
 endif
 
 include %D%/drivers/Makefile.am

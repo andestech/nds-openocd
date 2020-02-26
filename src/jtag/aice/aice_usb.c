@@ -352,7 +352,7 @@ static void aice_unpack_dthmb(uint8_t *cmd_ack_code, uint8_t *target_id,
  * trickle in with some timeouts  */
 static int usb_bulk_with_retries(
 			int (*f)(struct libusb_device_handle *, int, char *, int, int, int *),
-			struct libusb_device_handle *dev, int ep,
+			jtag_libusb_device_handle *dev, int ep,
 			char *bytes, int size, int timeout, int *transferred)
 {
 	int tries = 3, count = 0;

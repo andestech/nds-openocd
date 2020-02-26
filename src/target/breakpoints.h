@@ -45,6 +45,9 @@ struct breakpoint {
 	struct breakpoint *next;
 	uint32_t unique_id;
 	int linked_brp;
+#if _NDS32_ONLY_
+	uint8_t *bytecode;
+#endif
 };
 
 struct watchpoint {
@@ -57,6 +60,9 @@ struct watchpoint {
 	unsigned int number;
 	struct watchpoint *next;
 	uint32_t unique_id;
+#if _NDS32_ONLY_
+	uint8_t *bytecode;
+#endif
 };
 
 void breakpoint_clear_target(struct target *target);
@@ -92,5 +98,18 @@ static inline void watchpoint_set(struct watchpoint *watchpoint, unsigned int nu
 	watchpoint->is_set = true;
 	watchpoint->number = number;
 }
+
+#if _NDS32_ONLY_
+#define BP_WP_LENGTH_MASK    (~0xFF000000)
+#define BP_WP_NON_SIMPLE     0x80000000
+#define BP_WP_TRIGGER_ON     0x40000000
+#define BP_WP_FORCE_VA_ON    0x20000000
+
+#define BP_WP_DATA_COMPARE   0x08000000
+#define BP_WP_USER_WATCH     0x04000000
+#define BP_WP_CONDITIONAL    0x02000000
+
+int nds32_backup_tmp_bytecode_data(char *p_bytecode);
+#endif /* _NDS32_ONLY_ */
 
 #endif /* OPENOCD_TARGET_BREAKPOINTS_H */

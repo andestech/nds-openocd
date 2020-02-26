@@ -4634,3 +4634,10 @@ DECLARE_CAUSE("load guest page fault", CAUSE_LOAD_GUEST_PAGE_FAULT)
 DECLARE_CAUSE("virtual instruction", CAUSE_VIRTUAL_INSTRUCTION)
 DECLARE_CAUSE("store guest page fault", CAUSE_STORE_GUEST_PAGE_FAULT)
 #endif
+
+#if _NDS_V5_ONLY_
+#define MATCH_BFOZ 0x205b
+
+#include "ndsv5_encoding.h"
+#endif /* _NDS_V5_ONLY_ */
+

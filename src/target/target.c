@@ -104,6 +104,7 @@ extern struct target_type hla_target;
 extern struct target_type nds32_v2_target;
 extern struct target_type nds32_v3_target;
 extern struct target_type nds32_v3m_target;
+extern struct target_type ndsv5_target;
 extern struct target_type or1k_target;
 extern struct target_type quark_x10xx_target;
 extern struct target_type quark_d20xx_target;
@@ -140,6 +141,7 @@ static struct target_type *target_types[] = {
 	&nds32_v2_target,
 	&nds32_v3_target,
 	&nds32_v3m_target,
+	&ndsv5_target,
 	&or1k_target,
 	&quark_x10xx_target,
 	&quark_d20xx_target,
@@ -159,7 +161,11 @@ static struct target_timer_callback *target_timer_callbacks;
 static int64_t target_timer_next_event_value;
 static LIST_HEAD(target_reset_callback_list);
 static LIST_HEAD(target_trace_callback_list);
+#if _NDS32_ONLY_
+static const int polling_interval = 5;
+#else
 static const int polling_interval = TARGET_DEFAULT_POLLING_INTERVAL;
+#endif
 static LIST_HEAD(empty_smp_targets);
 
 static const struct jim_nvp nvp_assert[] = {
@@ -269,6 +275,10 @@ static const struct jim_nvp nvp_target_debug_reason[] = {
 	{ .name = "program-exit",              .value = DBG_REASON_EXIT },
 	{ .name = "exception-catch",           .value = DBG_REASON_EXC_CATCH },
 	{ .name = "undefined",                 .value = DBG_REASON_UNDEFINED },
+#if _NDS32_ONLY_
+	{ .name = "tracer-buffer-full"       , .value = DBG_REASON_TRACE_BUFFULL },
+	{ .name = "hit-monitor-watch"        , .value = DBG_REASON_HIT_MONITOR_WATCH },
+#endif
 	{ .name = NULL, .value = -1 },
 };
 
@@ -1877,6 +1887,13 @@ int target_call_reset_callbacks(struct target *target, enum target_reset_mode re
 
 	list_for_each_entry(callback, &target_reset_callback_list, list)
 		callback->callback(target, reset_mode, callback->priv);
+
+#if _NDS32_ONLY_
+	if (reset_mode == 1) {
+		target->after_reset_run = true;
+		LOG_DEBUG("target->after_reset_run is true");
+	}
+#endif
 
 	return ERROR_OK;
 }
@@ -4229,7 +4246,12 @@ static void write_gmon(uint32_t *samples, uint32_t sample_num, const char *filen
 			uint32_t start_address, uint32_t end_address, struct target *target, uint32_t duration_ms)
 {
 	uint32_t i;
+#if _NDS32_ONLY_
+	/* fix gmon write length issue */
+	FILE *f = fopen(filename, "wb");
+#else
 	FILE *f = fopen(filename, "w");
+#endif
 	if (!f)
 		return;
 	write_string(f, "gmon");
@@ -5291,6 +5313,11 @@ enum target_cfg_param {
 	TCFG_WORK_AREA_SIZE,
 	TCFG_WORK_AREA_BACKUP,
 	TCFG_ENDIAN,
+#if _NDS32_ONLY_
+	TCFG_VARIANT,
+	TCFG_CORENUMS,
+	TCFG_GROUP,
+#endif
 	TCFG_COREID,
 	TCFG_CHAIN_POSITION,
 	TCFG_DBGBASE,
@@ -5308,6 +5335,11 @@ static struct jim_nvp nvp_config_opts[] = {
 	{ .name = "-work-area-size",   .value = TCFG_WORK_AREA_SIZE },
 	{ .name = "-work-area-backup", .value = TCFG_WORK_AREA_BACKUP },
 	{ .name = "-endian",           .value = TCFG_ENDIAN },
+#if _NDS32_ONLY_
+	{ .name = "-variant",          .value = TCFG_VARIANT },
+	{ .name = "-corenums",         .value = TCFG_CORENUMS },
+	{ .name = "-group",           .value = TCFG_GROUP },
+#endif
 	{ .name = "-coreid",           .value = TCFG_COREID },
 	{ .name = "-chain-position",   .value = TCFG_CHAIN_POSITION },
 	{ .name = "-dbgbase",          .value = TCFG_DBGBASE },
@@ -5324,6 +5356,9 @@ static int target_configure(struct jim_getopt_info *goi, struct target *target)
 	Jim_Obj *o;
 	jim_wide w;
 	int e;
+#if _NDS32_ONLY_
+	const char *cp;
+#endif
 
 	/* parse config or cget options ... */
 	while (goi->argc > 0) {
@@ -5535,6 +5570,56 @@ no_params:
 			Jim_SetResultString(goi->interp, n->name, -1);
 			/* loop for more */
 			break;
+
+#if _NDS32_ONLY_
+		case TCFG_VARIANT:
+			if (goi->isconfigure) {
+				if (goi->argc < 1) {
+					Jim_SetResultFormatted(goi->interp,
+							"%s ?STRING?",
+							n->name);
+					return JIM_ERR;
+				}
+				if (target->variant)
+					free((void *)(target->variant));
+				e = jim_getopt_string(goi, &cp, NULL);
+				if (e != JIM_OK)
+					return e;
+				target->variant = strdup(cp);
+			} else {
+				if (goi->argc != 0)
+					goto no_params;
+			}
+			Jim_SetResultString(goi->interp, target->variant, -1);
+			/* loop for more */
+			break;
+		case TCFG_CORENUMS:
+			if (goi->isconfigure) {
+				e = jim_getopt_wide(goi, &w);
+				if (e != JIM_OK)
+					return e;
+				target->corenums = (int32_t)w;
+			} else {
+				if (goi->argc != 0)
+					goto no_params;
+			}
+			Jim_SetResult(goi->interp, Jim_NewIntObj(goi->interp, target->corenums));
+			/* loop for more */
+			break;
+		case TCFG_GROUP:
+			if (goi->isconfigure) {
+				e = jim_getopt_wide(goi, &w);
+				if (e != JIM_OK)
+					return e;
+				target->group = (int32_t)w;
+			} else {
+				if (goi->argc != 0)
+					goto no_params;
+			}
+			Jim_SetResult(goi->interp, Jim_NewIntObj(goi->interp, target->group));
+			/* loop for more */
+			break;
+#endif
 
 		case TCFG_COREID:
 			if (goi->isconfigure) {
@@ -6273,6 +6358,14 @@ static int target_create(struct jim_getopt_info *goi)
 	target->dbg_msg_enabled = 0;
 
 	target->endianness = TARGET_ENDIAN_UNKNOWN;
+
+#if _NDS32_ONLY_
+	target->corenums = 0;
+	/* incase variant is not set */
+	if (!target->variant)
+		target->variant = strdup("");
+	target->after_reset_run = false;
+#endif
 
 	target->rtos = NULL;
 	target->rtos_auto_detect = false;

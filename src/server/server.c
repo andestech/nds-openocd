@@ -54,12 +54,23 @@ enum shutdown_reason {
 	SHUTDOWN_WITH_SIGNAL_CODE	/* set by sig_handler; exec shutdown then exit with signal as return code */
 };
 static enum shutdown_reason shutdown_openocd = CONTINUE_MAIN_LOOP;
+#if _NDS32_ONLY_ /* NDS32: ctrl-c detect */
+int server_get_shutdown(void)
+{
+	return shutdown_openocd;
+}
+#endif
 
 /* store received signal to exit application by killing ourselves */
 static int last_signal;
 
+#if _NDS32_ONLY_
+/* NDS32 for profiling-probe pc per-10ms */
+int polling_period = 100;
+#else /* _NDS32_ONLY_ */
 /* set the polling period to 100ms */
 static int polling_period = 100;
+#endif /* _NDS32_ONLY_ */
 
 /* address by name on which to listen for incoming TCP/IP connections */
 static char *bindto_name;
@@ -210,7 +221,12 @@ int add_service(const struct service_driver *driver, const char *port,
 {
 	struct service *c, **p;
 	struct hostent *hp;
+#if _NDS32_ONLY_
+	/* Fix bug-9638, port number issue */
+	int so_reuseaddr_option = 0;
+#else
 	int so_reuseaddr_option = 1;
+#endif
 
 	c = malloc(sizeof(struct service));
 
@@ -242,7 +258,11 @@ int add_service(const struct service_driver *driver, const char *port,
 	if (c->type == CONNECTION_TCP) {
 		c->max_connections = max_connections;
 
+#if _NDS_V5_ONLY_
+		c->fd = socket(AF_INET6, SOCK_STREAM, 0);
+#else /* _NDS_V5_ONLY_ */
 		c->fd = socket(AF_INET, SOCK_STREAM, 0);
+#endif /* _NDS_V5_ONLY_ */
 		if (c->fd == -1) {
 			LOG_ERROR("error creating socket: %s", strerror(errno));
 			free_service(c);
@@ -255,13 +275,30 @@ int add_service(const struct service_driver *driver, const char *port,
 			(void *)&so_reuseaddr_option,
 			sizeof(int));
 
+#if _NDS_V5_ONLY_
+		int off = 0;
+		setsockopt(c->fd,
+			IPPROTO_IPV6,
+			IPV6_V6ONLY,
+			(char *)&off,
+			sizeof(off));
+#endif /* _NDS_V5_ONLY_ */
+
 		socket_nonblock(c->fd);
 
 		memset(&c->sin, 0, sizeof(c->sin));
+#if _NDS_V5_ONLY_
+		c->sin.sin6_family = AF_INET6;
+#else /* _NDS_V5_ONLY_ */
 		c->sin.sin_family = AF_INET;
+#endif /* _NDS_V5_ONLY_ */
 
 		if (!bindto_name)
+#if _NDS_V5_ONLY_
+			c->sin.sin6_addr = in6addr_any;
+#else /* _NDS_V5_ONLY_ */
 			c->sin.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+#endif /* _NDS_V5_ONLY_ */
 		else {
 			hp = gethostbyname(bindto_name);
 			if (!hp) {
@@ -270,9 +307,18 @@ int add_service(const struct service_driver *driver, const char *port,
 				free_service(c);
 				return ERROR_FAIL;
 			}
+#if _NDS_V5_ONLY_
+			memcpy(&c->sin.sin6_addr, hp->h_addr_list[0], hp->h_length);
+#else /* _NDS_V5_ONLY_ */
 			memcpy(&c->sin.sin_addr, hp->h_addr_list[0], hp->h_length);
+#endif /* _NDS_V5_ONLY_ */
 		}
+
+#if _NDS_V5_ONLY_
+		c->sin.sin6_port = htons(c->portnumber);
+#else /* _NDS_V5_ONLY_ */
 		c->sin.sin_port = htons(c->portnumber);
+#endif /* _NDS_V5_ONLY_ */
 
 		if (bind(c->fd, (struct sockaddr *)&c->sin, sizeof(c->sin)) == -1) {
 			LOG_ERROR("couldn't bind %s to socket on port %d: %s", c->name, c->portnumber, strerror(errno));
@@ -301,12 +347,21 @@ int add_service(const struct service_driver *driver, const char *port,
 			return ERROR_FAIL;
 		}
 
+#if _NDS_V5_ONLY_
+		struct sockaddr_in6 addr_in;
+		addr_in.sin6_port = 0;
+#else /* _NDS_V5_ONLY_ */
 		struct sockaddr_in addr_in;
 		addr_in.sin_port = 0;
+#endif /* _NDS_V5_ONLY_ */
 		socklen_t addr_in_size = sizeof(addr_in);
 		if (getsockname(c->fd, (struct sockaddr *)&addr_in, &addr_in_size) == 0)
 			LOG_INFO("Listening on port %hu for %s connections",
+#if _NDS_V5_ONLY_
+				 ntohs(addr_in.sin6_port), c->name);
+#else /* _NDS_V5_ONLY_ */
 				 ntohs(addr_in.sin_port), c->name);
+#endif /* _NDS_V5_ONLY_ */
 	} else if (c->type == CONNECTION_STDINOUT) {
 		c->fd = fileno(stdin);
 
@@ -550,7 +605,11 @@ int server_loop(struct command_context *command_context)
 					add_connection(service, command_context);
 				else {
 					if (service->type == CONNECTION_TCP) {
+#if _NDS_V5_ONLY_
+						struct sockaddr_in6 sin;
+#else /* _NDS_V5_ONLY_ */
 						struct sockaddr_in sin;
+#endif /* _NDS_V5_ONLY_ */
 						socklen_t address_size = sizeof(sin);
 						int tmp_fd;
 						tmp_fd = accept(service->fd,
@@ -703,9 +762,17 @@ int server_init(struct command_context *cmd_ctx)
 	return ERROR_OK;
 }
 
+#if _NDS32_ONLY_
+extern int nds_freerun_all_targets(void);
+#endif /* _NDS32_ONLY_ */
 int server_quit(void)
 {
 	remove_services();
+
+#if _NDS32_ONLY_
+	nds_freerun_all_targets();
+#endif /* _NDS32_ONLY_ */
+
 	target_quit();
 
 #ifdef _WIN32
@@ -884,3 +951,4 @@ COMMAND_HELPER(server_pipe_command, char **out)
 	}
 	return ERROR_OK;
 }
+

@@ -63,6 +63,10 @@ struct rtos {
 	void *rtos_specific_params;
 	/* Populated in rtos.c, so that individual RTOSes can register commands. */
 	struct command_context *cmd_ctx;
+
+#if _NDS32_ONLY_
+	uint32_t hart_unavailable[64];
+#endif
 };
 
 struct rtos_reg {

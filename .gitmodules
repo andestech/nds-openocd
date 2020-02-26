@@ -1,9 +1,12 @@
 [submodule "tools/git2cl"]
 	path = tools/git2cl
-	url = https://git.savannah.nongnu.org/git/git2cl.git
+	#url = https://git.savannah.nongnu.org/git/git2cl.git
+	url = atclnx01:/home/project/git_repo/toolchain/git2cl.git
 [submodule "jimtcl"]
 	path = jimtcl
-	url = https://github.com/msteveb/jimtcl.git
+	#url = https://github.com/msteveb/jimtcl.git
+	url = atclnx01:/home/project/git_repo/toolchain/jimtcl.git
 [submodule "src/jtag/drivers/libjaylink"]
 	path = src/jtag/drivers/libjaylink
-	url = https://gitlab.zapb.de/libjaylink/libjaylink.git
+	#url = https://gitlab.zapb.de/libjaylink/libjaylink.git
+	url = atclnx01:/home/project/git_repo/toolchain/libjaylink.git

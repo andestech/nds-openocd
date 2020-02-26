@@ -49,6 +49,15 @@
 /* ipdbg are utilities to debug IP-cores. It uses JTAG for transport. */
 #include "server/ipdbg.h"
 
+#if _NDS32_ONLY_
+extern uint32_t nds_scan_retry_times;
+extern uint32_t aice_default_use_sdm;
+extern int nds_sdm_idcode_scan(struct jtag_tap *tap, uint8_t *idcode_buffer, uint32_t max_count);
+extern char *custom_initial_script;
+extern char *custom_restart_script;
+extern FILE *nds_script_custom_initial;
+#endif
+
 /** The number of JTAG queue flushes (for profiling and debugging purposes). */
 static int jtag_flush_queue_count;
 
@@ -1116,6 +1125,22 @@ static bool jtag_examine_chain_check(uint8_t *idcodes, unsigned count)
 		LOG_ERROR("JTAG scan chain interrogation failed: all %s",
 			(zero_check == 0x00) ? "zeroes" : "ones");
 		LOG_ERROR("Check JTAG interface, timings, target power, etc.");
+#if _NDS32_ONLY_
+		if (nds_scan_retry_times == 0) {
+			fprintf(stderr, "<-- JTAG scan chain interrogation failed: all %s -->\n",
+					(zero_check == 0x00) ? "zeroes" : "ones");
+			fprintf(stderr, "<-- Check JTAG interface, timings, target power, etc. -->\n");
+			if ((custom_initial_script != NULL) ||
+			    (custom_restart_script != NULL) ||
+			    (nds_script_custom_initial != NULL))
+				return false;
+			else
+				exit(-1);
+		} else
+			nds_scan_retry_times--;
+
+#endif
+
 		return false;
 	}
 	return true;
@@ -1229,6 +1254,14 @@ static int jtag_examine_chain(void)
 	retval = jtag_examine_chain_execute(idcode_buffer, max_taps);
 	if (retval != ERROR_OK)
 		goto out;
+
+#if _NDS32_ONLY_
+	if (aice_default_use_sdm == 1) {
+		struct jtag_tap *tap_sdm = jtag_tap_next_enabled(NULL);
+		nds_sdm_idcode_scan(tap_sdm, idcode_buffer, max_taps);
+	}
+#endif
+
 	if (!jtag_examine_chain_check(idcode_buffer, max_taps)) {
 		retval = ERROR_JTAG_INIT_FAILED;
 		goto out;
@@ -1245,6 +1278,11 @@ static int jtag_examine_chain(void)
 
 		/* No predefined TAP? Auto-probe. */
 		if (!tap) {
+#if _NDS32_ONLY_
+			if (aice_default_use_sdm == 1)
+				break;
+#endif
+
 			/* Is there another TAP? */
 			if (jtag_idcode_is_final(idcode))
 				break;
