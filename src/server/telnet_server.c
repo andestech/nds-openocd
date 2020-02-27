@@ -216,6 +216,10 @@ static int telnet_new_connection(struct connection *connection)
 	struct telnet_service *telnet_service = connection->service->priv;
 	int i;
 
+#if _NDS_V5_ONLY_
+	LOG_INFO("Establising Telnet connection");
+#endif
+
 	telnet_connection = malloc(sizeof(struct telnet_connection));
 
 	if (!telnet_connection) {
@@ -237,12 +241,19 @@ static int telnet_new_connection(struct connection *connection)
 	command_set_output_handler(connection->cmd_ctx, telnet_output, connection);
 
 	/* negotiate telnet options */
+#if _NDS_V5_ONLY_
+	LOG_INFO("Negotiate telnet options");
+#endif
 	telnet_write(connection, negotiate, strlen(negotiate));
 
 	/* print connection banner */
 	if (telnet_service->banner) {
 		telnet_write(connection, telnet_service->banner, strlen(telnet_service->banner));
 		telnet_write(connection, "\r\n", 2);
+
+#if _NDS_V5_ONLY_
+		LOG_INFO("telnet banner: %s", telnet_service->banner);
+#endif
 	}
 
 	/* the prompt is always placed at the line beginning */
@@ -360,7 +371,12 @@ static int telnet_input(struct connection *connection)
 				if (*buf_p == 0xff)
 					t_con->state = TELNET_STATE_IAC;
 				else {
+#if _NDS32_ONLY_
+					/* Bug-18764, printable character or UTF-8 not ASCII character */
+					if (isprint(*buf_p) || (*buf_p >= 0x80 && *buf_p <= 0xfd)) {
+#else
 					if (isprint(*buf_p)) {	/* printable character */
+#endif
 						/* watch buffer size leaving one spare character for
 						 * string null termination */
 						if (t_con->line_size == TELNET_LINE_MAX_SIZE-1) {
