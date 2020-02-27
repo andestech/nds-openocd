@@ -42,6 +42,17 @@
 
 int debug_level = -1;
 
+#if _NDS32_ONLY_
+int nds_bak_debug_level = -1;
+void nds_dump_detail_debug_info(uint32_t);
+char *p_nds_bak_debug_buffer_cur;
+char *p_nds_bak_debug_buffer_start;
+char *p_nds_bak_debug_buffer_end;
+uint32_t nds_bak_debug_file_nums = 16;
+uint32_t nds_bak_debug_buffer_overwrite;
+char *log_output_path;
+#endif /* _NDS32_ONLY_ */
+
 static FILE *log_output;
 static struct log_callback *log_callbacks;
 
@@ -103,6 +114,40 @@ static void log_puts(enum log_levels level,
 		file = f + 1;
 
 	if (strlen(string) > 0) {
+
+#if _NDS32_ONLY_
+		char tmp_line[1024];
+		char *pline_string = (char *)&tmp_line[0];
+		/* print with count and time information */
+		int64_t t = timeval_ms() - start;
+		int	str_cnt = 0;
+		if (strlen(string) > 800) {
+			str_cnt = sprintf(pline_string, "%s%d %" PRId64 " %s:%d %s()"
+					": skipping...\n", log_strings[level + 1], count, t, file, line, function);
+		} else {
+			str_cnt = sprintf(pline_string, "%s%d %" PRId64 " %s:%d %s()"
+					": %s", log_strings[level + 1], count, t, file, line, function,
+					string);
+		}
+		/* backup debug message into string buffer */
+		if (p_nds_bak_debug_buffer_cur) {
+			char *pbak_string = (char *)p_nds_bak_debug_buffer_cur;
+			if ((pbak_string + str_cnt) >= (p_nds_bak_debug_buffer_end-2)) {
+				p_nds_bak_debug_buffer_cur = p_nds_bak_debug_buffer_start;
+				pbak_string = p_nds_bak_debug_buffer_cur;
+				nds_bak_debug_buffer_overwrite = 1;
+			}
+			strncpy(pbak_string, pline_string, str_cnt);
+			p_nds_bak_debug_buffer_cur += str_cnt;
+		}
+
+		if ((level == LOG_LVL_DEBUG) && (debug_level == LOG_LVL_INFO)) {
+			/* do NOT output */
+		} else if (debug_level >= LOG_LVL_ERROR) {
+			fputs(pline_string, log_output);
+			if (level == LOG_LVL_ERROR)
+				nds_dump_detail_debug_info(0);
+#else /* _NDS32_ONLY_ */
 		if (debug_level >= LOG_LVL_DEBUG) {
 			/* print with count and time information */
 			int64_t t = timeval_ms() - start;
@@ -119,6 +164,8 @@ static void log_puts(enum log_levels level,
 				info.fordblks,
 #endif
 				string);
+
+#endif /* _NDS32_ONLY_ */
 		} else {
 			/* if we are using gdb through pipes then we do not want any output
 			 * to the pipe otherwise we get repeated strings */
@@ -148,8 +195,14 @@ void log_printf(enum log_levels level,
 	va_list ap;
 
 	count++;
+
+#if _NDS32_ONLY_
+	if ((level > debug_level) && (debug_level != LOG_LVL_INFO))
+		return;
+#else /* _NDS32_ONLY_ */
 	if (level > debug_level)
 		return;
+#endif /* _NDS32_ONLY_ */
 
 	va_start(ap, format);
 
@@ -169,8 +222,13 @@ void log_vprintf_lf(enum log_levels level, const char *file, unsigned line,
 
 	count++;
 
+#if _NDS32_ONLY_
+	if ((level > debug_level) && (debug_level != LOG_LVL_INFO))
+		return;
+#else /* _NDS32_ONLY_ */
 	if (level > debug_level)
 		return;
+#endif /* _NDS32_ONLY_ */
 
 	tmp = alloc_vprintf(format, args);
 
@@ -231,6 +289,14 @@ COMMAND_HANDLER(handle_log_output_command)
 			fclose(log_output);
 		}
 		log_output = file;
+
+
+		#if _NDS32_ONLY_
+		log_output_path = strdup(CMD_ARGV[0]);
+		fputs(log_output_path, log_output);
+		fputs("\n", log_output);
+		fflush(log_output);
+		#endif /* _NDS32_ONLY_ */
 	}
 
 	return ERROR_OK;
@@ -442,6 +508,15 @@ void alive_sleep(uint64_t ms)
 
 		usleep(sleep_a_bit * 1000);
 		keep_alive();
+
+		#if _NDS32_ONLY_
+		extern int server_get_shutdown(void);
+		/* NDS32: ctrl-c detect */
+		if (server_get_shutdown() == 1) {
+			exit(-1);
+			return;
+		}
+		#endif /* _NDS32_ONLY_ */
 	}
 }
 
@@ -454,3 +529,94 @@ void busy_sleep(uint64_t ms)
 		 */
 	}
 }
+
+#if _NDS32_ONLY_
+FILE *get_log_output(void)
+{
+	return log_output;
+}
+
+void nds_dump_detail_debug_info(uint32_t if_final)
+{
+	static uint32_t nds_bak_debug_buf_cur_id;
+
+	FILE *pDebugBakFile = NULL;
+	char *pbak_string;
+	uint32_t copy_cnt;
+
+	if ((p_nds_bak_debug_buffer_start == NULL) ||
+	    (p_nds_bak_debug_buffer_cur == p_nds_bak_debug_buffer_start))
+		return;
+
+	char filename[2048];
+	char name_tmp[32];
+	memset(name_tmp, 0, sizeof(name_tmp));
+	if (if_final) {
+		strcpy(name_tmp, "iceman_detail_last.log");
+	} else {
+		if (nds_bak_debug_buf_cur_id >= (nds_bak_debug_file_nums-1))
+			return;
+		sprintf(name_tmp, "iceman_detail%02d.log", nds_bak_debug_buf_cur_id);
+		nds_bak_debug_buf_cur_id++;
+	}
+	/* depend on log file path */
+	memset(filename, 0, sizeof(filename));
+	if (log_output_path) {
+		char *c = strstr(log_output_path, "iceman_debug0.log");
+		if (c)
+			*c = '\0';
+
+		strncpy(filename, log_output_path, strlen(log_output_path));
+	}
+	strncat(filename, name_tmp, strlen(name_tmp));
+
+	char name_delete[2048];
+	memset(name_tmp, 0, sizeof(name_tmp));
+
+	if (nds_bak_debug_buf_cur_id <= 1) {
+		/* delete all iceman_detailxx.log before */
+		for (uint32_t i = 0; i < nds_bak_debug_file_nums; i++) {
+			memset(name_delete, 0, sizeof(name_delete));
+			sprintf(name_tmp, "iceman_detail%02d.log", i);
+			if (log_output_path)
+				strncpy(name_delete, log_output_path, strlen(log_output_path));
+
+			strncat(name_delete, name_tmp, strlen(name_tmp));
+			/*NDS_INFO("remove: %s", name_delete);*/
+			remove(name_delete);
+		}
+		memset(name_delete, 0, sizeof(name_delete));
+		if (log_output_path)
+			strncpy(name_delete, log_output_path, strlen(log_output_path));
+		strcpy(name_tmp, "iceman_detail_last.log");
+		strncat(name_delete, name_tmp, strlen(name_tmp));
+		remove(name_delete);
+	}
+	/*
+	strncat(filename, "detail.log", 10);
+	NDS_INFO("nds_dump_detail: %s", filename);
+	*/
+
+	pDebugBakFile = fopen(filename, "wb");
+	/* copy bak_debug_buffer to output file */
+	if (nds_bak_debug_buffer_overwrite == 1) {
+		pbak_string = (char *)p_nds_bak_debug_buffer_cur;
+		copy_cnt = p_nds_bak_debug_buffer_end - p_nds_bak_debug_buffer_cur;
+		if (copy_cnt)
+			fwrite((char *)pbak_string, 1, copy_cnt, pDebugBakFile);
+		/*NDS_INFO("write %d bytes", copy_cnt);*/
+	}
+	pbak_string = (char *)p_nds_bak_debug_buffer_start;
+	copy_cnt = p_nds_bak_debug_buffer_cur - p_nds_bak_debug_buffer_start;
+	if (copy_cnt)
+		fwrite((char *)pbak_string, 1, copy_cnt, pDebugBakFile);
+	/*NDS_INFO("write %d bytes", copy_cnt);*/
+	fclose(pDebugBakFile);
+
+	/* reset backup info buffer */
+	nds_bak_debug_buffer_overwrite = 0;
+	p_nds_bak_debug_buffer_cur = p_nds_bak_debug_buffer_start;
+	/*NDS_INFO("finish");*/
+}
+#endif /* _NDS32_ONLY_ */
+

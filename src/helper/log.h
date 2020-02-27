@@ -112,6 +112,31 @@ extern int debug_level;
 				expr); \
 	} while (0)
 
+#if _NDS32_ONLY_
+FILE *get_log_output(void);
+extern int nds_bak_debug_level;
+
+#define NDS_INFO(expr ...) \
+	do { \
+		if (debug_level >= LOG_LVL_INFO) { \
+			nds_bak_debug_level = debug_level; \
+			debug_level = LOG_LVL_DEBUG; \
+			log_printf_lf(LOG_LVL_DEBUG, \
+					__FILE__, __LINE__, __func__, \
+					expr); \
+			debug_level = nds_bak_debug_level; \
+		} \
+	} while (0)
+
+#define LOG_DEBUG(expr ...) \
+	do { \
+		if (debug_level >= LOG_LVL_INFO) \
+			log_printf_lf(LOG_LVL_DEBUG, \
+				__FILE__, __LINE__, __func__, \
+				expr); \
+	} while (0)
+
+#else /* _NDS32_ONLY_ */
 #define LOG_DEBUG(expr ...) \
 	do { \
 		if (debug_level >= LOG_LVL_DEBUG) \
@@ -119,6 +144,7 @@ extern int debug_level;
 				__FILE__, __LINE__, __func__, \
 				expr); \
 	} while (0)
+#endif /* _NDS32_ONLY_ */
 
 #define LOG_INFO(expr ...) \
 	log_printf_lf(LOG_LVL_INFO, __FILE__, __LINE__, __func__, expr)
