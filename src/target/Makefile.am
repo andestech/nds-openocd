@@ -226,6 +226,7 @@ ESIRISC_SRC = \
 	%D%/nds32_v3.h \
 	%D%/nds32_v3m.h \
 	%D%/nds32_aice.h \
+	%D%/nds32_v5.h \
 	%D%/bytecode-ax.h \
 	%D%/nds32_ace.h \
 	%D%/nds32_log.h \

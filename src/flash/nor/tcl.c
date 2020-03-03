@@ -907,6 +907,16 @@ COMMAND_HANDLER(handle_flash_verify_bank_command)
 
 	differ = memcmp(buffer_file, buffer_flash, length);
 	command_print(CMD, "contents %s", differ ? "differ" : "match");
+
+#if _NDS32_ONLY_
+	if (differ)
+		printf("contents differ");
+	else
+		printf("contents match");
+	fflush(stdout);
+#endif
+
+
 	if (differ) {
 		uint32_t t;
 		int diffs = 0;
