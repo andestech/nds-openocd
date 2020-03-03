@@ -13,16 +13,20 @@
  *   GNU General Public License for more details.                          *
  *                                                                         *
  *   You should have received a copy of the GNU General Public License     *
- *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
+ *   along with this program; if not, write to the                         *
+ *   Free Software Foundation, Inc.,                                       *
+ *   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.           *
  ***************************************************************************/
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
 
-#include <helper/log.h>
 #include "aice_usb.h"
 #include "aice_pipe.h"
 #include "aice_port.h"
+
+extern struct aice_port_api_s aice_vendor_api;
+extern struct aice_port_api_s nds_ftdi_api;
 
 static const struct aice_port aice_ports[] = {
 	{
@@ -33,10 +37,22 @@ static const struct aice_port aice_ports[] = {
 	{
 		.name = "aice_pipe",
 		.type = AICE_PORT_AICE_PIPE,
-		.api = &aice_pipe,
+		.api = &aice_pipe_api,
+	},
+	{
+		.name = "aice_vendor",
+		.type = AICE_PORT_VENDOR,
+		.api = &aice_vendor_api,
+	},
+	{
+		.name = "nds_ftdi",
+		.type = AICE_PORT_FTDI,
+		.api = &nds_ftdi_api,
 	},
 	{.name = NULL, /* END OF TABLE */ },
 };
+
+const struct aice_port *aice_port = (const struct aice_port *)&aice_ports[3];
 
 /** */
 const struct aice_port *aice_port_get_list(void)

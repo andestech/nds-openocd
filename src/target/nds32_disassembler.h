@@ -13,11 +13,13 @@
  *   GNU General Public License for more details.                          *
  *                                                                         *
  *   You should have received a copy of the GNU General Public License     *
- *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
+ *   along with this program; if not, write to the                         *
+ *   Free Software Foundation, Inc.,                                       *
+ *   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.           *
  ***************************************************************************/
 
-#ifndef OPENOCD_TARGET_NDS32_DISASSEMBLER_H
-#define OPENOCD_TARGET_NDS32_DISASSEMBLER_H
+#ifndef __NDS32_DISASSEMBLER_H__
+#define __NDS32_DISASSEMBLER_H__
 
 #include <target/nds32.h>
 
@@ -50,7 +52,7 @@ struct nds32_instruction {
 };
 
 int nds32_read_opcode(struct nds32 *nds32, uint32_t address, uint32_t *value);
-int nds32_evaluate_opcode(struct nds32 *nds32, uint32_t opcode, uint32_t address,
+int nds32_evaluate_opcode(struct nds32 *nds32, uint32_t address,
 		struct nds32_instruction *instruction);
 
-#endif /* OPENOCD_TARGET_NDS32_DISASSEMBLER_H */
+#endif /* __NDS32_DISASSEMBLER_H__ */

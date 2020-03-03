@@ -19,17 +19,7 @@
 #include "config.h"
 #endif
 
-#include "nds32_aice.h"
 #include "nds32_tlb.h"
-
-int nds32_probe_tlb(struct nds32 *nds32, const target_addr_t virtual_address,
-		target_addr_t *physical_address)
-{
-	struct target *target = nds32->target;
-	struct aice_port_s *aice = target_to_aice(target);
-
-	return aice_read_tlb(aice, virtual_address, physical_address);
-}
 
 struct page_table_walker_info_s page_table_info[PAGE_SIZE_NUM] = {
 	/* 4K page */
@@ -76,3 +66,4 @@ int nds32_walk_page_table(struct nds32 *nds32, const target_addr_t virtual_addre
 
 	return ERROR_OK;
 }
+

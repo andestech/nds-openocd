@@ -13,18 +13,24 @@
  *   GNU General Public License for more details.                          *
  *                                                                         *
  *   You should have received a copy of the GNU General Public License     *
- *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
+ *   along with this program; if not, write to the                         *
+ *   Free Software Foundation, Inc.,                                       *
+ *   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.           *
  ***************************************************************************/
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
 
 #include <helper/log.h>
+#include <dlfcn.h>
 #include "nds32_reg.h"
+#include "nds32_ace.h"
+#include "nds32.h"
+#include <string.h>
+#include <assert.h>
 
 static bool nds32_reg_init_done;
-static struct nds32_reg_s nds32_regs[TOTAL_REG_NUM];
-static const struct nds32_reg_exception_s nds32_ex_reg_values[] = {
+static struct nds32_reg_exception_s nds32_ex_reg_values[] = {
 	{IR0, 3, 0x3, 2},
 	{IR0, 3, 0x3, 3},
 	{IR1, 3, 0x3, 2},
@@ -37,10 +43,68 @@ static const struct nds32_reg_exception_s nds32_ex_reg_values[] = {
 	{MR3, 8, 0x7, 3},
 	{0, 0, 0, 0},
 };
+static void nds32_reg_init_ace_regs(void);
+void nds32_reg_init_total_cop_regs(void);
+static uint32_t nds32_cop_reg_nums[4] = {0, 0, 0, 0};
+uint32_t nds32_cop_reg_ena[4] = {0, 0, 0, 0};
+uint32_t nds32_cop_reg_base_id[4] = {0, 0, 0, 0};
+static uint32_t total_cop_reg_nums = 0;
+static uint32_t total_acr_reg_nums = 0;
+static unsigned acr_type_count = 0;
+/* Array to record instructions for accessing ACE register at @number. */
+static struct nds32_reg_access_op_s *nds32_reg_access_op;
+/* Access instructions will be at index @number - first_ace_reg_num. */
+static uint32_t first_acr_reg_num;
+
+static inline void nds32_reg_access_op_set(uint32_t number, unsigned* read_insn, unsigned* write_insn, unsigned* size_of_read, unsigned* size_of_write)
+{
+	static uint32_t i = 0;
+	assert((number - first_acr_reg_num) == i);
+
+	nds32_reg_access_op[i].read_insn = read_insn;
+	nds32_reg_access_op[i].size_of_read_insn = size_of_read;
+	nds32_reg_access_op[i].write_insn = write_insn;
+	nds32_reg_access_op[i].size_of_write_insn = size_of_write;
+	i++;
+}
+
+unsigned nds32_reg_get_size_of_read_insn(unsigned number)
+{
+	return *(nds32_reg_access_op[number - first_acr_reg_num].size_of_read_insn);
+}
+
+unsigned nds32_reg_get_size_of_write_insn(unsigned number)
+{
+	return *(nds32_reg_access_op[number - first_acr_reg_num].size_of_write_insn);
+}
+uint32_t *nds32_reg_get_read_insn(uint32_t number)
+{
+	return nds32_reg_access_op[number - first_acr_reg_num].read_insn;
+}
+
+uint32_t *nds32_reg_get_write_insn(uint32_t number)
+{
+	return nds32_reg_access_op[number - first_acr_reg_num].write_insn;
+}
+
+int nds32_get_reg_number(const char *name) {
+    struct nds32_reg_s *p = nds32_regs;
+    unsigned number = 0;
+
+    for (unsigned i = 0; i < TOTAL_REG_NUM + total_acr_reg_nums + total_cop_reg_nums; i++) {
+	    LOG_DEBUG("%s, %s", (*p).simple_mnemonic, name);
+	    if (strcmp((*p).simple_mnemonic, name) == 0) {
+		    return number;
+	    }
+	    number++;
+	    p++;
+    }
+    return 0;
+}
 
 static inline void nds32_reg_set(uint32_t number, const char *simple_mnemonic,
 		const char *symbolic_mnemonic, uint32_t sr_index,
-		enum nds32_reg_type_s type, uint8_t size)
+		enum nds32_reg_type_s type, uint32_t size)
 {
 	nds32_regs[number].simple_mnemonic = simple_mnemonic;
 	nds32_regs[number].symbolic_mnemonic = symbolic_mnemonic;
@@ -49,10 +113,19 @@ static inline void nds32_reg_set(uint32_t number, const char *simple_mnemonic,
 	nds32_regs[number].size = size;
 }
 
-void nds32_reg_init(void)
+void nds32_reg_init(struct nds32 *nds32)
 {
 	if (nds32_reg_init_done == true)
 		return;
+
+	// acr_list will be allocated and setup in nds32_ace_init.
+	nds32_ace_init(nds32->aceconf, &acr_type_count, &total_acr_reg_nums);
+	LOG_DEBUG("setup %d acr_type_count and %d acr_reg_count", acr_type_count, total_acr_reg_nums);
+
+	// acr_list may be NULL if no ACR info.
+	//assert(total_acr_reg_nums == 0 || ((total_acr_reg_nums != 0) && acr_list != NULL));
+
+	nds32_regs = calloc(TOTAL_REG_NUM + total_acr_reg_nums + total_cop_reg_nums , sizeof(*nds32_regs));
 
 	nds32_reg_set(R0, "r0", "r0", 0, NDS32_REG_TYPE_GPR, 32);
 	nds32_reg_set(R1, "r1", "r1", 0, NDS32_REG_TYPE_GPR, 32);
@@ -92,6 +165,9 @@ void nds32_reg_init(void)
 	nds32_reg_set(D0HI, "d0hi", "d0hi", 1, NDS32_REG_TYPE_SPR, 32);
 	nds32_reg_set(D1LO, "d1lo", "d1lo", 2, NDS32_REG_TYPE_SPR, 32);
 	nds32_reg_set(D1HI, "d1hi", "d1hi", 3, NDS32_REG_TYPE_SPR, 32);
+	nds32_reg_set(DSP_LB, "lb", "lb", 25, NDS32_REG_TYPE_SPR, 32);
+	nds32_reg_set(DSP_LE, "le", "le", 26, NDS32_REG_TYPE_SPR, 32);
+	nds32_reg_set(DSP_LC, "lc", "lc", 27, NDS32_REG_TYPE_SPR, 32);
 	nds32_reg_set(ITB, "itb", "itb", 28, NDS32_REG_TYPE_SPR, 32);
 	nds32_reg_set(IFC_LP, "ifc_lp", "ifc_lp", 29, NDS32_REG_TYPE_SPR, 32);
 
@@ -102,6 +178,7 @@ void nds32_reg_init(void)
 	nds32_reg_set(CR4, "cr4", "MSC_CFG", SRIDX(0, 4, 0), NDS32_REG_TYPE_CR, 32);
 	nds32_reg_set(CR5, "cr5", "CORE_ID", SRIDX(0, 0, 1), NDS32_REG_TYPE_CR, 32);
 	nds32_reg_set(CR6, "cr6", "FUCOP_EXIST", SRIDX(0, 5, 0), NDS32_REG_TYPE_CR, 32);
+	nds32_reg_set(CR7, "cr7", "MSC_CFG2", SRIDX(0, 4, 1), NDS32_REG_TYPE_CR, 32);
 
 	nds32_reg_set(IR0, "ir0", "PSW", SRIDX(1, 0, 0), NDS32_REG_TYPE_IR, 32);
 	nds32_reg_set(IR1, "ir1", "IPSW", SRIDX(1, 0, 1), NDS32_REG_TYPE_IR, 32);
@@ -119,21 +196,27 @@ void nds32_reg_init(void)
 	nds32_reg_set(IR13, "ir13", "P_P1", SRIDX(1, 7, 2), NDS32_REG_TYPE_IR, 32);
 	nds32_reg_set(IR14, "ir14", "INT_MASK", SRIDX(1, 8, 0), NDS32_REG_TYPE_IR, 32);
 	nds32_reg_set(IR15, "ir15", "INT_PEND", SRIDX(1, 9, 0), NDS32_REG_TYPE_IR, 32);
-	nds32_reg_set(IR16, "ir16", "", SRIDX(1, 10, 0), NDS32_REG_TYPE_IR, 32);
-	nds32_reg_set(IR17, "ir17", "", SRIDX(1, 10, 1), NDS32_REG_TYPE_IR, 32);
-	nds32_reg_set(IR18, "ir18", "", SRIDX(1, 11, 0), NDS32_REG_TYPE_IR, 32);
-	nds32_reg_set(IR19, "ir19", "", SRIDX(1, 1, 2), NDS32_REG_TYPE_IR, 32);
+	nds32_reg_set(IR16, "ir16", "SP_USR", SRIDX(1, 10, 0), NDS32_REG_TYPE_IR, 32);
+	nds32_reg_set(IR17, "ir17", "SP_PRIV", SRIDX(1, 10, 1), NDS32_REG_TYPE_IR, 32);
+	nds32_reg_set(IR18, "ir18", "INT_PRI", SRIDX(1, 11, 0), NDS32_REG_TYPE_IR, 32);
+	nds32_reg_set(IR19, "ir19", "INT_CTRL", SRIDX(1, 1, 2), NDS32_REG_TYPE_IR, 32);
 	nds32_reg_set(IR20, "ir20", "", SRIDX(1, 10, 2), NDS32_REG_TYPE_IR, 32);
 	nds32_reg_set(IR21, "ir21", "", SRIDX(1, 10, 3), NDS32_REG_TYPE_IR, 32);
 	nds32_reg_set(IR22, "ir22", "", SRIDX(1, 10, 4), NDS32_REG_TYPE_IR, 32);
 	nds32_reg_set(IR23, "ir23", "", SRIDX(1, 10, 5), NDS32_REG_TYPE_IR, 32);
 	nds32_reg_set(IR24, "ir24", "", SRIDX(1, 10, 6), NDS32_REG_TYPE_IR, 32);
 	nds32_reg_set(IR25, "ir25", "", SRIDX(1, 10, 7), NDS32_REG_TYPE_IR, 32);
-	nds32_reg_set(IR26, "ir26", "", SRIDX(1, 8, 1), NDS32_REG_TYPE_IR, 32);
-	nds32_reg_set(IR27, "ir27", "", SRIDX(1, 9, 1), NDS32_REG_TYPE_IR, 32);
-	nds32_reg_set(IR28, "ir28", "", SRIDX(1, 11, 1), NDS32_REG_TYPE_IR, 32);
-	nds32_reg_set(IR29, "ir29", "", SRIDX(1, 9, 4), NDS32_REG_TYPE_IR, 32);
+	nds32_reg_set(IR26, "ir26", "INT_MASK2", SRIDX(1, 8, 1), NDS32_REG_TYPE_IR, 32);
+	nds32_reg_set(IR27, "ir27", "INT_PEND2", SRIDX(1, 9, 1), NDS32_REG_TYPE_IR, 32);
+	nds32_reg_set(IR28, "ir28", "INT_PRI2", SRIDX(1, 11, 1), NDS32_REG_TYPE_IR, 32);
+	nds32_reg_set(IR29, "ir29", "INT_TRIGGER", SRIDX(1, 9, 4), NDS32_REG_TYPE_IR, 32);
 	nds32_reg_set(IR30, "ir30", "", SRIDX(1, 1, 3), NDS32_REG_TYPE_IR, 32);
+	nds32_reg_set(IR31, "ir31", "INT_MASK3", SRIDX(1, 8, 2), NDS32_REG_TYPE_IR, 32);
+	nds32_reg_set(IR32, "ir32", "INT_PEND3", SRIDX(1, 9, 2), NDS32_REG_TYPE_IR, 32);
+	nds32_reg_set(IR33, "ir33", "INT_PRI3", SRIDX(1, 11, 2), NDS32_REG_TYPE_IR, 32);
+	nds32_reg_set(IR34, "ir34", "INT_PRI4", SRIDX(1, 11, 3), NDS32_REG_TYPE_IR, 32);
+	nds32_reg_set(IR35, "ir35", "INT_TRIGGER2", SRIDX(1, 9, 5), NDS32_REG_TYPE_IR, 32);
+	nds32_reg_set(IR36, "ir36", "EINSN", SRIDX(1, 1, 4), NDS32_REG_TYPE_IR, 32);
 
 	nds32_reg_set(MR0, "mr0", "MMU_CTL", SRIDX(2, 0, 0), NDS32_REG_TYPE_MR, 32);
 	nds32_reg_set(MR1, "mr1", "L1_PPTB", SRIDX(2, 1, 0), NDS32_REG_TYPE_MR, 32);
@@ -202,6 +285,7 @@ void nds32_reg_init(void)
 	nds32_reg_set(PFR1, "pfr1", "PFMC1", SRIDX(4, 0, 1), NDS32_REG_TYPE_PFR, 32);
 	nds32_reg_set(PFR2, "pfr2", "PFMC2", SRIDX(4, 0, 2), NDS32_REG_TYPE_PFR, 32);
 	nds32_reg_set(PFR3, "pfr3", "PFM_CTL", SRIDX(4, 1, 0), NDS32_REG_TYPE_PFR, 32);
+	nds32_reg_set(PFR4, "pfr4", "PFT_CTL", SRIDX(4, 2, 0), NDS32_REG_TYPE_PFR, 32);
 
 	nds32_reg_set(DMAR0, "dmar0", "DMA_CFG", SRIDX(5, 0, 0), NDS32_REG_TYPE_DMAR, 32);
 	nds32_reg_set(DMAR1, "dmar1", "DMA_GCSW", SRIDX(5, 1, 0), NDS32_REG_TYPE_DMAR, 32);
@@ -214,14 +298,25 @@ void nds32_reg_init(void)
 	nds32_reg_set(DMAR8, "dmar8", "DMA_STATUS", SRIDX(5, 8, 0), NDS32_REG_TYPE_DMAR, 32);
 	nds32_reg_set(DMAR9, "dmar9", "DMA_2DSET", SRIDX(5, 9, 0), NDS32_REG_TYPE_DMAR, 32);
 	nds32_reg_set(DMAR10, "dmar10", "DMA_2DSCTL", SRIDX(5, 9, 1), NDS32_REG_TYPE_DMAR, 32);
+	nds32_reg_set(DMAR11, "dmar11", "DMA_RCNT", SRIDX(5, 7, 1), NDS32_REG_TYPE_DMAR, 32);
+	nds32_reg_set(DMAR12, "dmar12", "DMA_HSTATUS", SRIDX(5, 8, 1), NDS32_REG_TYPE_DMAR, 32);
 
 	nds32_reg_set(RACR, "racr", "PRUSR_ACC_CTL", SRIDX(4, 4, 0), NDS32_REG_TYPE_RACR, 32);
 	nds32_reg_set(FUCPR, "fucpr", "FUCOP_CTL", SRIDX(4, 5, 0), NDS32_REG_TYPE_RACR, 32);
 
 	nds32_reg_set(IDR0, "idr0", "SDZ_CTL", SRIDX(2, 15, 0), NDS32_REG_TYPE_IDR, 32);
 	nds32_reg_set(IDR1, "idr1", "MISC_CTL", SRIDX(2, 15, 1), NDS32_REG_TYPE_IDR, 32);
+	nds32_reg_set(IDR2, "idr2", "ECC_MISC", SRIDX(2, 15, 2), NDS32_REG_TYPE_IDR, 32);
 
 	nds32_reg_set(SECUR0, "secur0", "", SRIDX(6, 0, 0), NDS32_REG_TYPE_SECURE, 32);
+	nds32_reg_set(SECUR1, "secur1", "SIGN", SRIDX(6, 1, 0), NDS32_REG_TYPE_SECURE, 32);
+	nds32_reg_set(SECUR2, "secur2", "ISIGN", SRIDX(6, 1, 1), NDS32_REG_TYPE_SECURE, 32);
+	nds32_reg_set(SECUR3, "secur3", "P_ISIGN", SRIDX(6, 1, 2), NDS32_REG_TYPE_SECURE, 32);
+	nds32_reg_set(HSPR0, "hspr0", "HSP_CTL", SRIDX(4, 6, 0), NDS32_REG_TYPE_HSPR, 32);
+	nds32_reg_set(HSPR1, "hspr1", "SP_BOUND", SRIDX(4, 6, 1), NDS32_REG_TYPE_HSPR, 32);
+	nds32_reg_set(HSPR2, "hspr2", "SP_BOUND_PRIV", SRIDX(4, 6, 2), NDS32_REG_TYPE_HSPR, 32);
+	nds32_reg_set(HSPR3, "hspr3", "SP_BASE", SRIDX(4, 6, 3), NDS32_REG_TYPE_HSPR, 32);
+	nds32_reg_set(HSPR4, "hspr4", "SP_BASE_PRIV", SRIDX(4, 6, 4), NDS32_REG_TYPE_HSPR, 32);
 
 	nds32_reg_set(D0L24, "D0L24", "D0L24", 0x10, NDS32_REG_TYPE_AUMR, 32);
 	nds32_reg_set(D1L24, "D1L24", "D1L24", 0x11, NDS32_REG_TYPE_AUMR, 32);
@@ -325,7 +420,101 @@ void nds32_reg_init(void)
 	nds32_reg_set(FD30, "fd30", "FD30", 30, NDS32_REG_TYPE_FPU, 64);
 	nds32_reg_set(FD31, "fd31", "FD31", 31, NDS32_REG_TYPE_FPU, 64);
 
+	// ACE part
+	nds32_reg_init_ace_regs();
+
+	// COP part
+	nds32_reg_init_total_cop_regs();
+
 	nds32_reg_init_done = true;
+}
+
+static void nds32_reg_init_ace_regs(void)
+{
+	extern void *handle;
+	extern ACR_INFO_T *acr_info_list;
+	uint32_t reg_num;
+
+	nds32_reg_access_op = calloc(total_acr_reg_nums , sizeof(*nds32_reg_access_op));
+	first_acr_reg_num = reg_num = TOTAL_REG_NUM;
+
+	for (unsigned acr_type_index = 0; acr_type_index < acr_type_count; acr_type_index++) {
+		unsigned acr_number = acr_info_list->num;
+		unsigned acr_width = acr_info_list->width;
+		LOG_DEBUG("%s %d", acr_info_list->name, acr_width);
+		uint32_t *read_insn;
+		unsigned *size_of_read_insn;
+		uint32_t *write_insn;
+		unsigned *size_of_write_insn;
+
+		for (unsigned idx = 0; idx < acr_number; idx++) {
+			char* acr_name;
+			acr_name = (char*)malloc(1024);
+			sprintf(acr_name, "%s_%d", acr_info_list->name, idx);
+			nds32_reg_set(reg_num, acr_name, acr_name, 0, NDS32_REG_TYPE_ACE, acr_width);
+			LOG_DEBUG("register ACR: %s, number: %d", acr_name, reg_num);
+			char dim_table_name[1024];
+			sprintf(dim_table_name, "read_%s_DIM_insn_table", acr_name);
+			read_insn = (unsigned *)dlsym(handle, dim_table_name);
+			sprintf(dim_table_name, "size_of_read_%s_DIM_insn_table", acr_name);
+			size_of_read_insn = (unsigned *)dlsym(handle, dim_table_name);
+			if (size_of_read_insn == NULL)
+				LOG_ERROR("unable to load %s", dim_table_name);
+			else
+				LOG_DEBUG("size of read insn %d", *size_of_read_insn);
+			sprintf(dim_table_name, "write_%s_DIM_insn_table", acr_name);
+			write_insn = (uint32_t *)dlsym(handle, dim_table_name);
+			sprintf(dim_table_name, "size_of_write_%s_DIM_insn_table", acr_name);
+			size_of_write_insn = (uint32_t *)dlsym(handle, dim_table_name);
+			nds32_reg_access_op_set(reg_num, read_insn, write_insn, size_of_read_insn, size_of_write_insn);
+			reg_num++;
+		}
+		acr_info_list++;
+	}
+}
+
+
+uint32_t nds32_reg_total_cop_reg_nums(void)
+{
+	return total_cop_reg_nums;
+}
+
+void nds32_reg_set_cop_reg_nums(uint32_t cop_id, uint32_t cop_reg_nums, uint32_t if_ena)
+{
+	if ((cop_id >= 4) || (cop_reg_nums > 4096))
+		return;
+	nds32_cop_reg_nums[cop_id] = cop_reg_nums;
+	nds32_cop_reg_ena[cop_id] = if_ena;
+	uint32_t reg_num = 0, i;
+	for (i=0; i<4; i++) {
+		reg_num += nds32_cop_reg_nums[i];
+	}
+	total_cop_reg_nums = reg_num;
+}
+
+void nds32_reg_init_total_cop_regs(void)
+{
+	if (total_cop_reg_nums == 0)
+		return;
+
+	uint32_t i, idx;
+	uint32_t reg_num = TOTAL_REG_NUM + total_acr_reg_nums;
+
+	for (i=0; i<4; i++) {
+		for (idx=0; idx<nds32_cop_reg_nums[i]; idx++) {
+			char* cop_name;
+			cop_name = (char*)malloc(12);
+			sprintf(cop_name, "cp%dr%d", i, idx);
+			nds32_reg_set(reg_num, cop_name, cop_name, 0, NDS32_REG_TYPE_COP0+i, 32);
+			LOG_DEBUG("register COP: %s, reg_num=%d", cop_name, reg_num);
+			reg_num ++;
+		}
+	}
+}
+
+uint32_t nds32_reg_total_ace_reg_nums(void)
+{
+	return total_acr_reg_nums;
 }
 
 uint32_t nds32_reg_sr_index(uint32_t number)
@@ -338,7 +527,7 @@ enum nds32_reg_type_s nds32_reg_type(uint32_t number)
 	return nds32_regs[number].type;
 }
 
-uint8_t nds32_reg_size(uint32_t number)
+uint32_t nds32_reg_size(uint32_t number)
 {
 	return nds32_regs[number].size;
 }
@@ -356,7 +545,7 @@ const char *nds32_reg_symbolic_name(uint32_t number)
 bool nds32_reg_exception(uint32_t number, uint32_t value)
 {
 	int i;
-	const struct nds32_reg_exception_s *ex_reg_value;
+	struct nds32_reg_exception_s *ex_reg_value;
 	uint32_t field_value;
 
 	i = 0;
@@ -367,7 +556,7 @@ bool nds32_reg_exception(uint32_t number, uint32_t value)
 			field_value = (value >> ex_reg_value->ex_value_bit_pos) &
 				ex_reg_value->ex_value_mask;
 			if (field_value == ex_reg_value->ex_value) {
-				LOG_WARNING("It will generate exceptions as setting %" PRId32 " to %s",
+				LOG_WARNING("It will generate exceptions as setting %d to %s",
 						value, nds32_regs[number].simple_mnemonic);
 				return true;
 			}

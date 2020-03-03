@@ -13,11 +13,12 @@
  *   GNU General Public License for more details.                          *
  *                                                                         *
  *   You should have received a copy of the GNU General Public License     *
- *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
+ *   along with this program; if not, write to the                         *
+ *   Free Software Foundation, Inc.,                                       *
+ *   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.           *
  ***************************************************************************/
-
-#ifndef OPENOCD_TARGET_NDS32_REG_H
-#define OPENOCD_TARGET_NDS32_REG_H
+#ifndef __NDS32_REG_H__
+#define __NDS32_REG_H__
 
 #define SRIDX(a, b, c)			((a << 7) | (b << 3) | c)
 #define NDS32_REGISTER_DISABLE		(0x0)
@@ -60,6 +61,9 @@ enum nds32_reg_number_s {
 	D0HI,
 	D1LO,
 	D1HI,
+	DSP_LB,
+	DSP_LE,
+	DSP_LC,
 	ITB,
 	IFC_LP,
 	CR0, /* system registers */
@@ -69,6 +73,7 @@ enum nds32_reg_number_s {
 	CR4,
 	CR5,
 	CR6,
+	CR7,
 	IR0,
 	IR1,
 	IR2,
@@ -100,6 +105,12 @@ enum nds32_reg_number_s {
 	IR28,
 	IR29,
 	IR30,
+	IR31,
+	IR32,
+	IR33,
+	IR34,
+	IR35,
+	IR36,
 	MR0,
 	MR1,
 	MR2,
@@ -165,6 +176,7 @@ enum nds32_reg_number_s {
 	PFR1,
 	PFR2,
 	PFR3,
+	PFR4,
 	DMAR0,
 	DMAR1,
 	DMAR2,
@@ -176,11 +188,22 @@ enum nds32_reg_number_s {
 	DMAR8,
 	DMAR9,
 	DMAR10,
+	DMAR11,
+	DMAR12,
 	RACR,
 	FUCPR,
 	IDR0,
 	IDR1,
+	IDR2,
 	SECUR0,
+	SECUR1,
+	SECUR2,
+	SECUR3,
+	HSPR0,
+	HSPR1,
+	HSPR2,
+	HSPR3,
+	HSPR4,
 	D0L24, /* audio registers */
 	D1L24,
 	I0,
@@ -297,6 +320,12 @@ enum nds32_reg_type_s {
 	NDS32_REG_TYPE_AUMR,
 	NDS32_REG_TYPE_SECURE,
 	NDS32_REG_TYPE_FPU,
+	NDS32_REG_TYPE_ACE,     /* Currently, user defined register is not supported yet. */
+	NDS32_REG_TYPE_COP0,	/* Enforce the continuity - program logic depends on it. */
+	NDS32_REG_TYPE_COP1 = NDS32_REG_TYPE_COP0 + 1,
+	NDS32_REG_TYPE_COP2 = NDS32_REG_TYPE_COP0 + 2,
+	NDS32_REG_TYPE_COP3 = NDS32_REG_TYPE_COP0 + 3,
+	NDS32_REG_TYPE_HSPR,  /* HW Stack Protection Control Register */
 };
 
 struct nds32_reg_s {
@@ -304,7 +333,7 @@ struct nds32_reg_s {
 	const char *symbolic_mnemonic;
 	uint32_t sr_index;
 	enum nds32_reg_type_s type;
-	uint8_t size;
+	uint32_t size;
 };
 
 struct nds32_reg_exception_s {
@@ -314,12 +343,22 @@ struct nds32_reg_exception_s {
 	uint32_t ex_value;
 };
 
-void nds32_reg_init(void);
+struct nds32_reg_access_op_s {
+	uint32_t *read_insn;
+	unsigned *size_of_read_insn;
+	uint32_t *write_insn;
+	unsigned *size_of_write_insn;
+};
+
+struct nds32_reg_s *nds32_regs;
+struct nds32; /* forward declaration */
+void nds32_reg_init(struct nds32 *nds32);
 uint32_t nds32_reg_sr_index(uint32_t number);
 enum nds32_reg_type_s nds32_reg_type(uint32_t number);
-uint8_t nds32_reg_size(uint32_t number);
+uint32_t nds32_reg_size(uint32_t number);
 const char *nds32_reg_simple_name(uint32_t number);
 const char *nds32_reg_symbolic_name(uint32_t number);
 bool nds32_reg_exception(uint32_t number, uint32_t value);
+int nds32_get_reg_number(const char *name);
 
-#endif /* OPENOCD_TARGET_NDS32_REG_H */
+#endif

@@ -13,17 +13,18 @@
  *   GNU General Public License for more details.                          *
  *                                                                         *
  *   You should have received a copy of the GNU General Public License     *
- *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
+ *   along with this program; if not, write to the                         *
+ *   Free Software Foundation, Inc.,                                       *
+ *   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.           *
  ***************************************************************************/
-
-#ifndef OPENOCD_JTAG_AICE_AICE_INTERFACE_H
-#define OPENOCD_JTAG_AICE_AICE_INTERFACE_H
+#ifndef __AICE_INTERFACE_H__
+#define __AICE_INTERFACE_H__
 
 struct aice_interface_param_s {
 	/** */
-	const char *device_desc;
+	char *device_desc;
 	/** */
-	const char *serial;
+	char *serial;
 	/** */
 	uint16_t vid;
 	/** */
@@ -31,6 +32,5 @@ struct aice_interface_param_s {
 };
 
 int aice_init_targets(void);
-int aice_scan_jtag_chain(void);
 
-#endif /* OPENOCD_JTAG_AICE_AICE_INTERFACE_H */
+#endif

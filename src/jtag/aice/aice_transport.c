@@ -13,7 +13,9 @@
  *   GNU General Public License for more details.                          *
  *                                                                         *
  *   You should have received a copy of the GNU General Public License     *
- *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
+ *   along with this program; if not, write to the                         *
+ *   Free Software Foundation, Inc.,                                       *
+ *   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.           *
  ***************************************************************************/
 
 #ifdef HAVE_CONFIG_H
@@ -158,6 +160,7 @@ COMMAND_HANDLER(handle_aice_init_command)
 	return jtag_init(CMD_CTX);
 }
 
+extern int aice_scan_jtag_chain(void);
 COMMAND_HANDLER(handle_scan_chain_command)
 {
 	struct jtag_tap *tap;
@@ -340,7 +343,7 @@ aice_transport_jtag_subcommand_handlers[] = {
 	},
 	{
 		.name = "configure",
-		.mode = COMMAND_ANY,
+		.mode = COMMAND_EXEC,
 		.jim_handler = jim_jtag_configure,
 		.help = "Provide a Tcl handler for the specified "
 			"TAP event.",
@@ -367,7 +370,6 @@ aice_transport_jtag_subcommand_handlers[] = {
 		.help = "print current scan chain configuration",
 		.usage = ""
 	},
-
 	COMMAND_REGISTRATION_DONE
 };
 

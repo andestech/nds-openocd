@@ -8,7 +8,8 @@ noinst_LTLIBRARIES += %D%/libserver.la
 	%D%/gdb_server.h \
 	%D%/server_stubs.c \
 	%D%/tcl_server.c \
-	%D%/tcl_server.h
+	%D%/tcl_server.h\
+	%D%/gdb_fileio.h
 
 %C%_libserver_la_CFLAGS = $(AM_CFLAGS)
 if IS_MINGW

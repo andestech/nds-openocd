@@ -87,6 +87,11 @@ enum target_debug_reason {
 	DBG_REASON_EXIT = 6,
 	DBG_REASON_EXC_CATCH = 7,
 	DBG_REASON_UNDEFINED = 8,
+#if _NDS32_ONLY_
+	DBG_REASON_TRACE_BUFFULL = 9,
+	DBG_REASON_HIT_MONITOR_WATCH = 10,
+	DBG_REASON_HIT_EXCEPTIONS = 11,
+#endif
 };
 
 enum target_endianness {
@@ -131,6 +136,11 @@ struct target {
 	int target_number;					/* DO NOT USE!  field to be removed in 2010 */
 	struct jtag_tap *tap;				/* where on the jtag chain is this */
 	int32_t coreid;						/* which device on the TAP? */
+#if _NDS32_ONLY_
+	const char *variant;				/* what variant of this chip is it? */
+	uint32_t corenums;
+	uint32_t group;					/* halt group id */
+#endif
 
 	/** Should we defer examine to later */
 	bool defer_examine;
@@ -212,6 +222,13 @@ struct target {
 
 	/* The semihosting information, extracted from the target. */
 	struct semihosting *semihosting;
+
+#if _NDS32_ONLY_
+	/* current processing free-run type, used by file-I/O */
+	char gdb_running_type;
+	/* if executed reset run command, cannot change r->rtos_hartid and target->rtos->current_threadid/thread */
+	bool after_reset_run;
+#endif
 };
 
 struct target_list {
@@ -225,6 +242,9 @@ struct gdb_fileio_info {
 	uint64_t param_2;
 	uint64_t param_3;
 	uint64_t param_4;
+#if _NDS32_ONLY_
+	uint64_t param_5;
+#endif
 };
 
 /** Returns a description of the endianness for the specified target. */

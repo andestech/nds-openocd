@@ -1,5 +1,5 @@
 /***************************************************************************
- *   Copyright (C) 2013 by Andes Technology                                *
+ *   Copyright (C) 2013 Andes Technology                                   *
  *   Hsiangkai Wang <hkwang@andestech.com>                                 *
  *                                                                         *
  *   This program is free software; you can redistribute it and/or modify  *
@@ -17,16 +17,23 @@
  *   Free Software Foundation, Inc.,                                       *
  *   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.           *
  ***************************************************************************/
-#ifndef _AICE_PIPE_H_
-#define _AICE_PIPE_H_
+#ifndef __NDS32_ACE_H__
+#define __NDS32_ACE_H__
 
-#include <helper/types.h>
+#define MAX_COP_COUNT	4
+#define ACE_INDEX	MAX_COP_COUNT
 
-#define set_u32(buffer, value) h_u32_to_le((uint8_t *)buffer, value)
-#define set_u16(buffer, value) h_u16_to_le((uint8_t *)buffer, value)
-#define get_u32(buffer) le_to_h_u32((const uint8_t *)buffer)
-#define get_u16(buffer) le_to_h_u16((const uint8_t *)buffer)
+typedef struct ACR_info {
+    char name[1024];
+    unsigned width;
+    unsigned num;
+} ACR_INFO_T;
 
-extern struct aice_port_api_s aice_pipe_api;
+
+int
+nds32_ace_init(const char *aceconf,
+                   unsigned *acr_type_count, unsigned *total_acr_reg_nums);
+uint32_t
+nds32_copilot_version(void);
 
 #endif
