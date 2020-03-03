@@ -99,6 +99,11 @@
 #define JTAG_MODE_ALT (LSB_FIRST | NEG_EDGE_IN | NEG_EDGE_OUT)
 #define SWD_MODE (LSB_FIRST | POS_EDGE_IN | NEG_EDGE_OUT)
 
+#if _NDS_V5_ONLY_
+#include "../../target/nds32_log.h"
+extern char *ftdi_device_address;
+#endif
+
 static char *ftdi_device_desc;
 static char *ftdi_serial;
 static uint8_t ftdi_channel;
@@ -213,7 +218,13 @@ static int ftdi_set_signal(const struct signal *s, char value)
 	case '1':
 		if (s->data_mask == 0) {
 			LOG_ERROR("interface can't drive '%s' high", s->name);
+
+#if _NDS_V5_ONLY_
+			LOG_ERROR("force interface drive '%s' Hi-Z", s->name);
+			return ftdi_set_signal(s, 'z');
+#else
 			return ERROR_FAIL;
+#endif
 		}
 		data = !s->invert_data;
 		oe = !s->invert_oe;
@@ -425,6 +436,14 @@ static void ftdi_execute_statemove(struct jtag_command *cmd)
 	/* shortest-path move to desired end state */
 	if (tap_get_state() != tap_get_end_state() || tap_get_end_state() == TAP_RESET)
 		move_to_state(tap_get_end_state());
+
+#if _NDS_V5_ONLY_
+	uint8_t tms_bits = 0xFF;
+	int tms_count = sizeof(tms_bits)*8;
+	mpsse_clock_tms_cs_out(mpsse_ctx, &tms_bits, 0, tms_count, false, ftdi_jtag_mode);
+	mpsse_clock_tms_cs_out(mpsse_ctx, &tms_bits, 0, tms_count, false, ftdi_jtag_mode);
+#endif
+
 }
 
 /**
@@ -720,6 +739,11 @@ static int ftdi_execute_queue(void)
 	return retval;
 }
 
+#if _NDS_V5_ONLY_
+static int vid_pid_array_top = -1;
+extern uint32_t nds_ftdi_devices;
+extern uint32_t nds_jtag_max_scans;
+#endif
 static int ftdi_initialize(void)
 {
 	if (tap_get_tms_path_len(TAP_IRPAUSE, TAP_IRPAUSE) == 7)
@@ -727,15 +751,41 @@ static int ftdi_initialize(void)
 	else
 		LOG_DEBUG("ftdi interface using shortest path jtag state transitions");
 
+#if _NDS_V5_ONLY_
+	if (vid_pid_array_top == -1) {
+		NDS32_LOG(NDS32_ERRMSG_USB_VIDPID);
+		return ERROR_FAIL;
+	}
+#endif
+
 	for (int i = 0; ftdi_vid[i] || ftdi_pid[i]; i++) {
 		mpsse_ctx = mpsse_open(&ftdi_vid[i], &ftdi_pid[i], ftdi_device_desc,
 				ftdi_serial, jtag_usb_get_location(), ftdi_channel);
+#if _NDS_V5_ONLY_
+		if (mpsse_ctx) {
+			if (ftdi_vid[i] == 0x1cfc) {
+				nds_ftdi_devices = 1;
+				LOG_DEBUG("Find Andes FTDI device!!");
+				NDS32_LOG("Andes AICE-MINI+");
+				nds_jtag_max_scans = 32;
+			}
+			break;
+		}
+#else
 		if (mpsse_ctx)
 			break;
+#endif
 	}
 
+#if _NDS_V5_ONLY_
+	if (!mpsse_ctx) {
+		NDS32_LOG(NDS32_ERRMSG_USB_OPEN_NOVID);
+		return ERROR_JTAG_INIT_FAILED;
+	}
+#else
 	if (!mpsse_ctx)
 		return ERROR_JTAG_INIT_FAILED;
+#endif
 
 	output = jtag_output_init;
 	direction = jtag_direction_init;
@@ -767,7 +817,11 @@ static int ftdi_initialize(void)
 
 	mpsse_loopback_config(mpsse_ctx, false);
 
+#if _NDS_V5_ONLY_
+	LOG_DEBUG_IO("freq: %x\n", freq);
+#else
 	freq = mpsse_set_frequency(mpsse_ctx, jtag_get_speed_khz() * 1000);
+#endif
 
 	return mpsse_flush(mpsse_ctx);
 }
@@ -1239,6 +1293,10 @@ COMMAND_HANDLER(ftdi_handle_vid_pid_command)
 	 */
 	ftdi_vid[i >> 1] = ftdi_pid[i >> 1] = 0;
 
+#if _NDS_V5_ONLY_
+	vid_pid_array_top = i;
+#endif
+
 	return ERROR_OK;
 }
 
@@ -1278,6 +1336,115 @@ COMMAND_HANDLER(ftdi_handle_oscan1_mode_command)
 	return ERROR_OK;
 }
 #endif
+
+#if _NDS_V5_ONLY_
+static int ftdi_handle_write_pins_command(Jim_Interp *interp, int argc, Jim_Obj * const *argv)
+{
+	const char *tmp_str;
+	char Nibble;
+	char out_tck[2048] = {0};
+	char out_tms[2048] = {0};
+	char out_tdi[2048] = {0};
+	int len, i;
+
+	Jim_GetOptInfo goi;
+	Jim_GetOpt_Setup(&goi, interp, argc-1, argv + 1);
+	if (goi.argc > 1) {
+		Jim_WrongNumArgs(goi.interp, 1, goi.argv, "Too many parameters");
+		return JIM_ERR;
+	}
+
+	tmp_str = Jim_GetString(argv[1], &len);
+	LOG_DEBUG("Get nibbles(len=>%d) %s!!\n", len, tmp_str);
+	fflush(stdout);
+
+	if ((len <= 0) || (len >= 2048))
+		return JIM_ERR;
+
+	for (i = 0; i < len; i++) {
+		Nibble = *(tmp_str+i) - '0';
+		LOG_DEBUG("Nibble: %x\n", Nibble);
+
+		out_tck[i] = ((Nibble&0x1) >> 0);
+		out_tms[i] = ((Nibble&0x2) >> 1);
+		out_tdi[i] = ((Nibble&0x4) >> 2);
+	}
+	fflush(stdout);
+
+	mpsse_flush(mpsse_ctx);
+	uint16_t old_output = output;
+	uint16_t old_direction = direction;
+	for (i = 0; i < len; i++) {
+		output = (output&(~0xF))  |
+			(out_tck[i])      |	/* ADBUS[0] */
+			(out_tms[i] << 3) |	/* ADBUS[3] */
+			(out_tdi[i] << 1);	/* ADBUS[1] */
+
+		mpsse_set_data_bits_low_byte(mpsse_ctx, output & 0xff, direction & 0xff);
+		mpsse_set_data_bits_high_byte(mpsse_ctx, output >> 8, direction >> 8);
+	}
+	mpsse_set_data_bits_low_byte(mpsse_ctx, old_output & 0xff, old_direction & 0xff);
+	mpsse_set_data_bits_high_byte(mpsse_ctx, old_output >> 8, old_direction >> 8);
+	mpsse_flush(mpsse_ctx);
+	return JIM_OK;
+}
+
+static int ftdi_handle_write_pin_command(Jim_Interp *interp, int argc, Jim_Obj * const *argv)
+{
+	int e;
+
+	Jim_GetOptInfo goi;
+	Jim_GetOpt_Setup(&goi, interp, argc - 1, argv + 1);
+	if (goi.argc > 2) {
+		Jim_WrongNumArgs(goi.interp, 1, goi.argv, "Too many parameters");
+		return JIM_ERR;
+	}
+
+	const char *sig_name;
+	int sig_name_len;
+	e = Jim_GetOpt_String(&goi, &sig_name, &sig_name_len);
+	if (e != JIM_OK)
+		return e;
+
+	const char *sig_data;
+	int sig_data_len;
+	e = Jim_GetOpt_String(&goi, &sig_data, &sig_data_len);
+	if (e != JIM_OK)
+		return e;
+
+	char data = sig_data[0];
+	LOG_DEBUG("set signal (%s) to %c", sig_name, data);
+
+	struct signal *sig = find_signal_by_name(sig_name);
+	if (sig)
+		ftdi_set_signal(sig, data);
+	else {
+		Jim_SetResultFormatted(goi.interp, "Unable to find signal named: %s", sig_name);
+		return JIM_ERR;
+	}
+
+	int retval = mpsse_flush(mpsse_ctx);
+	if (retval != ERROR_OK) {
+		LOG_ERROR("error while flushing MPSSE queue: %d", retval);
+		return JIM_ERR;
+	}
+
+	return JIM_OK;
+}
+
+COMMAND_HANDLER(ftdi_handle_device_address_command)
+{
+	if (CMD_ARGC == 1) {
+		if (ftdi_device_address)
+			free(ftdi_device_address);
+		ftdi_device_address = strdup(CMD_ARGV[0]);
+	} else {
+		return ERROR_COMMAND_SYNTAX_ERROR;
+	}
+
+	return ERROR_OK;
+}
+#endif /* _NDS_V5_ONLY_ */
 
 static const struct command_registration ftdi_command_handlers[] = {
 	{
@@ -1356,6 +1523,30 @@ static const struct command_registration ftdi_command_handlers[] = {
 		.usage = "(on|off)",
 	},
 #endif
+#if _NDS_V5_ONLY_
+	{
+		.name = "write_pins",
+		.jim_handler = &ftdi_handle_write_pins_command,
+		.mode = COMMAND_ANY,
+		.help = "clock TDI/TMS/TCK pattern out",
+		.usage = "<pattern>",
+	},
+	{
+		.name = "ftdi_write_pin",
+		.jim_handler = &ftdi_handle_write_pin_command,
+		.mode = COMMAND_ANY,
+		.help = "set specific FTDI signal",
+		.usage = "(nTRST/nSRST/LED, 1/0)",
+	},
+	{
+		.name = "ftdi_device_address",
+		.handler = &ftdi_handle_device_address_command,
+		.mode = COMMAND_ANY,
+		.help = "set the USB device address of the FTDI device",
+		.usage = "<dnum>",
+	},
+#endif /* _NDS_V5_ONLY_ */
+
 	COMMAND_REGISTRATION_DONE
 };
 
