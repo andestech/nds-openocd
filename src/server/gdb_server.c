@@ -38,6 +38,14 @@
 #include "config.h"
 #endif
 
+#if _NDS32_ONLY_
+/* support host I/O interface */
+#if IS_WIN32 == 0
+#include <sys/stat.h>
+#endif /* IS_WIN32 == 0 */
+#endif /* _NDS32_ONLY_ */
+
+
 #include <target/breakpoints.h>
 #include <target/target_request.h>
 #include <target/register.h>
@@ -50,6 +58,16 @@
 #include <jtag/jtag.h>
 #include "rtos/rtos.h"
 #include "target/smp.h"
+
+#if _NDS32_ONLY_
+extern int nds32_tracer_add_trigger_breakpoints(struct target *target, unsigned long bp_address);
+extern int nds32_tracer_remove_trigger_breakpoints(struct target *target, unsigned long bp_address);
+extern unsigned long nds32_tracer_on;
+extern uint32_t nds_dis_condition_break;
+static unsigned int nds32_output_tdesc_xml = 1;
+uint32_t nds_skip_print;
+#endif /* _NDS32_ONLY_ */
+
 
 /**
  * @file
@@ -121,7 +139,11 @@ int gdb_actual_connections;
 /* set if we are sending a memory map to gdb
  * via qXfer:memory-map:read packet */
 /* enabled by default*/
+#if _NDS32_ONLY_
+static int gdb_use_memory_map;
+#else
 static int gdb_use_memory_map = 1;
+#endif
 /* enabled by default*/
 static int gdb_flash_program = 1;
 
@@ -139,8 +161,11 @@ static int gdb_report_register_access_error;
 /* enabled by default */
 static int gdb_use_target_description = 1;
 
+#if _NDS32_ONLY_
+#else
 /* current processing free-run type, used by file-I/O */
 static char gdb_running_type;
+#endif /* _NDS32_ONLY_ */
 
 static int gdb_last_signal(struct target *target)
 {
@@ -157,6 +182,15 @@ static int gdb_last_signal(struct target *target)
 			return 0x05;
 		case DBG_REASON_NOTHALTED:
 			return 0x0;		/* no signal... shouldn't happen */
+#if _NDS32_ONLY_
+		case DBG_REASON_TRACE_BUFFULL:
+			return 0x1e;		/* SIGUSR1 */
+		case DBG_REASON_HIT_EXCEPTIONS:
+			return 0x1f;		/* SIGUSR2 */
+		case DBG_REASON_HIT_MONITOR_WATCH:
+			LOG_INFO("hit the watchpoint defined via monitor command");
+			return 0x05;		/* SIGINT */
+#endif /* _NDS32_ONLY_ */
 		default:
 			LOG_USER("undefined debug reason %d - target needs reset",
 					target->debug_reason);
@@ -399,6 +433,13 @@ static int gdb_put_packet_inner(struct connection *connection,
 	while (1) {
 		debug_buffer = strndup(buffer, len);
 		LOG_DEBUG("sending packet '$%s#%2.2x'", debug_buffer, my_checksum);
+#if _NDS32_ONLY_
+		if (nds_skip_print)
+			nds_skip_print = 0;
+		else
+			NDS_INFO("sending packet '$%s#%2.2x'", debug_buffer, my_checksum);
+#endif /* _NDS32_ONLY_ */
+
 		free(debug_buffer);
 
 		char local_buffer[1024];
@@ -723,7 +764,11 @@ static void gdb_signal_reply(struct target *target, struct connection *connectio
 {
 	struct gdb_connection *gdb_connection = connection->priv;
 	char sig_reply[65];
+#if _NDS32_ONLY_
+	char stop_reason[32];
+#else
 	char stop_reason[20];
+#endif
 	char current_thread[25];
 	int sig_reply_len;
 	int signal_var;
@@ -743,8 +788,18 @@ static void gdb_signal_reply(struct target *target, struct connection *connectio
 
 		if (gdb_connection->ctrl_c) {
 			signal_var = 0x2;
+#if _NDS32_ONLY_
+		} else {
+			if (ct->debug_reason == DBG_REASON_HIT_MONITOR_WATCH)
+				log_add_callback(gdb_log_callback, connection);
+			signal_var = gdb_last_signal(ct);
+			if (ct->debug_reason == DBG_REASON_HIT_MONITOR_WATCH)
+				log_remove_callback(gdb_log_callback, connection);
+		}
+#else /* _NDS32_ONLY_ */
 		} else
 			signal_var = gdb_last_signal(ct);
+#endif /* _NDS32_ONLY_ */
 
 		stop_reason[0] = '\0';
 		if (ct->debug_reason == DBG_REASON_WATCHPOINT) {
@@ -754,6 +809,20 @@ static void gdb_signal_reply(struct target *target, struct connection *connectio
 			if (watchpoint_hit(ct, &hit_wp_type, &hit_wp_address) == ERROR_OK) {
 
 				switch (hit_wp_type) {
+#if _NDS32_ONLY_
+					case WPT_WRITE:
+						snprintf(stop_reason, sizeof(stop_reason),
+								"watch:%016" TARGET_PRIxADDR ";", hit_wp_address);
+						break;
+					case WPT_READ:
+						snprintf(stop_reason, sizeof(stop_reason),
+								"rwatch:%016" TARGET_PRIxADDR ";", hit_wp_address);
+						break;
+					case WPT_ACCESS:
+						snprintf(stop_reason, sizeof(stop_reason),
+								"awatch:%016" TARGET_PRIxADDR ";", hit_wp_address);
+						break;
+#else /* _NDS32_ONLY_ */
 					case WPT_WRITE:
 						snprintf(stop_reason, sizeof(stop_reason),
 								"watch:%08" TARGET_PRIxADDR ";", hit_wp_address);
@@ -766,6 +835,7 @@ static void gdb_signal_reply(struct target *target, struct connection *connectio
 						snprintf(stop_reason, sizeof(stop_reason),
 								"awatch:%08" TARGET_PRIxADDR ";", hit_wp_address);
 						break;
+#endif /* _NDS32_ONLY_ */
 					default:
 						break;
 				}
@@ -848,17 +918,112 @@ static void gdb_fileio_reply(struct target *target, struct connection *connectio
 		sprintf(fileio_command, "F%s,%" PRIx64 "/%" PRIx64, target->fileio_info->identifier,
 				target->fileio_info->param_1,
 				target->fileio_info->param_2);
+#if _NDS32_ONLY_
+	/* Extended for virtual-hosting */
+	else if (strcmp(target->fileio_info->identifier, "fopen") == 0)
+		sprintf(fileio_command, "F%s,%" PRIx64 "/%" PRIx64 ",%" PRIx64 "/%" PRIx64, target->fileio_info->identifier,
+				target->fileio_info->param_1,
+				target->fileio_info->param_2,
+				target->fileio_info->param_3,
+				target->fileio_info->param_4);
+	else if (strcmp(target->fileio_info->identifier, "freopen") == 0)
+		sprintf(fileio_command, "F%s,%" PRIx64 "/%" PRIx64 ",%" PRIx64 "/%" PRIx64, target->fileio_info->identifier,
+				target->fileio_info->param_1,
+				target->fileio_info->param_2,
+				target->fileio_info->param_3,
+				target->fileio_info->param_4);
+	else if (strcmp(target->fileio_info->identifier, "fclose") == 0)
+		sprintf(fileio_command, "F%s,%" PRIx64, target->fileio_info->identifier,
+				target->fileio_info->param_1);
+	else if (strcmp(target->fileio_info->identifier, "fflush") == 0)
+		sprintf(fileio_command, "F%s,%" PRIx64, target->fileio_info->identifier,
+				target->fileio_info->param_1);
+	else if (strcmp(target->fileio_info->identifier, "fread") == 0)
+		sprintf(fileio_command, "F%s,%" PRIx64 ",%" PRIx64 ",%" PRIx64 ",%" PRIx64, target->fileio_info->identifier,
+				target->fileio_info->param_1,
+				target->fileio_info->param_2,
+				target->fileio_info->param_3,
+				target->fileio_info->param_4);
+	else if (strcmp(target->fileio_info->identifier, "fwrite") == 0)
+		sprintf(fileio_command, "F%s,%" PRIx64 ",%" PRIx64 ",%" PRIx64 ",%" PRIx64, target->fileio_info->identifier,
+				target->fileio_info->param_1,
+				target->fileio_info->param_2,
+				target->fileio_info->param_3,
+				target->fileio_info->param_4);
+	else if (strcmp(target->fileio_info->identifier, "fgetc") == 0)
+		sprintf(fileio_command, "F%s,%" PRIx64, target->fileio_info->identifier,
+				target->fileio_info->param_1);
+	else if (strcmp(target->fileio_info->identifier, "fgets") == 0)
+		sprintf(fileio_command, "F%s,%" PRIx64 ",%" PRIx64 ",%" PRIx64, target->fileio_info->identifier,
+				target->fileio_info->param_1,
+				target->fileio_info->param_2,
+				target->fileio_info->param_3);
+	else if (strcmp(target->fileio_info->identifier, "fputc") == 0)
+		sprintf(fileio_command, "F%s,%" PRIx64 ",%" PRIx64, target->fileio_info->identifier,
+				target->fileio_info->param_1,
+				target->fileio_info->param_2);
+	else if (strcmp(target->fileio_info->identifier, "fputs") == 0)
+		sprintf(fileio_command, "F%s,%" PRIx64 ",%" PRIx64, target->fileio_info->identifier,
+				target->fileio_info->param_1,
+				target->fileio_info->param_2);
+	else if (strcmp(target->fileio_info->identifier, "ungetc") == 0)
+		sprintf(fileio_command, "F%s,%" PRIx64 ",%" PRIx64, target->fileio_info->identifier,
+				target->fileio_info->param_1,
+				target->fileio_info->param_2);
+	else if (strcmp(target->fileio_info->identifier, "ftell") == 0)
+		sprintf(fileio_command, "F%s,%" PRIx64, target->fileio_info->identifier,
+				target->fileio_info->param_1);
+	else if (strcmp(target->fileio_info->identifier, "fseek") == 0)
+		sprintf(fileio_command, "F%s,%" PRIx64 ",%" PRIx64 ",%" PRIx64, target->fileio_info->identifier,
+				target->fileio_info->param_1,
+				target->fileio_info->param_2,
+				target->fileio_info->param_3);
+	else if (strcmp(target->fileio_info->identifier, "rewind") == 0)
+		sprintf(fileio_command, "F%s,%" PRIx64, target->fileio_info->identifier,
+				target->fileio_info->param_1);
+	else if (strcmp(target->fileio_info->identifier, "clearerr") == 0)
+		sprintf(fileio_command, "F%s,%" PRIx64, target->fileio_info->identifier,
+				target->fileio_info->param_1);
+	else if (strcmp(target->fileio_info->identifier, "feof") == 0)
+		sprintf(fileio_command, "F%s,%" PRIx64, target->fileio_info->identifier,
+				target->fileio_info->param_1);
+	else if (strcmp(target->fileio_info->identifier, "ferror") == 0)
+		sprintf(fileio_command, "F%s,%" PRIx64, target->fileio_info->identifier,
+				target->fileio_info->param_1);
+	else if (strcmp(target->fileio_info->identifier, "remove") == 0)
+		sprintf(fileio_command, "F%s,%" PRIx64 "/%" PRIx64, target->fileio_info->identifier,
+				target->fileio_info->param_1,
+				target->fileio_info->param_2);
+	else if (strcmp(target->fileio_info->identifier, "tmpfile") == 0)
+		sprintf(fileio_command, "F%s", target->fileio_info->identifier);
+#endif /* _NDS32_ONLY_ */
 	else if (strcmp(target->fileio_info->identifier, "exit") == 0) {
 		/* If target hits exit syscall, report to GDB the program is terminated.
 		 * In addition, let target run its own exit syscall handler. */
 		program_exited = true;
 		sprintf(fileio_command, "W%02" PRIx64, target->fileio_info->param_1);
+#if _NDS32_ONLY_
+		/* nds32: improve extended-remote emulation, automatically detach after inferior exit */
+		/* for gdb_put_packet"W00" in gdb_last_signal_packet() */
+		gdb_connection->attached = false;
+#endif /* _NDS32_ONLY_ */
 	} else {
 		LOG_DEBUG("Unknown syscall: %s", target->fileio_info->identifier);
 
 		/* encounter unknown syscall, continue */
 		gdb_connection->frontend_state = TARGET_RUNNING;
+
+#if _NDS32_ONLY_
+		/* continue or step according to debug action                                  */
+		/* If GDB encounters unsupported syscall, let it be executed by target itself. */
+		/* GDB should do continue or step according to previous GDB action.            */
+		if (target->gdb_running_type == 's')
+			target_step(target, 1, 0x0, 0);
+		else
+			target_resume(target, 1, 0x0, 0, 0);
+#else /* _NDS32_ONLY_ */
 		target_resume(target, 1, 0x0, 0, 0);
+#endif /* _NDS32_ONLY_ */
 		return;
 	}
 
@@ -868,7 +1033,12 @@ static void gdb_fileio_reply(struct target *target, struct connection *connectio
 	if (program_exited) {
 		/* Use target_resume() to let target run its own exit syscall handler. */
 		gdb_connection->frontend_state = TARGET_RUNNING;
+
+#if _NDS32_ONLY_
+		LOG_DEBUG("program_exited without target_resume()");
+#else
 		target_resume(target, 1, 0x0, 0, 0);
+#endif
 	} else {
 		gdb_connection->frontend_state = TARGET_HALTED;
 		rtos_update_threads(target);
@@ -891,6 +1061,14 @@ static void gdb_frontend_halted(struct target *target, struct connection *connec
 	if (gdb_connection->frontend_state == TARGET_RUNNING) {
 		/* stop forwarding log packets! */
 		log_remove_callback(gdb_log_callback, connection);
+
+#if _NDS32_ONLY_
+		if ((target->debug_reason == DBG_REASON_TRACE_BUFFULL) ||
+		    (target->debug_reason == DBG_REASON_HIT_EXCEPTIONS)) {
+			gdb_signal_reply(target, connection);
+			return;
+		}
+#endif /* _NDS32_ONLY_ */
 
 		/* check fileio first */
 		if (target_get_gdb_fileio_info(target, target->fileio_info) == ERROR_OK)
@@ -1621,7 +1799,11 @@ static int gdb_step_continue_packet(struct connection *connection,
 	else
 		current = 1;
 
+#if _NDS32_ONLY_
+	target->gdb_running_type = packet[0];
+#else
 	gdb_running_type = packet[0];
+#endif
 	if (packet[0] == 'c') {
 		LOG_DEBUG("continue");
 		/* resume at current address, don't handle breakpoints, not debugging */
@@ -1681,6 +1863,13 @@ static int gdb_breakpoint_watchpoint_packet(struct connection *connection,
 	}
 
 	size = strtoul(separator + 1, &separator, 16);
+
+#if _NDS32_ONLY_
+	if (*separator == ';') {
+		nds32_backup_tmp_bytecode_data(separator + 1);
+		size |= BP_WP_CONDITIONAL;
+	}
+#endif
 
 	switch (type) {
 		case 0:
@@ -2408,6 +2597,181 @@ error:
 	return retval;
 }
 
+#if _NDS32_ONLY_
+#define FILE_TARGET_DESC    "nds32_tdesc00.xml"
+#define FILE_BIT_FIELD      "nds32_tdesc_bitfield.xml"
+#define FILE_OUTPUT         "nds32_tdesc_out00.xml"
+#define LINEBUF_SIZE        1024
+#define BITBUF_SIZE         0x1000000
+#define PARSING_STRING      "ir0"
+
+#define TAG_TARGET_START    "<target version="
+#define TAG_TARGET_END      "</target>"
+#define TAG_FEATURE_START   "<feature name="
+#define TAG_FEATURE_END     "</feature>"
+#define TAG_REGISTER_NAME   "<reg name="
+#define TAG_BITSIZE         "bitsize="
+#define TAG_TYPE_NAME       "type="
+#define TAG_TYPE_END        "/>"
+#define TAG_GROUP_NAME      " group="
+
+unsigned int bit_reg_nums;
+char *gpBitBufStart, *gpBitTmpBuf;
+char *gpBitBufEnd;
+char *gpBitFieldFileName = (char *)FILE_BIT_FIELD;
+
+int nds32_merge_reg_desc(FILE *fp_out, char *p_reg_desc, char *p_type_desc)
+{
+	char line_buf1[LINEBUF_SIZE];
+	char *pline_buf1 = (char *)&line_buf1[0];
+	char *curr_str, *copy_start, *copy_end;
+	unsigned int copy_n = 0;
+
+	strcpy(pline_buf1, p_reg_desc);
+	curr_str = strstr(pline_buf1, TAG_TYPE_NAME);
+	if (curr_str != NULL) {
+		copy_start = strstr(p_type_desc, TAG_TYPE_NAME);
+		copy_end = strstr(p_type_desc, TAG_TYPE_END);
+		copy_n = copy_end - copy_start;
+		strncpy(curr_str, copy_start, copy_n);
+		curr_str += copy_n;
+
+		copy_start = strstr(p_reg_desc, TAG_GROUP_NAME);
+		strcpy(curr_str, copy_start);
+	}
+	fputs(pline_buf1, fp_out);
+	return 0;
+}
+
+int nds32_append_bit_field(FILE *fp_out, char *gpFeatureString)
+{
+	FILE *fp_bit;
+	char line_buf1[LINEBUF_SIZE];
+	char *pline_buf1 = (char *)&line_buf1[0];
+	char *curr_str, *curr_str2;
+	unsigned int copy_bit_field = 0;
+
+	LOG_DEBUG("%s\n", gpFeatureString);
+	fp_bit = fopen(gpBitFieldFileName, "r");
+	if (fp_bit == NULL) {
+		LOG_DEBUG("\nCan't open %s\n", gpBitFieldFileName);
+		return -1;
+	}
+	LOG_DEBUG("open %s\n", gpBitFieldFileName);
+
+	/* Copy bit-field to output */
+	while (1) {
+		if (fgets(pline_buf1, LINEBUF_SIZE, fp_bit) == NULL) {
+			LOG_DEBUG("end of fp_bit file\n");
+			break;
+		}
+		if (copy_bit_field == 0) {
+			curr_str = strstr(pline_buf1, gpFeatureString);
+			if (curr_str != NULL)
+				copy_bit_field = 1;
+		} else if (copy_bit_field == 1) {
+			curr_str = strstr(pline_buf1, TAG_REGISTER_NAME);
+			curr_str2 = strstr(pline_buf1, TAG_FEATURE_END);
+
+			if (curr_str2 != NULL) {
+				/* find </feature>, finish collecting */
+				break;
+			} else if (curr_str != NULL) {
+				/* collect <reg name="" */
+				if ((gpBitTmpBuf + (strlen(pline_buf1)+1)) > gpBitBufEnd)
+					LOG_ERROR("gpBitTmpBuf is EMPTY !!");
+
+				strcpy(gpBitTmpBuf, pline_buf1);
+				gpBitTmpBuf += strlen(pline_buf1)+1;
+				bit_reg_nums++;
+			} else {
+				/* append "<enum id=..", "<flags id=" into output */
+				fputs(pline_buf1, fp_out);
+			}
+		}
+	}
+	fclose(fp_bit);
+	return 0;
+}
+
+int nds32_merge_target_descript(FILE *fp_desc, FILE *fp_out)
+{
+	char line_buf1[LINEBUF_SIZE];
+	char *pline_buf1 = (char *)&line_buf1[0];
+	char *curr_str;
+	char *gpRegString;
+	unsigned int bit_reg_hit = 0, i, cmp_cnt;
+	unsigned int copy_tdesc = 0;
+
+	if ((fp_desc == NULL) || (fp_out == NULL)) {
+		LOG_DEBUG("merge_target_descript NULL");
+		return -1;
+	}
+
+	gpBitBufStart = (char *)malloc(BITBUF_SIZE);
+	if (gpBitBufStart == NULL) {
+		LOG_DEBUG("\n Can't malloc\n");
+		return -1;
+	}
+	gpBitTmpBuf = gpBitBufStart;
+	gpBitBufEnd = gpBitBufStart;
+	gpBitBufEnd += BITBUF_SIZE;
+	bit_reg_nums = 0;
+
+	/* copy tdesc to output */
+	while (1) {
+		if (fgets(pline_buf1, LINEBUF_SIZE, fp_desc) == NULL) {
+			LOG_DEBUG("end of fp_desc file\n");
+			break;
+		}
+
+		if (copy_tdesc == 0) {
+			curr_str = strstr(pline_buf1, TAG_FEATURE_START);
+			fputs(pline_buf1, fp_out);
+			if (curr_str != NULL) {
+				/* append bit-info to output */
+				nds32_append_bit_field(fp_out, pline_buf1);
+				copy_tdesc = 1;
+			}
+		} else if (copy_tdesc == 1) {
+			curr_str = strstr(pline_buf1, TAG_FEATURE_END);
+			if (curr_str != NULL) {
+				fputs(pline_buf1, fp_out);
+				copy_tdesc = 0;
+			} else {
+				bit_reg_hit = 0;
+				curr_str = strstr(pline_buf1, TAG_BITSIZE);
+				cmp_cnt = curr_str - pline_buf1;
+				gpRegString = gpBitBufStart;
+				for (i = 0; i < bit_reg_nums; i++) {
+					if (strncmp(pline_buf1, gpRegString, cmp_cnt) == 0) {
+						/* compare with "bitsize="64"" to check if bitsize is the same */
+						if (strncmp(curr_str, gpRegString+cmp_cnt, 12) == 0) {
+							/* hit the reg name */
+							bit_reg_hit = 1;
+							nds32_merge_reg_desc(fp_out, pline_buf1, gpRegString);
+						} else {
+							/* the bitfield.xml with wrong register size (bitsize) */
+							LOG_DEBUG("%s with wrong register size in bitfield.xml", gpRegString);
+							printf("%s with wrong register size in bitfield.xml\n", gpRegString);
+						}
+						break;
+					}
+					gpRegString += strlen(gpRegString)+1;
+				}
+				if (!bit_reg_hit)
+					fputs(pline_buf1, fp_out);
+			}
+		}
+	}
+
+	free(gpBitBufStart);
+	fclose(fp_desc);
+	fclose(fp_out);
+	return 0;
+}
+#endif /* _NDS32_ONLY_ */
+
 static int gdb_get_target_description_chunk(struct target *target, struct target_desc_format *target_desc,
 		char **chunk, int32_t offset, uint32_t length)
 {
@@ -2427,6 +2791,49 @@ static int gdb_get_target_description_chunk(struct target *target, struct target
 		}
 
 		tdesc_length = strlen(tdesc);
+
+#if _NDS32_ONLY_
+		if (nds32_output_tdesc_xml == 1) {
+			FILE *fp_tdesc, *fp_out;
+			char *p_tdesc = (char *)FILE_TARGET_DESC;
+			char *p_out = (char *)FILE_OUTPUT;
+			char filename_tdesc[128];
+			char filename_out[128];
+
+			memset(filename_tdesc, 0, sizeof(filename_tdesc));
+			memset(filename_out, 0, sizeof(filename_out));
+			strncpy(filename_tdesc, p_tdesc, strlen(p_tdesc));
+			strncpy(filename_out, p_out, strlen(p_out));
+
+			sprintf(&filename_tdesc[11], "%02d.xml", target->coreid);
+			sprintf(&filename_out[15], "%02d.xml", target->coreid);
+			LOG_DEBUG("%s", filename_out);
+
+			/* store as nds32_tdesc.xml */
+			fp_tdesc = fopen(filename_tdesc, "wb");
+			if (fp_tdesc != NULL) {
+				fwrite((char *)tdesc, 1, tdesc_length, fp_tdesc);
+				fclose(fp_tdesc);
+
+				fp_tdesc = fopen(filename_tdesc, "r");
+				fp_out = fopen(filename_out, "wb");
+				if ((fp_tdesc != NULL) && (fp_out != NULL))
+					nds32_merge_target_descript(fp_tdesc, fp_out);
+			}
+
+			/* change tdesc & tdesc_length (reference from nds32_tdesc_out.xml) */
+			fp_out = fopen(filename_out, "r");
+			if (fp_out != NULL) {
+				free(tdesc);
+				gpBitBufStart = (char *)malloc(BITBUF_SIZE);
+				uint32_t read_size = fread(gpBitBufStart, 1, BITBUF_SIZE-4, fp_out);
+				tdesc = gpBitBufStart;
+				tdesc_length = read_size;
+				LOG_DEBUG("tdesc_length = 0x%x", tdesc_length);
+				fclose(fp_out);
+			}
+		}
+#endif /* _NDS32_ONLY_ */
 	}
 
 	char transfer_type;
@@ -2621,6 +3028,12 @@ static int gdb_query_packet(struct connection *connection,
 			/* some commands need to know the GDB connection, make note of current
 			 * GDB connection. */
 			current_gdb_connection = gdb_connection;
+#if _NDS32_ONLY_
+			LOG_DEBUG("gdb_server: cmd_ctx turn target from %d to %d", \
+					cmd_ctx->current_target->target_number, \
+					target->target_number);
+			cmd_ctx->current_target = target;
+#endif
 			command_run_line(cmd_ctx, cmd);
 			current_gdb_connection = NULL;
 			target_call_timer_callbacks_now();
@@ -2686,6 +3099,23 @@ static int gdb_query_packet(struct connection *connection,
 			gdb_target_desc_supported = 0;
 		}
 
+#if _NDS32_ONLY_
+		char *curr_str = strstr(packet, "xmlRegisters=nds32");
+		if (curr_str != NULL) {
+			/* older version gdb7.7 (NOT support bit-field) */
+			LOG_DEBUG("xmlRegisters=nds32->NOT support bit-field");
+			nds32_output_tdesc_xml = 0;
+		}
+		xml_printf(&retval,
+				&buffer,
+				&pos,
+				&size,
+				"PacketSize=%x;qXfer:memory-map:read%c;qXfer:features:read%c;QStartNoAckMode+;InstallInTrace+;EnableDisableTracepoints+;ConditionalBreakpoints%c",
+				(GDB_BUFFER_SIZE - 1),
+				((gdb_use_memory_map == 1) && (flash_get_bank_count() > 0)) ? '+' : '-',
+				(gdb_target_desc_supported == 1) ? '+' : '-',
+				(nds_dis_condition_break == 1) ? '-' : '+');
+#else /* _NDS32_ONLY_ */
 		xml_printf(&retval,
 			&buffer,
 			&pos,
@@ -2694,6 +3124,7 @@ static int gdb_query_packet(struct connection *connection,
 			GDB_BUFFER_SIZE,
 			((gdb_use_memory_map == 1) && (flash_get_bank_count() > 0)) ? '+' : '-',
 			(gdb_target_desc_supported == 1) ? '+' : '-');
+#endif /* _NDS32_ONLY_ */
 
 		if (retval != ERROR_OK) {
 			gdb_send_error(connection, 01);
@@ -2734,6 +3165,9 @@ static int gdb_query_packet(struct connection *connection,
 			return retval;
 		}
 
+#if _NDS32_ONLY_
+		nds_skip_print = 1;
+#endif
 		gdb_put_packet(connection, xml, strlen(xml));
 
 		free(xml);
@@ -2774,6 +3208,77 @@ static int gdb_query_packet(struct connection *connection,
 		gdb_put_packet(connection, "OK", 2);
 		return ERROR_OK;
 	}
+#if _NDS32_ONLY_
+	/*==== for tracer ========*/
+	else if ((strncmp(packet, "QTinit", 6) == 0) ||
+		 (strncmp(packet, "QTBuffer", 8) == 0) ||
+		 (strncmp(packet, "QTDP", 4) == 0) ||
+		 (strncmp(packet, "QTEnable", 8) == 0) ||
+		 (strncmp(packet, "QTDisable", 9) == 0) ||
+		 (strncmp(packet, "QTStart", 7) == 0) ||
+		 (strncmp(packet, "QTStop", 6) == 0)) {
+		unsigned long bp_address;
+
+		if (strncmp(packet, "QTDP", 4) == 0) {
+			/* $QTDP:6:00000ccc:E:0 */
+			packet = strchr(packet, ':');
+			if (packet == NULL)
+				return ERROR_OK;
+			packet++;
+			packet = strchr(packet, ':');
+			if (packet == NULL)
+				return ERROR_OK;
+			packet++;
+
+			bp_address = strtoul(packet, (char **)&packet, 16);
+			if (packet[1] == 'E') {
+				if (nds32_tracer_add_trigger_breakpoints(target, bp_address) != ERROR_OK) {
+					gdb_send_error(connection, EFAULT);
+					return ERROR_OK;
+				}
+			}
+		} else if (strncmp(packet, "QTEnable", 8) == 0) {
+			/* $QTEnable:6:00000ccc */
+			packet = strchr(packet, ':');
+			if (packet == NULL)
+				return ERROR_OK;
+			packet++;
+			packet = strchr(packet, ':');
+			if (packet == NULL)
+				return ERROR_OK;
+			packet++;
+
+			bp_address = strtoul(packet, (char **)&packet, 16);
+			if (nds32_tracer_add_trigger_breakpoints(target, bp_address) != ERROR_OK) {
+				gdb_send_error(connection, EFAULT);
+				return ERROR_OK;
+			}
+		} else if (strncmp(packet, "QTDisable", 9) == 0) {
+			/* $QTDisable:6:00000ccc */
+			packet = strchr(packet, ':');
+			if (packet == NULL)
+				return ERROR_OK;
+			packet++;
+			packet = strchr(packet, ':');
+			if (packet == NULL)
+				return ERROR_OK;
+			packet++;
+
+			bp_address = strtoul(packet, (char **)&packet, 16);
+			nds32_tracer_remove_trigger_breakpoints(target, bp_address);
+		}
+		gdb_connection->noack_mode = 1;
+		gdb_put_packet(connection, "OK", 2);
+		return ERROR_OK;
+	} else if (strncmp(packet, "qTStatus", 8) == 0) {
+		gdb_connection->noack_mode = 1;
+		if (nds32_tracer_on)
+			gdb_put_packet(connection, "T1", 2);
+		else
+			gdb_put_packet(connection, "T0;tnotrun:0", 12);
+		return ERROR_OK;
+	}
+#endif /* _NDS32_ONLY_ */
 
 	gdb_put_packet(connection, "", 0);
 	return ERROR_OK;
@@ -2803,7 +3308,11 @@ static bool gdb_handle_vcont_packet(struct connection *connection, const char *p
 
 	/* simple case, a continue packet */
 	if (parse[0] == 'c') {
+#if _NDS32_ONLY_
+		target->gdb_running_type = 'c';
+#else
 		gdb_running_type = 'c';
+#endif /* _NDS32_ONLY_ */
 		LOG_DEBUG("target %s continue", target_name(target));
 		log_add_callback(gdb_log_callback, connection);
 		retval = target_resume(target, 1, 0, 0, 0);
@@ -2830,7 +3339,11 @@ static bool gdb_handle_vcont_packet(struct connection *connection, const char *p
 
 	/* single-step or step-over-breakpoint */
 	if (parse[0] == 's') {
+#if _NDS32_ONLY_
+		target->gdb_running_type = 's';
+#else
 		gdb_running_type = 's';
+#endif /* _NDS32_ONLY_ */
 		bool fake_step = false;
 
 		if (strncmp(parse, "s:", 2) == 0) {
@@ -2968,11 +3481,334 @@ static bool gdb_handle_vcont_packet(struct connection *connection, const char *p
 	return false;
 }
 
+#if _NDS32_ONLY_
+static int gdb_file_io_host_flag(int flags)
+{
+	int host_flags = GDB_FILE_IO_O_RDONLY;
+
+	if (flags & GDB_FILE_IO_O_WRONLY)
+		host_flags |= O_WRONLY;
+	if (flags & GDB_FILE_IO_O_RDWR)
+		host_flags |= O_RDWR;
+	if (flags & GDB_FILE_IO_O_APPEND)
+		host_flags |= O_APPEND;
+	if (flags & GDB_FILE_IO_O_CREAT)
+		host_flags |= O_CREAT;
+	if (flags & GDB_FILE_IO_O_TRUNC)
+		host_flags |= O_TRUNC;
+	if (flags & GDB_FILE_IO_O_EXCL)
+		host_flags |= O_EXCL;
+
+	return host_flags;
+}
+
+static mode_t gdb_file_io_host_mode(mode_t mode)
+{
+	mode_t host_mode = 0;
+
+	if (mode & GDB_FILE_IO_S_IFREG)
+		host_mode |= S_IFREG;
+	if (mode & GDB_FILE_IO_S_IFDIR)
+		host_mode |= S_IFDIR;
+	if (mode & GDB_FILE_IO_S_IRUSR)
+		host_mode |= S_IRUSR;
+	if (mode & GDB_FILE_IO_S_IWUSR)
+		host_mode |= S_IWUSR;
+	if (mode & GDB_FILE_IO_S_IXUSR)
+		host_mode |= S_IXUSR;
+
+#if IS_WIN32 == 0
+	if (mode & GDB_FILE_IO_S_IRGRP)
+		host_mode |= S_IRGRP;
+	if (mode & GDB_FILE_IO_S_IWGRP)
+		host_mode |= S_IWGRP;
+	if (mode & GDB_FILE_IO_S_IXGRP)
+		host_mode |= S_IXGRP;
+	if (mode & GDB_FILE_IO_S_IROTH)
+		host_mode |= S_IROTH;
+	if (mode & GDB_FILE_IO_S_IWOTH)
+		host_mode |= S_IWOTH;
+	if (mode & GDB_FILE_IO_S_IXOTH)
+		host_mode |= S_IXOTH;
+#endif /* IS_WIN32 == 0 */
+
+	return host_mode;
+}
+
+static int gdb_vfile_packet(struct connection *connection,
+		char const *packet, int packet_size)
+{
+	char const *parse;
+	int fd;
+	int ret;
+	int offset;
+	char *pathname;
+	int pathname_len;
+
+	if (strncmp(packet, "vFile:open:", 11) == 0) {
+		int flags;
+		mode_t mode;
+		char *separator;
+		parse = packet + 11;
+
+		if (*parse == '\0') {
+			LOG_ERROR("incomplete vFile:open: packet received, "
+					"dropping connection");
+			return ERROR_SERVER_REMOTE_CLOSED;
+		}
+
+		separator = strchr(parse, ',');
+
+		if (separator == NULL) {
+			LOG_ERROR("incomplete vFile:open: packet received, "
+					"dropping connection");
+			return ERROR_SERVER_REMOTE_CLOSED;
+		}
+
+		pathname_len = (separator - parse) / 2;
+		pathname = malloc(pathname_len + 1);
+		pathname_len = unhexify(pathname, parse, pathname_len);
+		pathname[pathname_len] = 0;
+
+		parse = separator + 1;
+		flags = strtoul(parse, (char **)&parse, 16);
+		flags = gdb_file_io_host_flag(flags);
+		if (*(parse++) != ',') {
+			LOG_ERROR("incomplete vFile:open: packet received, "
+					"dropping connection");
+			return ERROR_SERVER_REMOTE_CLOSED;
+		}
+		mode = strtoul(parse, (char **)&parse, 16);
+		mode = gdb_file_io_host_mode(mode);
+
+		ret = open(pathname, flags, mode);
+
+		char reply[16];
+		if (ret == -1)
+			snprintf(reply, sizeof(reply), "F-1,%x", errno);
+		else
+			snprintf(reply, sizeof(reply), "F%x", ret);
+
+		gdb_put_packet(connection, reply, strlen(reply));
+		free(pathname);
+
+		return ERROR_OK;
+
+	} else if (strncmp(packet, "vFile:close:", 12) == 0) {
+		parse = packet + 12;
+		if (*parse == '\0') {
+			LOG_ERROR("incomplete vFile:close: packet received, "
+					"dropping connection");
+			return ERROR_SERVER_REMOTE_CLOSED;
+		}
+
+		fd = strtoul(parse, (char **)&parse, 16);
+
+		ret = close(fd);
+
+		char reply[16];
+		if (ret == -1)
+			snprintf(reply, sizeof(reply), "F-1,%x", errno);
+		else
+			snprintf(reply, sizeof(reply), "F%x", ret);
+
+		gdb_put_packet(connection, reply, strlen(reply));
+
+		return ERROR_OK;
+
+	} else if (strncmp(packet, "vFile:pread:", 12) == 0) {
+		int count;
+		char *read_buffer;
+		parse = packet + 12;
+
+		if (*parse == '\0') {
+			LOG_ERROR("incomplete vFile:pread: packet received, "
+					"dropping connection");
+			return ERROR_SERVER_REMOTE_CLOSED;
+		}
+
+		fd = strtoul(parse, (char **)&parse, 16);
+		if (*(parse++) != ',') {
+			LOG_ERROR("incomplete vFile:pread: packet received, "
+					"dropping connection");
+			return ERROR_SERVER_REMOTE_CLOSED;
+		}
+
+		count = strtoul(parse, (char **)&parse, 16);
+		if (*(parse++) != ',') {
+			LOG_ERROR("incomplete vFile:pread: packet received, "
+					"dropping connection");
+			return ERROR_SERVER_REMOTE_CLOSED;
+		}
+
+		offset = strtoul(parse, (char **)&parse, 16);
+
+		read_buffer = malloc(count);
+#if IS_WIN32 == 0
+		ret = pread(fd, read_buffer, count, offset);
+#else
+		lseek(fd, offset, SEEK_SET);
+		ret = read(fd, read_buffer, count);
+#endif
+
+		char *reply = malloc(16 + ret * 2); /* payload and escape characters */
+		int reply_len;
+		if (ret == -1) {
+			snprintf(reply, 16, "F-1,%x", errno);
+			reply_len = strlen(reply);
+		} else {
+			snprintf(reply, 16, "F%x;", ret);
+			reply_len = strlen(reply);
+			if (ret > 0) {
+				for (int i = 0; i < ret; i++) {
+					char read_char = read_buffer[i];
+					if ((read_char == '#') ||
+							(read_char == '$') ||
+							(read_char == '}') ||
+							(read_char == '*')) {
+						reply[reply_len++] = '}';
+						reply[reply_len++] = read_char ^ 0x20;
+					} else {
+						reply[reply_len++] = read_char;
+					}
+				}
+			}
+		}
+
+		gdb_put_packet(connection, reply, reply_len);
+		free(read_buffer);
+		free(reply);
+
+		return ERROR_OK;
+
+	} else if (strncmp(packet, "vFile:pwrite:", 13) == 0) {
+		int packet_header_size;
+		parse = packet + 13;
+
+		if (*parse == '\0') {
+			LOG_ERROR("incomplete vFile:pwrite: packet received, "
+					"dropping connection");
+			return ERROR_SERVER_REMOTE_CLOSED;
+		}
+
+		fd = strtoul(parse, (char **)&parse, 16);
+		if (*(parse++) != ',') {
+			LOG_ERROR("incomplete vFile:pwrite: packet received, "
+					"dropping connection");
+			return ERROR_SERVER_REMOTE_CLOSED;
+		}
+
+		offset = strtoul(parse, (char **)&parse, 16);
+		if (*(parse++) != ',') {
+			LOG_ERROR("incomplete vFile:pwrite: packet received, "
+					"dropping connection");
+			return ERROR_SERVER_REMOTE_CLOSED;
+		}
+		packet_header_size = parse - packet;
+
+#if IS_WIN32 == 0
+		ret = pwrite(fd, parse, packet_size - packet_header_size, offset);
+#else
+		lseek(fd, offset, SEEK_SET);
+		ret = write(fd, parse, packet_size - packet_header_size);
+#endif
+
+		char reply[16];
+		if (ret == -1)
+			snprintf(reply, sizeof(reply), "F-1,%x", errno);
+		else
+			snprintf(reply, sizeof(reply), "F%x", ret);
+
+		gdb_put_packet(connection, reply, strlen(reply));
+
+		return ERROR_OK;
+
+	} else if (strncmp(packet, "vFile:unlink:", 13) == 0) {
+		parse = packet + 13;
+
+		if (*parse == '\0') {
+			LOG_ERROR("incomplete vFile:unlink: packet received, "
+					"dropping connection");
+			return ERROR_SERVER_REMOTE_CLOSED;
+		}
+
+		pathname_len = strlen(parse) / 2;
+		pathname = malloc(pathname_len + 1);
+		pathname_len = unhexify(pathname, parse, pathname_len);
+		pathname[pathname_len] = 0;
+
+		ret = unlink(pathname);
+
+		char reply[16];
+		if (ret == -1)
+			snprintf(reply, sizeof(reply), "F-1,%x", errno);
+		else
+			snprintf(reply, sizeof(reply), "F%x", ret);
+
+		gdb_put_packet(connection, reply, strlen(reply));
+
+		return ERROR_OK;
+
+	} else if (strncmp(packet, "vFile:readlink:", 15) == 0) {
+		parse = packet + 15;
+
+		if (*parse == '\0') {
+			LOG_ERROR("incomplete vFile:readlink: packet received, "
+					"dropping connection");
+			return ERROR_SERVER_REMOTE_CLOSED;
+		}
+
+		pathname_len = strlen(parse) / 2;
+		pathname = malloc(pathname_len + 1);
+		pathname_len = unhexify(pathname, parse, pathname_len);
+		pathname[pathname_len] = 0;
+
+#if IS_WIN32 == 0
+		char *link_buffer;
+		int link_buffer_size;
+		struct stat stat_buf;
+
+		if (lstat(pathname, &stat_buf) == -1)
+			return ERROR_FAIL;
+
+		link_buffer_size = stat_buf.st_size;
+		link_buffer = malloc(link_buffer_size);
+
+		ret = readlink(pathname, link_buffer, link_buffer_size);
+#else /* IS_WIN32 == 0 */
+		ret = -1;
+#endif /* IS_WIN32 == 0 */
+
+		char reply[16];
+		if (ret == -1)
+			snprintf(reply, sizeof(reply), "F-1,%x", errno);
+		else
+			snprintf(reply, sizeof(reply), "F%x", ret);
+
+		gdb_put_packet(connection, reply, strlen(reply));
+
+#if IS_WIN32 == 0
+		free(link_buffer);
+#endif
+
+		return ERROR_OK;
+	}
+
+	return ERROR_FAIL;
+}
+#endif /* _NDS32_ONLY_ */
+
 static int gdb_v_packet(struct connection *connection,
 		char const *packet, int packet_size)
 {
 	struct gdb_connection *gdb_connection = connection->priv;
 	int result;
+
+#if _NDS32_ONLY_
+	result = gdb_vfile_packet(connection, packet, packet_size);
+	if (result == ERROR_OK)
+		return ERROR_OK;
+#endif
 
 	struct target *target = get_target_from_connection(connection);
 	if (target->rtos != NULL && target->rtos->gdb_v_packet != NULL) {
@@ -3157,6 +3993,14 @@ static int gdb_fileio_response_packet(struct connection *connection,
 			if (*(separator + 1) == 'C') {
 				/* TODO: process ctrl-c */
 				fileio_ctrl_c = true;
+
+#if _NDS32_ONLY_
+				/* fix bug, gdb.base/interrupt.exp fails.            */
+				/* OpenOCD response T05 when GDB sends ctrl-c to     */
+				/* interrupt FILE-IO request, it should response T02 */
+				struct gdb_connection *gdb_con = connection->priv;
+				gdb_con->ctrl_c = true;
+#endif /* _NDS32_ONLY_ */
 			}
 		}
 	}
@@ -3168,6 +4012,15 @@ static int gdb_fileio_response_packet(struct connection *connection,
 	if (retval != ERROR_OK)
 		return ERROR_FAIL;
 
+#if _NDS32_ONLY_
+	/* After File-I/O ends, keep continue or step */
+	if (target->gdb_running_type == 'c')
+		retval = target_resume(target, 1, 0x0, 0, 0);
+	else if (target->gdb_running_type == 's')
+		retval = target_step(target, 1, 0x0, 0);
+	else
+		retval = ERROR_FAIL;
+#else /* _NDS32_ONLY_ */
 	/* After File-I/O ends, keep continue or step */
 	if (gdb_running_type == 'c')
 		retval = target_resume(target, 1, 0x0, 0, 0);
@@ -3175,6 +4028,7 @@ static int gdb_fileio_response_packet(struct connection *connection,
 		retval = target_step(target, 1, 0x0, 0);
 	else
 		retval = ERROR_FAIL;
+#endif /* _NDS32_ONLY_ */
 
 	if (retval != ERROR_OK)
 		return ERROR_FAIL;
@@ -3209,7 +4063,11 @@ static int gdb_input_inner(struct connection *connection)
 	static char gdb_packet_buffer[GDB_BUFFER_SIZE + 1]; /* Extra byte for nul-termination */
 
 	struct target *target;
+#if _NDS32_ONLY_
+	char *packet = gdb_packet_buffer;
+#else
 	char const *packet = gdb_packet_buffer;
+#endif /* _NDS32_ONLY_ */
 	int packet_size;
 	int retval;
 	struct gdb_connection *gdb_con = connection->priv;
@@ -3237,7 +4095,11 @@ static int gdb_input_inner(struct connection *connection)
 		/* terminate with zero */
 		gdb_packet_buffer[packet_size] = '\0';
 
+#if _NDS32_ONLY_
+		if (LOG_LEVEL_IS(LOG_LVL_INFO)) {
+#else
 		if (LOG_LEVEL_IS(LOG_LVL_DEBUG)) {
+#endif
 			char buf[64];
 			unsigned offset = 0;
 			int i = 0;
@@ -3254,7 +4116,11 @@ static int gdb_input_inner(struct connection *connection)
 				i++;
 			}
 			buf[offset] = 0;
+#if _NDS32_ONLY_
+			NDS_INFO("received packet: '%s'%s", buf, i < packet_size ? "..." : "");
+#else
 			LOG_DEBUG("received packet: '%s'%s", buf, i < packet_size ? "..." : "");
+#endif
 		}
 
 		if (packet_size > 0) {
@@ -3300,9 +4166,28 @@ static int gdb_input_inner(struct connection *connection)
 					break;
 				case 'c':
 				case 's':
+#if _NDS32_ONLY_
+				case 'S':  /* Step with signal */
+				case 'C':  /* Continue with signal */
+#endif /* _NDS32_ONLY_ */
 				{
 					gdb_thread_packet(connection, packet, packet_size);
+#if _NDS32_ONLY_
+					if (packet[0] == 'S') {
+						/* do single-step */
+						packet[0] = 's';
+						packet_size = 1;
+					} else if (packet[0] == 'C') {
+						/* do continue */
+						packet[0] = 'c';
+						packet_size = 1;
+					}
+					/* fix bug-9631. Show "memory access" in the program/gdb console
+					 * when a debug session is running. */
+					log_remove_callback(gdb_log_callback, connection);
+#else /* _NDS32_ONLY_ */
 					log_add_callback(gdb_log_callback, connection);
+#endif /* _NDS32_ONLY_ */
 
 					if (gdb_con->mem_write_error) {
 						LOG_ERROR("Memory write failure!");
@@ -3425,7 +4310,12 @@ static int gdb_input_inner(struct connection *connection)
 					 * Fretcode,errno,Ctrl-C flag;call-specific attachment
 					 */
 					gdb_con->frontend_state = TARGET_RUNNING;
+#if _NDS32_ONLY_
+					LOG_DEBUG("'F' remove_callback");
+					log_remove_callback(gdb_log_callback, connection);
+#else /* _NDS32_ONLY_ */
 					log_add_callback(gdb_log_callback, connection);
+#endif /* _NDS32_ONLY_ */
 					gdb_fileio_response_packet(connection, packet, packet_size);
 					break;
 
@@ -3497,6 +4387,15 @@ static int gdb_target_start(struct target *target, const char *port)
 	ret = add_service("gdb",
 			port, 1, &gdb_new_connection, &gdb_input,
 			&gdb_connection_closed, gdb_service);
+
+#if _NDS32_ONLY_
+	/* fix bug-10792, ICEman option -p, --port, gdb port numbers define issue. */
+	if (ret != ERROR_OK) {
+		free(gdb_service);
+		return ERROR_FAIL;
+	}
+#endif
+
 	/* initialialize all targets gdb service with the same pointer */
 	{
 		struct target_list *head;
@@ -3512,6 +4411,64 @@ static int gdb_target_start(struct target *target, const char *port)
 	return ret;
 }
 
+
+#if _NDS32_ONLY_
+/* fix bug-10792, ICEman option -p, --port, gdb port numbers define issue. */
+extern unsigned int nds32_userdef_num_of_ports;
+unsigned int nds32_portnumber_end;
+static int gdb_target_add_one(struct target *target)
+{
+	/*  one gdb instance per smp list */
+	if ((target->smp) && (target->gdb_service))
+		return ERROR_OK;
+	int retval;
+	long portnumber;
+	char *end;
+
+	while (1) {
+		retval = gdb_target_start(target, gdb_port_next);
+		portnumber = strtol(gdb_port_next, &end, 0);
+		if (!*end) {
+			if (parse_long(gdb_port_next, &portnumber) == ERROR_OK) {
+				free((void *)gdb_port_next);
+				gdb_port_next = alloc_printf("%d", portnumber+1);
+			}
+		}
+		if (retval == ERROR_OK) {
+			printf("The core #%d listens on %d.\n", (int)target->target_number, (int)portnumber);
+			break;
+		} else if ((portnumber+1) >= (int) 65535) {
+			LOG_ERROR("gdb port number fail");
+			printf("gdb port number fail!!\n");
+			fflush(stdout);
+			exit(-1);
+		}
+	}
+	return retval;
+}
+
+int gdb_target_add_all(struct target *target)
+{
+	if (NULL == target) {
+		LOG_WARNING("gdb services need one or more targets defined");
+		return ERROR_OK;
+	}
+	char *end;
+	long portnumber;
+	portnumber = strtol(gdb_port_next, &end, 0);
+	nds32_portnumber_end = portnumber + (nds32_userdef_num_of_ports-1);
+	while (NULL != target) {
+		int retval = gdb_target_add_one(target);
+		if (ERROR_OK != retval)
+			return retval;
+
+		target = target->next;
+	}
+	printf("ICEman is ready to use.\n");
+	fflush(stdout);
+	return ERROR_OK;
+}
+#else /*  _NDS32_ONLY_ */
 static int gdb_target_add_one(struct target *target)
 {
 	/*  one gdb instance per smp list */
@@ -3583,6 +4540,7 @@ int gdb_target_add_all(struct target *target)
 
 	return ERROR_OK;
 }
+#endif  /* _NDS32_ONLY_ */
 
 COMMAND_HANDLER(handle_gdb_sync_command)
 {
