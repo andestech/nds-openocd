@@ -17,8 +17,8 @@
  *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
  ***************************************************************************/
 
-#ifndef OPENOCD_JTAG_DRIVERS_LIBUSB1_COMMON_H
-#define OPENOCD_JTAG_DRIVERS_LIBUSB1_COMMON_H
+#ifndef OPENOCD_JTAG_DRIVERS_LIBUSB10_COMMON_H
+#define OPENOCD_JTAG_DRIVERS_LIBUSB10_COMMON_H
 
 #include <libusb.h>
 
@@ -31,7 +31,6 @@
 #define jtag_libusb_config_descriptor		libusb_config_descriptor
 
 #define jtag_libusb_reset_device(dev)		libusb_reset_device(dev)
-#define jtag_libusb_get_device(devh)		libusb_get_device(devh)
 
 static inline int jtag_libusb_claim_interface(jtag_libusb_device_handle *devh,
 		int iface)
@@ -44,6 +43,8 @@ static inline int jtag_libusb_release_interface(jtag_libusb_device_handle *devh,
 {
 	return libusb_release_interface(devh, iface);
 }
+
+struct jtag_libusb_device *jtag_libusb_get_device(struct jtag_libusb_device_handle *dev_handle);
 
 int jtag_libusb_open(const uint16_t vids[], const uint16_t pids[],
 		const char *serial,
@@ -78,7 +79,6 @@ int jtag_libusb_choose_interface(struct jtag_libusb_device_handle *devh,
 		int bclass, int subclass, int protocol, int trans_type);
 int jtag_libusb_get_pid(struct jtag_libusb_device *dev, uint16_t *pid);
 
-#if _NDS32_ONLY_
 int jtag_libusb_get_endpoints(struct jtag_libusb_device *udev,
 		unsigned int *usb_read_ep,
 		unsigned int *usb_write_ep,
@@ -89,6 +89,5 @@ int jtag_libusb_get_descriptor_string(jtag_libusb_device_handle *dev_handle,
 		char **pdescp_Manufacturer,
 		char **pdescp_Product,
 		unsigned int *pdescp_bcdDevice);
-#endif /* _NDS32_ONLY_ */
 
-#endif /* OPENOCD_JTAG_DRIVERS_LIBUSB1_COMMON_H */
+#endif /* OPENOCD_JTAG_DRIVERS_LIBUSB10_COMMON_H */
