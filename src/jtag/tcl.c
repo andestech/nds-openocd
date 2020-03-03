@@ -281,7 +281,11 @@ static int Jim_Command_flush_count(Jim_Interp *interp, int argc, Jim_Obj *const 
 static const struct command_registration jtag_command_handlers_to_move[] = {
 	{
 		.name = "drscan",
+#if _NDS32_ONLY_
+		.mode = COMMAND_ANY,
+#else
 		.mode = COMMAND_EXEC,
+#endif
 		.jim_handler = Jim_Command_drscan,
 		.help = "Execute Data Register (DR) scan for one TAP.  "
 			"Other TAPs must be in BYPASS mode.",
@@ -1342,14 +1346,22 @@ static const struct command_registration jtag_command_handlers[] = {
 	{
 		.name = "runtest",
 		.handler = handle_runtest_command,
+#if _NDS32_ONLY_
+		.mode = COMMAND_ANY,
+#else
 		.mode = COMMAND_EXEC,
+#endif
 		.help = "Move to Run-Test/Idle, and issue TCK for num_cycles.",
 		.usage = "num_cycles"
 	},
 	{
 		.name = "irscan",
 		.handler = handle_irscan_command,
+#if _NDS32_ONLY_
+		.mode = COMMAND_ANY,
+#else
 		.mode = COMMAND_EXEC,
+#endif
 		.help = "Execute Instruction Register (DR) scan.  The "
 			"specified opcodes are put into each TAP's IR, "
 			"and other TAPs are put in BYPASS.",
