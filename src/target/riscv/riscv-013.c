@@ -1683,11 +1683,13 @@ static void deinit_target(struct target *target)
 
 			/* Set attached to false before resume */
 			nds32->attached = false;
-
-			/* free run in debug mode */
-			target_resume(target, 1, 0, 0, 0);
 		}
-	}
+
+		/* free run in debug mode */
+		LOG_DEBUG("Free run all target");
+		target_resume(target, 1, 0, 0, 0);
+	} else
+		LOG_DEBUG("target was not examined, skip resume");
 #endif
 
 
@@ -2663,8 +2665,7 @@ static int assert_reset(struct target *target)
 #if _NDS_V5_ONLY_
 	if (target->reset_halt) {
 		/* single core no execute haltonreset: bitmap built before 2019/5 */
-		if (target->rtos)
-			ndsv5_haltonreset(target, 1);
+		ndsv5_haltonreset(target, 1);
 	} else
 		ndsv5_haltonreset(target, 0);
 #endif /* _NDS_V5_ONLY_ */
@@ -2820,12 +2821,16 @@ static int deassert_reset(struct target *target)
 
 #if _NDS_V5_ONLY_
 	/* Restore halt-on-reset */
-	if (nds_halt_on_reset == 1) {
+	if (nds_halt_on_reset == 1 && target->rtos) {
 		/* single core no execute haltonreset: bitmap built before 2019/5 */
-		if (target->rtos)
-			ndsv5_haltonreset(target, 1);
+		ndsv5_haltonreset(target, 1);
 	} else
 		ndsv5_haltonreset(target, 0);
+
+	uint64_t dpc;
+	riscv_get_register(target, &dpc, GDB_REGNO_PC);
+	NDS_INFO("[%s] hart[%d] halt at 0x%" PRIx64, target->tap->dotted_name,
+			riscv_current_hartid(target), dpc);
 #endif /* _NDS_V5_ONLY_ */
 
 	info->dmi_busy_delay = dmi_busy_delay;
@@ -6123,6 +6128,14 @@ int ndsv5_get_vector_VLMAX(struct target *target)
 	int result;
 	unsigned xlen = riscv_xlen(target);
 
+	uint64_t mstatus;
+	if (register_read_direct(target, &mstatus, GDB_REGNO_MSTATUS) != ERROR_OK)
+		LOG_ERROR("read mstatus error");
+
+	if ((mstatus & MSTATUS_VS) == 0 &&
+	   register_write_direct(target, GDB_REGNO_MSTATUS, set_field(mstatus, MSTATUS_VS, 1)) != ERROR_OK)
+		LOG_ERROR("cannot write mstatus_vs");
+
 	riscv_get_register(target, &reg_vtype, CSR_VTYPE + GDB_REGNO_CSR0);
 	riscv_get_register(target, &reg_vl, CSR_VL + GDB_REGNO_CSR0);
 	LOG_DEBUG("start_reg_vtype: 0x%" PRIx64, reg_vtype);
@@ -6166,6 +6179,9 @@ int ndsv5_get_vector_VLMAX(struct target *target)
 
 	riscv_get_register(target, &reg_vtype, CSR_VTYPE + GDB_REGNO_CSR0);
 	riscv_get_register(target, &reg_vl, CSR_VL + GDB_REGNO_CSR0);
+	if (register_write_direct(target, GDB_REGNO_MSTATUS, mstatus) != ERROR_OK)
+		return ERROR_FAIL;
+
 	LOG_DEBUG("new_reg_vtype: 0x%lx, new_reg_vl: 0x%lx", (long unsigned int)reg_vtype, (long unsigned int)reg_vl);
 	return ERROR_OK;
 }
@@ -6184,6 +6200,14 @@ int ndsv5_get_vector_register(struct target *target, enum gdb_regno r, char *pRe
 	uint32_t i, j;
 	int result;
 	char *p_vector_value;
+	uint64_t mstatus;
+	if (register_read_direct(target, &mstatus, GDB_REGNO_MSTATUS) != ERROR_OK)
+		LOG_ERROR("read mstatus error");
+
+	if ((mstatus & MSTATUS_VS) == 0 && \
+	    register_write_direct(target, GDB_REGNO_MSTATUS, set_field(mstatus, MSTATUS_VS, 1)) != ERROR_OK)
+		LOG_ERROR("cannot write mstatus_vs");
+
 	riscv_get_register(target, &reg_vtype, CSR_VTYPE + GDB_REGNO_CSR0);
 	riscv_get_register(target, &reg_vl, CSR_VL + GDB_REGNO_CSR0);
 	riscv_get_register(target, &reg_vstart, CSR_VSTART + GDB_REGNO_CSR0);
@@ -6227,6 +6251,8 @@ int ndsv5_get_vector_register(struct target *target, enum gdb_regno r, char *pRe
 	/* Restore vtype & vl */
 	ndsv5_vector_restore_vtype_vl(target, reg_vtype);
 	riscv_set_register(target, CSR_VSTART + GDB_REGNO_CSR0, reg_vstart);
+	if (register_write_direct(target, GDB_REGNO_MSTATUS, mstatus) != ERROR_OK)
+		return ERROR_FAIL;
 
 	return ERROR_OK;
 }
@@ -6249,6 +6275,14 @@ int ndsv5_set_vector_register(struct target *target, enum gdb_regno r, char *pRe
 	uint32_t i, j;
 	int result;
 	char *p_vector_value;
+	uint64_t mstatus;
+	if (register_read_direct(target, &mstatus, GDB_REGNO_MSTATUS) != ERROR_OK)
+		LOG_ERROR("read mstatus error");
+
+	if ((mstatus & MSTATUS_VS) == 0 &&
+	    register_write_direct(target, GDB_REGNO_MSTATUS, set_field(mstatus, MSTATUS_VS, 1)) != ERROR_OK)
+		LOG_ERROR("cannot write mstatus_vs");
+
 	riscv_get_register(target, &reg_vtype, CSR_VTYPE + GDB_REGNO_CSR0);
 	riscv_get_register(target, &reg_vl, CSR_VL + GDB_REGNO_CSR0);
 	riscv_get_register(target, &reg_vstart, CSR_VSTART + GDB_REGNO_CSR0);
@@ -6289,6 +6323,8 @@ int ndsv5_set_vector_register(struct target *target, enum gdb_regno r, char *pRe
 	/* Restore vtype & vl & vstart */
 	ndsv5_vector_restore_vtype_vl(target, reg_vtype);
 	riscv_set_register(target, CSR_VSTART + GDB_REGNO_CSR0, reg_vstart);
+	if (register_write_direct(target, GDB_REGNO_MSTATUS, mstatus) != ERROR_OK)
+		return ERROR_FAIL;
 
 	return ERROR_OK;
 }
@@ -6416,27 +6452,28 @@ read_memory_bus_v1_opt_retry:
 
 		batch_index = 0;
 		for (i = 0; i < read_cnt; i++) {
+			riscv_addr_t offset = cur_address - address;
 			if (size > 12) {
 				dmi_out = riscv_batch_get_dmi_read_data(busmode_batch, pindex_read[batch_index++]);
 				value = get_field(dmi_out, DTM_DMI_DATA);
-				write_to_buf(buffer + i * size + 12, value, 4);
+				write_to_buf(buffer + offset + i * size + 12, value, 4);
 				log_memory_access(cur_address + i * size + 12, value, 4, true);
 			}
 			if (size > 8) {
 				dmi_out = riscv_batch_get_dmi_read_data(busmode_batch, pindex_read[batch_index++]);
 				value = get_field(dmi_out, DTM_DMI_DATA);
-				write_to_buf(buffer + i * size + 8, value, 4);
+				write_to_buf(buffer + offset + i * size + 8, value, 4);
 				log_memory_access(cur_address + i * size + 8, value, 4, true);
 			}
 			if (size > 4) {
 				dmi_out = riscv_batch_get_dmi_read_data(busmode_batch, pindex_read[batch_index++]);
 				value = get_field(dmi_out, DTM_DMI_DATA);
-				write_to_buf(buffer + i * size + 4, value, 4);
+				write_to_buf(buffer + offset + i * size + 4, value, 4);
 				log_memory_access(cur_address + i * size + 4, value, 4, true);
 			}
 			dmi_out = riscv_batch_get_dmi_read_data(busmode_batch, pindex_read[batch_index++]);
 			value = get_field(dmi_out, DTM_DMI_DATA);
-			write_to_buf(buffer + i * size, value, MIN(size, 4));
+			write_to_buf(buffer + offset + i * size, value, MIN(size, 4));
 			log_memory_access(cur_address + i * size, value, 4, true);
 		}
 
@@ -7029,8 +7066,12 @@ static void write_to_buf(uint8_t *buffer, uint64_t value, unsigned size)
 	}
 }
 
-
-
+int ndsv5_get_delay_count(struct target *target)
+{
+	riscv013_info_t *info = get_info(target);
+	LOG_DEBUG("dmi_busy_delay=%d", info->dmi_busy_delay);
+	return info->dmi_busy_delay;
+}
 
 #endif /* _NDS_V5_ONLY_ */
 /********************************************************************/

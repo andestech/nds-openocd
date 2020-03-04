@@ -4637,6 +4637,7 @@ DECLARE_CAUSE("store guest page fault", CAUSE_STORE_GUEST_PAGE_FAULT)
 
 #if _NDS_V5_ONLY_
 #define MATCH_BFOZ 0x205b
+#define MASK_BFOZ  0x707f
 #define DCSR_STEPIE         (1<<11)
 
 #include "ndsv5_encoding.h"

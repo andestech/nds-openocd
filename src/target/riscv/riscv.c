@@ -1566,6 +1566,9 @@ static int resume_prep(struct target *target, int current,
 	if (!current)
 		riscv_set_register(target, GDB_REGNO_PC, address);
 
+#if _NDS_V5_ONLY_
+	/*TODO: FIXED ME */
+#else
 	if (target->debug_reason == DBG_REASON_WATCHPOINT) {
 		/* To be able to run off a trigger, disable all the triggers, step, and
 		 * then resume as usual. */
@@ -1580,6 +1583,7 @@ static int resume_prep(struct target *target, int current,
 		if (enable_triggers(target, trigger_state) != ERROR_OK)
 			return ERROR_FAIL;
 	}
+#endif /* _NDS_V5_ONLY_ */
 
 	if (r->is_halted) {
 		if (riscv_select_current_hart(target) != ERROR_OK)
