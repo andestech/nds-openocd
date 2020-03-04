@@ -60,6 +60,10 @@ struct rtos {
 	int (*gdb_v_packet)(struct connection *connection, char const *packet, int packet_size);
 	int (*gdb_target_for_threadid)(struct connection *connection, int64_t thread_id, struct target **p_target);
 	void *rtos_specific_params;
+
+#if _NDS32_ONLY_
+	uint32_t hart_unavailable[64];
+#endif
 };
 
 struct rtos_reg {
