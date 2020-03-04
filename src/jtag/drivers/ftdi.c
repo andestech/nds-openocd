@@ -1378,7 +1378,7 @@ static int ftdi_handle_write_pins_command(Jim_Interp *interp, int argc, Jim_Obj 
 	}
 
 	tmp_str = Jim_GetString(argv[1], &len);
-	LOG_DEBUG("Get nibbles(len=>%d) %s!!\n", len, tmp_str);
+	LOG_DEBUG("Get nibbles(len: %d) \"%s\"", len, tmp_str);
 	fflush(stdout);
 
 	if ((len <= 0) || (len >= 2048))
@@ -1386,7 +1386,7 @@ static int ftdi_handle_write_pins_command(Jim_Interp *interp, int argc, Jim_Obj 
 
 	for (i = 0; i < len; i++) {
 		Nibble = *(tmp_str+i) - '0';
-		LOG_DEBUG("Nibble: %x\n", Nibble);
+		/*LOG_DEBUG("Nibble: %x\n", Nibble);*/
 
 		out_tck[i] = ((Nibble&0x1) >> 0);
 		out_tms[i] = ((Nibble&0x2) >> 1);

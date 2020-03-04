@@ -185,26 +185,30 @@ enum target_run_mode {
 
 #define NDS_EBREAK_NUMS 11
 enum nds32_syscall_id {
-	NDS_EBREAK_UNDEFINED = 0,
-	/* NDS_EBREAK_SKIP_BREAK = 0x7E00, */
-
-	/* break SWID */
-	NDS_EBREAK_EXIT   = 0x005D005D,       /* 93   */
-	NDS_EBREAK_OPEN   = 0x04000400,       /* 1024 */
-	NDS_EBREAK_CLOSE  = 0x00390039,       /* 57   */
-	NDS_EBREAK_READ   = 0x003F003F,       /* 63   */
-	NDS_EBREAK_WRITE  = 0x00400040,       /* 64   */
-	NDS_EBREAK_LSEEK  = 0x003E003E,       /* 62   */
-	NDS_EBREAK_UNLINK = 0x04020402,       /* 1026 */
-	NDS_EBREAK_RENAME = 0x040A040A,       /* 1034 */
-	NDS_EBREAK_FSTAT  = 0x00500050,       /* 80   */
-	NDS_EBREAK_STAT   = 0x040E040E,       /* 1038 */
-	NDS_EBREAK_GETTIMEOFDAY = 0x00A900A9, /* 169  */
+	NDS_EBREAK_UNDEFINED    = 0,
+	NDS_EBREAK_OPEN         = 0x400,
+	NDS_EBREAK_LSEEK        = 0x3E,
+	NDS_EBREAK_READ         = 0x3F,
+	NDS_EBREAK_WRITE        = 0x40,
+	NDS_EBREAK_FSTAT        = 0x50,
+	NDS_EBREAK_STAT         = 0x40E,
+	NDS_EBREAK_CLOSE        = 0x39,
+	/* NDS_EBREAK_LINK      = 0x401, not supported by VH */
+	NDS_EBREAK_UNLINK       = 0x402,
+	NDS_EBREAK_GETTIMEOFDAY = 0xA9,
+	NDS_EBREAK_EXIT         = 0x5D,
+	NDS_EBREAK_RENAME       = 0x40A, /* if compiled with -DHAVE_RENAME */
 
 	/*
-	NDS_EBREAK_ISATTY = 0x7F2B,
-	NDS_EBREAK_SYSTEM = 0x7F2C,
-	NDS_EBREAK_ERRNO = 0x7F2D,
+	NDS_EBREAK_OPENNAT      = 0x38,  ,defined but rarely used
+	NDS_EBREAK_LSTAT        = 0x40F, ,defined but rarely used
+	NDS_EBREAK_FSTATAT      = 0x4F,  ,defined but rarely used
+	NDS_EBREAK_ACCESS       = 0x409, ,defined but rarely used
+	NDS_EBREAK_FACCESSAT    = 0x30,  ,defined but rarely used
+	NDS_EBREAK_SKIP_BREAK   = 0x7E00,
+	NDS_EBREAK_ISATTY       = 0x7F2B,
+	NDS_EBREAK_SYSTEM       = 0x7F2C,
+	NDS_EBREAK_ERRNO        = 0x7F2D,
 	*/
 };
 

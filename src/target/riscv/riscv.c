@@ -726,16 +726,18 @@ static int add_trigger(struct target *target, struct trigger *trigger)
 
 #if _NDS_V5_ONLY_
 		if (trigger->execute) {
-			//trigger from breakpoint:ignor address alignment and length issue
+			/* trigger from breakpoint:ignor address alignment and length issue */
 		} else {
-			//trigger from watchpoint:address alignment and extend length
-			LOG_DEBUG("ori_trigger_address:0x%lx, ori_trigger_length:0x%x", (long unsigned int)trigger->address, trigger->length);
+			/* trigger from watchpoint:address alignment and extend length */
+			LOG_DEBUG("ori_trigger_address:0x%" PRIx64 ", ori_trigger_length:0x%x", trigger->address, trigger->length);
 			uint64_t end_address;
 			end_address = trigger->address + trigger->length;
-			//8bytes alignment:contain rv32(4bytes or rv32dc:8bytes) and rv64(8bytes)
+
+			/* 8bytes alignment:contain rv32(4bytes or rv32dc:8bytes) and rv64(8bytes) */
 			trigger->address &= ~((0x1 << 3) - 1);
 			trigger->length = end_address - trigger->address;
-			// redefine: trigger->address
+
+			/* redefine: trigger->address */
 			modify_trigger_address_mbit_match(target, trigger);
 		}
 #endif
@@ -1338,6 +1340,9 @@ static int resume_prep(struct target *target, int current,
 	if (!current)
 		riscv_set_register(target, GDB_REGNO_PC, address);
 
+#if _NDS_V5_ONLY_
+	/*TODO: FIXED ME */
+#else
 	if (target->debug_reason == DBG_REASON_WATCHPOINT) {
 		/* To be able to run off a trigger, disable all the triggers, step, and
 		 * then resume as usual. */
@@ -1375,6 +1380,7 @@ static int resume_prep(struct target *target, int current,
 		if (result != ERROR_OK)
 			return result;
 	}
+#endif /* _NDS_V5_ONLY_ */
 
 	if (r->is_halted) {
 		if (riscv_resume_prep_all_harts(target) != ERROR_OK)

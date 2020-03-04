@@ -151,9 +151,6 @@ int ndsv5_handle_triggered(struct target *target)
 			if (ndsv5_hit_watchpoint_check(target) == ERROR_OK) {
 				if (ndsv5_get_watched_address(target) == ERROR_OK) {
 					LOG_DEBUG("match watchpoint");
-					/*
-					strict_step(target, false);
-					*/
 					target->debug_reason = DBG_REASON_WATCHPOINT;
 				} else {
 					/* false match watchpoint, resume target */
@@ -301,7 +298,7 @@ int modify_trigger_address_mbit_match(struct target *target, struct trigger *tri
 		}
 #endif
 		if (i == 0) {
-			LOG_DEBUG("ERROR length, new_address:0x%lx, new_length:0x%x", (long unsigned int)new_address, new_length);
+			LOG_DEBUG("ERROR length, new_address:0x%" PRIx64 ", new_length:0x%x", new_address, new_length);
 			return ERROR_OK;
 		}
 		mbit_mask = ~((0x01 << i) - 1);
@@ -309,13 +306,13 @@ int modify_trigger_address_mbit_match(struct target *target, struct trigger *tri
 		new_address &= mbit_mask;
 		new_address |= mbit_value;
 
-		LOG_DEBUG("new_address:0x%lx, new_length:0x%x", (long unsigned int)new_address, new_length);
+		LOG_DEBUG("new_address:0x%" PRIx64 ", new_length:0x%x", new_address, new_length);
 		if (((new_address & mbit_mask) + new_length) < (trigger->address + trigger->length))
 			new_address = trigger->address;
 		else
 			break;
 	}
-	LOG_DEBUG("real new_address:0x%lx, new_length:0x%x", (long unsigned int)new_address, new_length);
+	LOG_DEBUG("real new_address:0x%" PRIx64 ", new_length:0x%x", new_address, new_length);
 
 	/* redefine: trigger->address */
 	trigger->address = new_address;

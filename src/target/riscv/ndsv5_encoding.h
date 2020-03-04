@@ -12,6 +12,9 @@
 #define CSR_MDCM_CFG		0xFC1
 #define CSR_MMSC_CFG		0xFC2
 #define CSR_MMSC_CFG2		0xFC3
+#define CSR_MCRASH_STATESAVE	0xFC8
+#define CSR_MSTATUS_CRASHSAVE	0xFC9
+#define CSR_MVEC_CFG		0xFC7
 
 
 /* AndeStar V5 Machine Mode - 9.3. Memory and Miscellaneous CSRs */
@@ -27,6 +30,7 @@
 #define CSR_MCCTLDATA		0x7CD
 #define CSR_MPPIB		0x7F0
 #define CSR_MFIOB		0x7F1
+#define CSR_MCLK_CTL		0x7DF
 
 
 /* AndeStar V5 Machine Mode - 9.4. Trap related CSRs */
@@ -167,6 +171,9 @@ DECLARE_CSR(micm_cfg, CSR_MICM_CFG)
 DECLARE_CSR(mdcm_cfg, CSR_MDCM_CFG)
 DECLARE_CSR(mmsc_cfg, CSR_MMSC_CFG)
 DECLARE_CSR(mmsc_cfg2, CSR_MMSC_CFG2)
+DECLARE_CSR(mcrash_statesave, CSR_MCRASH_STATESAVE)
+DECLARE_CSR(mstatus_crashsave, CSR_MSTATUS_CRASHSAVE)
+DECLARE_CSR(mvec_cfg, CSR_MVEC_CFG)
 
 DECLARE_CSR(milmb, CSR_MILMB)
 DECLARE_CSR(mdlmb, CSR_MDLMB)
@@ -180,6 +187,8 @@ DECLARE_CSR(mcctlcommand, CSR_MCCTLCOMMAND)
 DECLARE_CSR(mcctldata, CSR_MCCTLDATA)
 DECLARE_CSR(mppib, CSR_MPPIB)
 DECLARE_CSR(mfiob, CSR_MFIOB)
+DECLARE_CSR(mclk_ctl, CSR_MCLK_CTL)
+
 
 DECLARE_CSR(mxstatus, CSR_MXSTATUS)
 DECLARE_CSR(mdcause, CSR_MDCAUSE)

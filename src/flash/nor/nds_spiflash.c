@@ -214,7 +214,7 @@ static int change_status(struct flash_bank *bank)
 
 	/* FOR AE350 : ENABLE ILM*/
 	struct reg *reg_micm_cfg = ndsv5_get_reg_by_CSR(target, CSR_MICM_CFG);
-	if (ndsv5_get_register_value(reg_micm_cfg) & 0x1000) {
+	if (ndsv5_get_register_value(reg_micm_cfg) & 0x7000) {
 		LOG_DEBUG("Enabling ILM");
 		struct reg *reg_milmb = ndsv5_get_reg_by_CSR(target, CSR_MILMB);
 		if (reg_milmb == NULL) {
@@ -419,34 +419,46 @@ static int ndsspi_erase(struct flash_bank *bank, int first, int last)
 
 	struct ndsspi_flash_bank *ndsspi_info = bank->driver_priv;
 	int retval = ERROR_OK;
-	int sector;
+	int sector, flash_erase_sector = 0;
+
+	/* for flash erase_sector command, not from ndsspi_write function */
+	if (nds_as == NULL) {
+		flash_erase_sector = 1;
+		nds_as = ndsspi_as_new(1);
+	}
 
 	if (target->state != TARGET_HALTED) {
 		LOG_ERROR("error: Target not halted");
-		return ERROR_TARGET_NOT_HALTED;
+		retval = ERROR_TARGET_NOT_HALTED;
+		goto ndsspi_erase_finish;
 	}
 
 	if ((first < 0) || (last < first) || (last >= bank->num_sectors)) {
 		LOG_ERROR("error: Flash sector invalid");
-		return ERROR_FLASH_SECTOR_INVALID;
+		retval = ERROR_FLASH_SECTOR_INVALID;
+		goto ndsspi_erase_finish;
 	}
 
 	if (!(ndsspi_info->probed)) {
 		LOG_ERROR("error: Flash bank not probed");
-		return ERROR_FLASH_BANK_NOT_PROBED;
+		retval = ERROR_FLASH_BANK_NOT_PROBED;
+		goto ndsspi_erase_finish;
 	}
 
 	for (sector = first; sector <= last; sector++) {
 		if (bank->sectors[sector].is_protected) {
 			LOG_ERROR("error: Flash sector %d protected", sector);
-			return ERROR_FAIL;
+			retval = ERROR_FAIL;
+			goto ndsspi_erase_finish;
 		}
 		if (bank->sectors[sector].is_erased == 1) {
 			LOG_DEBUG("Flash sector %d erased", sector);
 			if (sector == first)
 				first++;
-			if (first > last)
+			if (first > last) {
 				return ERROR_OK;
+				goto ndsspi_erase_finish;
+			}
 		}
 	}
 
@@ -455,15 +467,31 @@ static int ndsspi_erase(struct flash_bank *bank, int first, int last)
 		ndsspi_as_add_erase(nds_as, first, last);
 		retval = ndsspi_steps_execute(nds_as, bank);
 		if (retval != ERROR_OK)
-			ndsspi_data_clean(bank);
+			goto ndsspi_erase_finish;
 		for (sector = first; sector <= last; sector++)
 			bank->sectors[sector].is_erased = 1;
-		return retval;
 	} else {
 		LOG_ERROR("error: NOT target burn");
 		return ERROR_FAIL;
 	}
-	return ERROR_OK;
+
+ndsspi_erase_finish:
+	/* for flash erase_sector command, not from ndsspi_write function */
+	if (flash_erase_sector) {
+		if (retval != ERROR_OK) {
+			restore_status(bank);
+			ndsspi_data_clean(bank);
+			if (nds_data_wa != NULL && !tgt_burn_new_version) {
+				target_free_working_area(target, nds_algorithm_wa);
+				target_free_working_area(target, nds_data_wa);
+			}
+			nds_algorithm_wa = NULL;
+			nds_data_wa = NULL;
+		}
+		if (nds_as != NULL)
+			nds_as = ndsspi_as_delete(nds_as);
+	}
+	return retval;
 }
 
 static int ndsspi_write_sector_buffer(struct flash_bank *bank,
@@ -1152,6 +1180,7 @@ int ndsspi_algorithm_apis_init(struct flash_bank *bank)
 	tgt_burn_new_version = false;
 	nds_check_err_msg = 0;
 
+	change_status(bank);
 	if (user_algorithm_path == NULL) {
 		LOG_ERROR("error: algorithm path is NULL");
 		retval = ERROR_FAIL;
@@ -1381,6 +1410,7 @@ int ndsspi_algorithm_apis_init(struct flash_bank *bank)
 
 ndsspi_init_finish:
 	if (retval == ERROR_FAIL) {
+		restore_status(bank);
 		nds_algorithm_wa = NULL;
 		nds_data_wa = NULL;
 		if (nds_as != NULL)

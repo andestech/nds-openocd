@@ -1504,6 +1504,7 @@
 #define MASK_VAMOMINUE_V  0xf800707f
 #define MATCH_VAMOMAXUE_V 0xe000702f
 #define MASK_VAMOMAXUE_V  0xf800707f
+
 #define CSR_FFLAGS 0x1
 #define CSR_FRM 0x2
 #define CSR_FCSR 0x3
@@ -2691,6 +2692,7 @@ DECLARE_CAUSE("store page fault", CAUSE_STORE_PAGE_FAULT)
 
 #if _NDS_V5_ONLY_
 #define MATCH_BFOZ 0x205b
+#define MASK_BFOZ  0x707f
 #define DCSR_STEPIE         (1<<11)
 
 #include "ndsv5_encoding.h"

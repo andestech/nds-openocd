@@ -1318,6 +1318,30 @@ static int ndsv5_jtag_cur_tap_name(Jim_Interp *interp, int argc, Jim_Obj * const
 	return JIM_OK;
 }
 
+extern int ndsv5_get_delay_count(struct target *target);
+static int ndsv5_get_dmi_delay(Jim_Interp *interp, int argc, Jim_Obj * const *argv)
+{
+	Jim_GetOptInfo goi;
+	Jim_GetOpt_Setup(&goi, interp, argc-1, argv + 1);
+	if (goi.argc != 0) {
+		Jim_WrongNumArgs(goi.interp, 1, goi.argv, "Too many parameters");
+		return JIM_ERR;
+	}
+	struct command_context *cmd_ctx = global_cmd_ctx;
+	struct target *target = get_current_target(cmd_ctx);
+	uint32_t ndsv5_cur_dmi_delay = (uint32_t)ndsv5_get_delay_count(target);
+	NDS_INFO("get ndsv5_dmi_delay = 0x%x", ndsv5_cur_dmi_delay);
+	char *str = buf_to_str(&ndsv5_cur_dmi_delay, 32, 16);
+
+	Jim_SetResult(goi.interp, Jim_NewListObj(goi.interp, NULL, 0));
+	Jim_ListAppendElement(goi.interp,
+			Jim_GetResult(goi.interp),
+			Jim_NewStringObj(goi.interp,
+				str, -1));
+	free(str);
+	return JIM_OK;
+}
+
 int ndsv5cmd_set_auto_convert_hw_bp(struct target *target, bool auto_convert_hw_bp)
 {
 	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
@@ -1441,6 +1465,13 @@ static const struct command_registration ndsv5_exec_command_handlers[] = {
 	{
 		.name = "jtag_tap_name",
 		.jim_handler = ndsv5_jtag_cur_tap_name,
+		.mode = COMMAND_ANY,
+		.help = " ",
+		.usage = " ",
+	},
+	{
+		.name = "get_dmi_delay",
+		.jim_handler = ndsv5_get_dmi_delay,
 		.mode = COMMAND_ANY,
 		.help = " ",
 		.usage = " ",
@@ -1570,15 +1601,16 @@ int ndsv5_handle_resume(struct target *target)
 	return ERROR_OK;
 }
 
+#define MAX_SCRIPT_LENGTH 2100
 int ndsv5_script_do_custom_reset(struct target *target, FILE *script_fd)
 {
-	char line_buffer[512];
+	char line_buffer[MAX_SCRIPT_LENGTH];
 	struct command_context *cmd_ctx = global_cmd_ctx;
 	uint32_t skip_execute_cmd = 0;
 	int result;
 	char *curr_str, *compare_str;
 	char *cur_target_name;
-	char tmp_buffer[1024];
+	char tmp_buffer[MAX_SCRIPT_LENGTH];
 	compare_str = "set_current_target";
 
 	if (script_fd == NULL)
@@ -1586,7 +1618,7 @@ int ndsv5_script_do_custom_reset(struct target *target, FILE *script_fd)
 
 	nds_skip_dmi = 1;
 	fseek(script_fd, 0, SEEK_SET);
-	while (fgets(line_buffer, 512, script_fd) != NULL) {
+	while (fgets(line_buffer, MAX_SCRIPT_LENGTH, script_fd) != NULL) {
 		if ((line_buffer[0] == '#') || (line_buffer[0] == '\r'))
 			continue;
 
@@ -1938,8 +1970,9 @@ void addtional_pm_counters(struct target *target, int start)
 
 static int ndsv5_init_option_reg(struct target *target)
 {
-	uint64_t reg_misa_value = 0, reg_mmsc_cfg_value = 0;
+	uint64_t reg_misa_value = 0, reg_mmsc_cfg_value = 0, reg_mmsc_cfg2_value = 0;
 	uint64_t reg_micm_cfg_value = 0, reg_mdcm_cfg_value = 0;
+	uint64_t reg_marchid_value = 0, reg_mimpid_value = 0;
 	struct reg *p_cur_reg;
 	char *reg_name;
 	uint32_t i;
@@ -2038,15 +2071,98 @@ static int ndsv5_init_option_reg(struct target *target)
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_UDCAUSE].exist = false;
 	}
 
+	/* ax45/nx45 and version < 0x100, the bitmap supports BF16,
+	 * but accessing mclk_ctl will trigger an exception, set CSR_MCLK_CTL false */
+	reg_name = ndsv5_get_CSR_name(target, CSR_MARCHID);
+	p_cur_reg = register_get_by_name(target->reg_cache, reg_name, 1);
+	p_cur_reg->type->get(p_cur_reg);
+	reg_marchid_value = buf_get_u64(p_cur_reg->value, 0, p_cur_reg->size);
+
+	reg_name = ndsv5_get_CSR_name(target, CSR_MIMPID);
+	p_cur_reg = register_get_by_name(target->reg_cache, reg_name, 1);
+	p_cur_reg->type->get(p_cur_reg);
+	reg_mimpid_value = buf_get_u64(p_cur_reg->value, 0, p_cur_reg->size);
+
+	if (((reg_marchid_value & 0xff) == 0x45) && (reg_mimpid_value < 0x100)) {
+		NDS_INFO("disable CSR_MCLK_CTL register");
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MCLK_CTL].exist = false;
+	}
+
 	reg_name = ndsv5_get_CSR_name(target, CSR_MMSC_CFG);
 	p_cur_reg = register_get_by_name(target->reg_cache, reg_name, 1);
 	p_cur_reg->type->get(p_cur_reg);
 	reg_mmsc_cfg_value = buf_get_u64(p_cur_reg->value, 0, p_cur_reg->size);
 
-	/* misa.MXL == 1 & mmsc_cfg[31] == 1 */
-	if (((reg_misa_value & 0x40000000) == 0) || ((reg_mmsc_cfg_value & 0x80000000) == 0)) {
-		NDS_INFO("disable CSR_MMSC_CFG2");
-		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MMSC_CFG2].exist = false;
+	/* MMSC_CFG2 : misa.MXL == 1 & mmsc_cfg[31] == 1
+	 * if rv64 CSR_MMSC_CFG2 already not exist and use mmsc_cfg as CSR_MCRASH_STATESAVE,
+	 * CSR_MSTATUS_CRASHSAVE and CSR_MCLK_CTL existence condition */
+	if ((reg_misa_value & 0x40000000)) {
+		if ((reg_mmsc_cfg_value & 0x80000000) == 0) {
+			NDS_INFO("disable CSR_MMSC_CFG2");
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MMSC_CFG2].exist = false;
+
+			/* if RV32 mmsc_cfg2.CRASHSAVE == 1 */
+			NDS_INFO("disable CSR_MCRASH_STATESAVE, CSR_MSTATUS_CRASHSAVE registers");
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MCRASH_STATESAVE].exist = false;
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MSTATUS_CRASHSAVE].exist = false;
+
+			/* misa.V[21] == 1 && if RV32 mmsc_cfg2.veccfg == 1 */
+			NDS_INFO("disable CSR_MVEC_CFG register");
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MVEC_CFG].exist = false;
+
+			/* misa.V[21] == 1 | if RV32 mmsc_cfg2.BF16CVT == 1 */
+			if ((reg_misa_value & 0x200000) == 0) {
+				NDS_INFO("disable CSR_MCLK_CTL register");
+				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MCLK_CTL].exist = false;
+			}
+		} else {
+			/* mmsc_cfg2 exist */
+			reg_name = ndsv5_get_CSR_name(target, CSR_MMSC_CFG2);
+			p_cur_reg = register_get_by_name(target->reg_cache, reg_name, 1);
+			p_cur_reg->type->get(p_cur_reg);
+			reg_mmsc_cfg2_value = buf_get_u64(p_cur_reg->value, 0, p_cur_reg->size);
+
+			/* if RV32 mmsc_cfg2.CRASHSAVE == 1 */
+			if ((reg_mmsc_cfg2_value & 0x8) == 0) {
+				NDS_INFO("disable CSR_MCRASH_STATESAVE, CSR_MSTATUS_CRASHSAVE registers");
+				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MCRASH_STATESAVE].exist = false;
+				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MSTATUS_CRASHSAVE].exist = false;
+			}
+
+			/* misa.V[21] == 1 | if RV32 mmsc_cfg2.BF16CVT == 1 */
+			if (((reg_misa_value & 0x200000) == 0) && ((reg_mmsc_cfg2_value & 0x1) == 0)) {
+				NDS_INFO("disable CSR_MCLK_CTL register");
+				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MCLK_CTL].exist = false;
+			}
+
+			/* misa.V[21] == 1 && if RV32 mmsc_cfg2.veccfg == 1 */
+			if ((reg_misa_value & 0x200000) == 0 || ((reg_mmsc_cfg2_value & 0x10) == 0)) {
+				NDS_INFO("disable CSR_MVEC_CFG register");
+				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MVEC_CFG].exist = false;
+			}
+		}
+	}
+
+	/* RV64 */
+	if (riscv_xlen(target) == 64) {
+		/* if RV64 mmsc_cfg.CRASHSAVE == 1 */
+		if ((reg_mmsc_cfg_value & 0x800000000) == 0) {
+			NDS_INFO("disable CSR_MCRASH_STATESAVE, CSR_MSTATUS_CRASHSAVE registers");
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MCRASH_STATESAVE].exist = false;
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MSTATUS_CRASHSAVE].exist = false;
+		}
+
+		/* misa.V[21] == 1 | if RV64 mmsc_cfg.BF16CVT == 1 */
+		if ((reg_misa_value & 0x200000) == 0 && ((reg_mmsc_cfg_value & 0x100000000) == 0)) {
+			NDS_INFO("disable CSR_MCLK_CTL register");
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MCLK_CTL].exist = false;
+		}
+
+		/* misa.V[21] == 1 && if RV64 mmsc_cfg.veccfg == 1 */
+		if ((reg_misa_value & 0x200000) == 0 || ((reg_mmsc_cfg_value & 0x1000000000) == 0)) {
+			NDS_INFO("disable CSR_MVEC_CFG register");
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MVEC_CFG].exist = false;
+		}
 	}
 
 	/* mmsc_cfg.PMNDS == 1 */
@@ -2842,11 +2958,6 @@ int ndsv5_virtual_hosting_check(struct target *target)
 				}
 			}
 		}
-
-		/* rv32e cannot access $a7
-		 * If not hit the new implementation, use old way(read $a7 directly) */
-		if (reg_syscall == NULL && rv32e == false)
-			reg_syscall = register_get_by_name(target->reg_cache, "a7", 1);
 
 		if (reg_syscall != NULL) {
 			reg_syscall->type->get(reg_syscall);
@@ -4055,6 +4166,61 @@ void ndsv5_decode_progbuf(char *text, uint32_t cur_instr)
 			sprintf(text, " %s %s,%d(%s)",
 				p_insn, gpr_and_fpu_name[insn_rs2], insn_imm, gpr_and_fpu_name[insn_rs1]);
 		} else {
+			static const struct {
+				uint32_t match;
+				uint32_t mask;
+				const char *name;
+			} vector_description[] = {
+				{ MATCH_VMV_S_X, MASK_VMV_S_X, "vmv.s.x" },
+				{ MATCH_VMV_X_S, MASK_VMV_X_S, "vmv.x.s" },
+				{ MATCH_VSLIDE1DOWN_VX, MASK_VSLIDE1DOWN_VX, "vslide1down.vx" },
+				{ MATCH_VSETVLI, MASK_VSETVLI, "vsetvli" },
+				{ MATCH_VSETVL, MASK_VSETVL, "vsetvl" }
+			};
+			for (uint32_t i = 0; i < DIM(vector_description); i++) {
+				if ((cur_instr & vector_description[i].mask) == vector_description[i].match) {
+					switch (i) {
+						case 0:
+							/* vmv.s.x vd, rs1 */
+							sprintf(text, " %s v%d, %s",
+								vector_description[i].name,
+								bits(cur_instr, 11, 7),
+								gpr_and_fpu_name[bits(cur_instr, 19, 15)]);
+							break;
+						case 1:
+							/* vmv.x.s rd, vs2 */
+							sprintf(text, " %s %s, v%d",
+								vector_description[i].name,
+								gpr_and_fpu_name[bits(cur_instr, 11, 7)],
+								bits(cur_instr, 24, 20));
+							break;
+						case 2:
+							/* vslide1down.vx vd, vs2, rs1, vm */
+							sprintf(text, " %s v%d, v%d, %s, %d",
+								vector_description[i].name,
+								bits(cur_instr, 11, 7),
+								bits(cur_instr, 24, 20),
+								gpr_and_fpu_name[bits(cur_instr, 19, 15)],
+								bit(cur_instr, 25));
+							break;
+						case 3:
+							/* vsetvli rd, rs1, vtypei */
+							sprintf(text, "%s %s, %s, 0x%x",
+								vector_description[i].name,
+								gpr_and_fpu_name[bits(cur_instr, 11, 7)],
+								gpr_and_fpu_name[bits(cur_instr, 19, 15)],
+								bits(cur_instr, 30, 20));
+						case 4:/* vsetvl rd, rs1, rs2 */
+							sprintf(text, "%s %s, %s, %s",
+								vector_description[i].name,
+								gpr_and_fpu_name[bits(cur_instr, 11, 7)],
+								gpr_and_fpu_name[bits(cur_instr, 19, 15)],
+								gpr_and_fpu_name[bits(cur_instr, 24, 20)]);
+							break;
+					}
+					return;
+				}
+			}
 			LOG_ERROR("can't disassemble 32-insn: 0x%x", cur_instr);
 			return;
 		}
