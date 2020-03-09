@@ -712,7 +712,7 @@ static int ndsspi_write(struct flash_bank *bank, const uint8_t *buffer,
 	if (target == NULL)
 		target = bank->target;
 	struct ndsspi_flash_bank *ndsspi_info = bank->driver_priv;
-	uint32_t cur_count, /*cur_offset,*/ sector_size, /*page_offset,*/ page_size;
+	uint32_t cur_count, sector_size, page_size;
 	int sector;
 	int retval = ERROR_OK;
 	uint8_t *tmp_buffer=NULL;
@@ -777,30 +777,7 @@ static int ndsspi_write(struct flash_bank *bank, const uint8_t *buffer,
 	if (retval != ERROR_OK)
 		goto ndsspi_write_finish;
 
-	/* unaligned(page) buffer head */
-	if ((offset % page_size) != 0) {
-		/* read the 1st-unaligned-page, memcpy unaligned data */
-		page_offset = (offset/page_size) * page_size;
-		ndsspi_read_buffer(bank, tmp_buffer, page_offset, page_size, 0);
-
-		cur_offset = (offset % page_size);
-		cur_count = (page_size - cur_offset);
-		if (cur_count > count)
-			cur_count = count;
-
-		memcpy(tmp_buffer+cur_offset, buffer, cur_count);
-
-		/* write the 1st-unaligned-page */
-		retval = ndsspi_write_sector_buffer(bank, tmp_buffer, page_offset, page_size);
-		if (retval != ERROR_OK)
-			goto ndsspi_write_finish;
-
-		buffer += cur_count;
-		offset += cur_count;
-		count -= cur_count;
-	}
-
-	/* central part, aligned words */
+	/* no process addr unaligned page issue, target burn need process it */
 	while (count >= page_size) {
 		if (count >= ndsspi_write_bytes_per_dot) {
 			cur_count = ndsspi_write_bytes_per_dot;
