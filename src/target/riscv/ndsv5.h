@@ -413,6 +413,7 @@ int ndsv5_openocd_resume_one_hart(
 		int hartid
 );
 int ndsv5_lm_slvp_support(struct target *target, target_addr_t address, uint32_t csr_id_lmb);
+char *ndsv5_base64_decode(const char *data, int input_length, int *output_length);
 
 
 

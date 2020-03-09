@@ -79,7 +79,13 @@ uint32_t nds_ftdi_devices;
 uint32_t nds_halt_on_reset = 1;
 int nds_targetburn_targetnum;
 int nds_targetburn_corenum;
+char *nds_remotetargetburn_fpath;
+char *nds_remotetargetburn_buffer;
+int nds_remotetargetburn_fsize;
+unsigned int nds_remotetargetburn_chksum;
+bool collect_remotetargetburn_file;
 
+extern char *log_output_path;
 extern void nds_dump_detail_debug_info(void);
 extern char *p_nds_bak_debug_buffer_cur;
 extern char *p_nds_bak_debug_buffer_start;
@@ -385,6 +391,42 @@ __COMMAND_HANDLER(handle_ndsv5_configure_command)
 	} else if (strcmp(CMD_ARGV[0], "dis_condition_break") == 0) {
 		nds_dis_condition_break = 1;
 		command_print(CMD, "configure: %s = 0x%08x", CMD_ARGV[0], nds_dis_condition_break);
+	} else if (strcmp(CMD_ARGV[0], "base64enc_info") == 0) {
+		collect_remotetargetburn_file = false;
+		if (CMD_ARGC < 4) {
+			LOG_ERROR("error: the count of arguments of base64enc info < 4");
+			return ERROR_FAIL;
+		}
+
+		char *filename = strdup(CMD_ARGV[1]);
+		COMMAND_PARSE_NUMBER(int, CMD_ARGV[2], nds_remotetargetburn_fsize);
+		COMMAND_PARSE_NUMBER(u32, CMD_ARGV[3], nds_remotetargetburn_chksum);
+		LOG_DEBUG("file name: %s, size: %d, checksum: %d",
+				filename, nds_remotetargetburn_fsize, nds_remotetargetburn_chksum);
+
+		/* add iceman log path */
+		size_t log_path_len = strlen(log_output_path);
+		size_t filename_len = strlen(filename);
+		nds_remotetargetburn_fpath = calloc(log_path_len + filename_len + 2, 1);
+		if (log_path_len > 0) {
+			char *c = strstr(log_output_path, "iceman_debug0.log");
+			if (c) {
+				*c = '\0';
+				log_path_len = strlen(log_output_path);
+			}
+			if (log_path_len > 0) {
+				strncpy(nds_remotetargetburn_fpath, log_output_path, log_path_len);
+				if (log_output_path[log_path_len - 1] != '/')
+					strncat(nds_remotetargetburn_fpath, "/", 1);
+			}
+		}
+		strncat(nds_remotetargetburn_fpath, filename, filename_len);
+
+		/* remove older file */
+		remove(nds_remotetargetburn_fpath);
+		nds_remotetargetburn_buffer = calloc(nds_remotetargetburn_fsize, 1);
+		collect_remotetargetburn_file = true;
+		command_print(CMD, "configure: %d %s", strlen(nds_remotetargetburn_fpath), nds_remotetargetburn_fpath);
 	} else if (strcmp(CMD_ARGV[0], "algorithm_bin") == 0) {
 		if (user_algorithm_path)
 			free(user_algorithm_path);

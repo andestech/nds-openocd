@@ -90,6 +90,7 @@ struct algorithm_header {
 	uint64_t cmd_addr;
 	uint64_t cmd_size;
 	uint64_t ebreak_addr;
+	uint64_t check_err_msg;
 } *algo_hdr;
 
 uint32_t ndsspi_cur_write_bytes;
@@ -126,12 +127,14 @@ uint64_t nds_algorithm_addr;
 uint64_t nds_data_addr;
 uint64_t nds_data_size;
 uint32_t nds_tgt_version;
+uint64_t nds_check_err_msg;
 struct algorithm_steps *ndsspi_as_new(uint32_t size);
 struct algorithm_steps *ndsspi_as_delete(struct algorithm_steps *as);
 int ndsspi_steps_execute(struct algorithm_steps *as, struct flash_bank *bank);
 int ndsspi_algorithm_apis_init(struct flash_bank *bank);
 void ndsspi_as_add_rx(struct algorithm_steps *as, uint32_t offset, uint32_t count);
-void ndsspi_as_add_tx(struct algorithm_steps *as, uint32_t offset, uint32_t count, const uint8_t *data);
+void ndsspi_as_add_tx(struct algorithm_steps *as, uint32_t offset, uint32_t count,
+		const uint8_t *data, uint32_t cmd_data_size);
 void ndsspi_as_add_erase(struct algorithm_steps *as, uint32_t sector_1st, uint32_t sector_last);
 void ndsspi_as_add_init(struct algorithm_steps *as);
 void ndsspi_as_add_onlycmd(struct algorithm_steps *as, int cmd);
@@ -357,31 +360,39 @@ static int ndsspi_protect(struct flash_bank *bank, int set,
 		int first, int last)
 {
 	LOG_DEBUG("%s", __func__);
-	/* default is_protected = 0*/
+
 	int retval = ERROR_OK;
-	if (set == 1) {
-		/* do lock after write finish need change_status and new nds_as */
-		change_status(bank);
-		if (nds_as == NULL)
-			nds_as = ndsspi_as_new(2);
-		ndsspi_as_add_onlycmd(nds_as, STEP_LOCK);
-		retval = ndsspi_steps_execute(nds_as, bank);
-		if (retval != ERROR_OK) {
-			ndsspi_data_clean(bank);
-			LOG_USER_N("\nlock flash error\n");
+	if (tgt_burn_new_version && nds_tgt_version > TGT_BURN_VER) {
+		if (set == 1) {
+			/* do lock after write finish need change_status and new nds_as */
+			change_status(bank);
+			if (nds_as == NULL)
+				nds_as = ndsspi_as_new(1);
+			ndsspi_as_add_onlycmd(nds_as, STEP_LOCK);
+			retval = ndsspi_steps_execute(nds_as, bank);
+			if (retval != ERROR_OK) {
+				ndsspi_data_clean(bank);
+				LOG_USER_N("\nlock flash error\n");
+			}
+			/* delete nds_as and restore_status */
+			if (nds_as != NULL)
+				nds_as = ndsspi_as_delete(nds_as);
+			restore_status(bank);
+		} else if (set == 0) {
+			/* do unlock */
+			if (nds_as == NULL)
+				nds_as = ndsspi_as_new(1);
+			ndsspi_as_add_onlycmd(nds_as, STEP_UNLOCK);
+			retval = ndsspi_steps_execute(nds_as, bank);
+			if (retval != ERROR_OK) {
+				ndsspi_data_clean(bank);
+				LOG_USER_N("\nunlock flash error\n");
+			}
+			if (nds_as != NULL)
+				nds_as = ndsspi_as_delete(nds_as);
 		}
-		/* delete nds_as and restore_status */
-		if (nds_as != NULL)
-			nds_as = ndsspi_as_delete(nds_as);
-		restore_status(bank);
-	} else if (set == 0) {
-		/* do unlock */
-		ndsspi_as_add_onlycmd(nds_as, STEP_UNLOCK);
-		retval = ndsspi_steps_execute(nds_as, bank);
-		if (retval != ERROR_OK) {
-			ndsspi_data_clean(bank);
-			LOG_USER_N("\nunlock flash error\n");
-		}
+	} else {
+		LOG_DEBUG("no implement lock/unclok function");
 	}
 
 	return retval;
@@ -411,23 +422,23 @@ static int ndsspi_erase(struct flash_bank *bank, int first, int last)
 	int sector;
 
 	if (target->state != TARGET_HALTED) {
-		LOG_ERROR("Target not halted");
+		LOG_ERROR("error: Target not halted");
 		return ERROR_TARGET_NOT_HALTED;
 	}
 
 	if ((first < 0) || (last < first) || (last >= bank->num_sectors)) {
-		LOG_ERROR("Flash sector invalid");
+		LOG_ERROR("error: Flash sector invalid");
 		return ERROR_FLASH_SECTOR_INVALID;
 	}
 
 	if (!(ndsspi_info->probed)) {
-		LOG_ERROR("Flash bank not probed");
+		LOG_ERROR("error: Flash bank not probed");
 		return ERROR_FLASH_BANK_NOT_PROBED;
 	}
 
 	for (sector = first; sector <= last; sector++) {
 		if (bank->sectors[sector].is_protected) {
-			LOG_ERROR("Flash sector %d protected", sector);
+			LOG_ERROR("error: Flash sector %d protected", sector);
 			return ERROR_FAIL;
 		}
 		if (bank->sectors[sector].is_erased == 1) {
@@ -449,21 +460,21 @@ static int ndsspi_erase(struct flash_bank *bank, int first, int last)
 			bank->sectors[sector].is_erased = 1;
 		return retval;
 	} else {
-		LOG_ERROR("NOT target burn");
+		LOG_ERROR("error: NOT target burn");
 		return ERROR_FAIL;
 	}
 	return ERROR_OK;
 }
 
 static int ndsspi_write_sector_buffer(struct flash_bank *bank,
-		const uint8_t *buffer, uint32_t offset, uint32_t len)
+		const uint8_t *buffer, uint32_t offset, uint32_t len, uint32_t cmd_data_size)
 {
 	LOG_DEBUG("offset=0x%x, len=0x%x", offset, len);
 	int retval = 0;
 
 	/* algorithm mode */
 	if ((nds_data_wa != NULL && !tgt_burn_new_version) || (tgt_burn_new_version && nds_data_wa == NULL)) {
-		ndsspi_as_add_tx(nds_as, offset, len, buffer);
+		ndsspi_as_add_tx(nds_as, offset, len, buffer, cmd_data_size);
 		retval = ndsspi_steps_execute(nds_as, bank);
 		if (retval == ERROR_OK) {
 			if (tgt_burn_new_version && (nds_tgt_version > TGT_BURN_VER))
@@ -473,7 +484,7 @@ static int ndsspi_write_sector_buffer(struct flash_bank *bank,
 		} else
 			ndsspi_data_clean(bank);
 	} else {
-		LOG_ERROR("NOT target burn");
+		LOG_ERROR("error: NOT target burn");
 		return ERROR_FAIL;
 	}
 	return retval;
@@ -562,7 +573,7 @@ static int ndsspi_rx_buffer(struct flash_bank *bank,
 	int sector;
 
 	if (target->state != TARGET_HALTED) {
-		LOG_ERROR("Target not halted");
+		LOG_ERROR("error: Target not halted");
 		printf("Target not halted");
 		fflush(stdout);
 		return ERROR_TARGET_NOT_HALTED;
@@ -581,7 +592,7 @@ static int ndsspi_rx_buffer(struct flash_bank *bank,
 					(bank->sectors[sector].offset + bank->sectors[sector].size))
 				&& ((offset + count - 1) >= bank->sectors[sector].offset)
 				&& bank->sectors[sector].is_protected) {
-			LOG_ERROR("Flash sector %d protected", sector);
+			LOG_ERROR("error: Flash sector %d protected", sector);
 			printf("Flash sector %d protected", sector);
 			fflush(stdout);
 			return ERROR_FAIL;
@@ -634,57 +645,6 @@ static int ndsspi_read(struct flash_bank *bank,
 	return retval;
 }
 
-int count_writesize_perdot(uint32_t image_size, uint32_t page_size)
-{
-	int remain = 0;
-	uint32_t new_data_size = nds_data_size;
-
-	if ((new_data_size < (page_size + 8)) && (image_size > page_size)) {
-		LOG_ERROR("data work size <= (page_size + tx_command_size) => NOT page_align");
-		return ERROR_FAIL;
-	}
-
-	if (image_size % 512)
-		remain = 1;
-
-	if (new_data_size >= (image_size + (((image_size / 512) + remain) * 7) + 1)) {
-		/* at least print 2 dot */
-
-/*		remain = image_size % page_size;
-		if (remain)
-			ndsspi_write_bytes_per_dot = image_size - remain;
-		else {
-			remain = image_size - page_size;
-			ndsspi_write_bytes_per_dot = remain;
-		}
-		if (ndsspi_write_bytes_per_dot < page_size)
-			ndsspi_write_bytes_per_dot = page_size;
-*/
-		ndsspi_write_bytes_per_dot = image_size;
-	} else {
-		/*remain = new_data_size % page_size;
-		ndsspi_write_bytes_per_dot = new_data_size - remain;
-
-		remain = (ndsspi_write_bytes_per_dot % 512) ? 1 : 0;
-		while (new_data_size < (ndsspi_write_bytes_per_dot + (((ndsspi_write_bytes_per_dot / 512) + remain) * 7) + 1)) {
-			ndsspi_write_bytes_per_dot = ndsspi_write_bytes_per_dot - page_size;
-			if (ndsspi_write_bytes_per_dot < page_size) {
-				ndsspi_write_bytes_per_dot = page_size;
-				return ERROR_OK;
-			}
-			remain = (ndsspi_write_bytes_per_dot % 512) ? 1 : 0;
-		}
-		*/
-		remain = (new_data_size - 1) / (512 + 7);
-		if (remain == 0)
-			ndsspi_write_bytes_per_dot = page_size;
-		else
-			ndsspi_write_bytes_per_dot = remain * 512;
-	}
-
-	return ERROR_OK;
-}
-
 static int ndsspi_write(struct flash_bank *bank, const uint8_t *buffer,
 		uint32_t offset, uint32_t count)
 {
@@ -703,7 +663,7 @@ static int ndsspi_write(struct flash_bank *bank, const uint8_t *buffer,
 	if (target == NULL)
 		target = bank->target;
 	struct ndsspi_flash_bank *ndsspi_info = bank->driver_priv;
-	uint32_t cur_count, cur_offset, sector_size, page_offset, page_size;
+	uint32_t cur_count, sector_size, page_size, cmd_data_size = 0;
 	int sector;
 	int retval = ERROR_OK;
 	uint8_t *tmp_buffer;
@@ -713,7 +673,7 @@ static int ndsspi_write(struct flash_bank *bank, const uint8_t *buffer,
 	ndsspi_cur_write_bytes = 0;
 
 	if (target->state != TARGET_HALTED) {
-		LOG_ERROR("Target not halted");
+		LOG_ERROR("error: Target not halted");
 		printf("Target not halted");
 		fflush(stdout);
 		return ERROR_TARGET_NOT_HALTED;
@@ -727,7 +687,7 @@ static int ndsspi_write(struct flash_bank *bank, const uint8_t *buffer,
 					(bank->sectors[sector].offset + bank->sectors[sector].size))
 				&& ((offset + count - 1) >= bank->sectors[sector].offset)
 				&& bank->sectors[sector].is_protected) {
-			LOG_ERROR("Flash sector %d protected", sector);
+			LOG_ERROR("error: Flash sector %d protected", sector);
 			printf("Flash sector %d protected", sector);
 			fflush(stdout);
 			return ERROR_FAIL;
@@ -746,22 +706,40 @@ static int ndsspi_write(struct flash_bank *bank, const uint8_t *buffer,
 	}
 	LOG_DEBUG("\ntotal size: %d\n", count);
 
-	/* version > 0x100 : Count write size per dot */
-	if (tgt_burn_new_version) {
-		if (nds_tgt_version > TGT_BURN_VER) {
-			if (count_writesize_perdot(count, page_size) != ERROR_OK) {
-				tgt_burn_new_version = false;
-				LOG_ERROR("count write size failed");
-				return ERROR_FAIL;
-			}
-			/* IDE use ?/dot , if not support count_writesize_perdot, default is 8K/dot */
-			LOG_USER_N("\nWRITESIZE: %d\n", ndsspi_write_bytes_per_dot);
+	/* check data_size >= page_size + command */
+	if ((nds_data_size < (page_size + 8))) {
+		LOG_ERROR("error: data work size:%" PRIu64 " < (page_size:%d + tx_command_size:8)",
+				nds_data_size, page_size);
+		return ERROR_FAIL;
+	}
+
+	/* count ndsspi_write_bytes_per_dot and cmd_data_size */
+	cmd_data_size = ((nds_data_size - 8) / page_size) * page_size;
+	LOG_DEBUG("cmd_data_size: %d", cmd_data_size);
+	if (tgt_burn_new_version && (nds_tgt_version > TGT_BURN_VER))
+		ndsspi_write_bytes_per_dot = cmd_data_size;
+	else {
+		/* older AndeSight 8k/dot, ndsspi_write_bytes_per_dot = 8k */
+		if (NDSSPI_SIZE_PER_DOT % page_size) {
+			LOG_ERROR("error: older AndeSight 8K/dot, so page_size(%d) must be a factor of %d => NDSSPI_SIZE_PER_DOT %% page_size = 0",
+				page_size, NDSSPI_SIZE_PER_DOT);
+			return ERROR_FAIL;
 		}
+		ndsspi_write_bytes_per_dot = NDSSPI_SIZE_PER_DOT;
+	}
+	/* IDE use ?/dot ,older AndeSight default is 8K/dot */
+	LOG_USER_N("\nWRITESIZE: %d\n", ndsspi_write_bytes_per_dot);
+
+	if (nds_as == NULL) {
+		/* if ndsspi_write_bytes_per_dot < cmd_data_size, size:1 */
+		uint32_t nds_new_size = (ndsspi_write_bytes_per_dot / cmd_data_size) + 1;
+		nds_as = ndsspi_as_new(nds_new_size);
+		LOG_DEBUG("NDS_AS NEW %d", nds_new_size);
 	}
 
 	tmp_buffer = malloc(page_size);
 	if (tmp_buffer == NULL) {
-		LOG_ERROR("not enough memory");
+		LOG_ERROR("error: not enough memory");
 		return ERROR_FAIL;
 	}
 
@@ -770,30 +748,7 @@ static int ndsspi_write(struct flash_bank *bank, const uint8_t *buffer,
 	if (retval != ERROR_OK)
 		goto ndsspi_write_finish;
 
-	/* unaligned(page) buffer head */
-	if ((offset % page_size) != 0) {
-		/* read the 1st-unaligned-page, memcpy unaligned data */
-		page_offset = (offset/page_size) * page_size;
-		ndsspi_read_buffer(bank, tmp_buffer, page_offset, page_size, 0);
-
-		cur_offset = (offset % page_size);
-		cur_count = (page_size - cur_offset);
-		if (cur_count > count)
-			cur_count = count;
-
-		memcpy(tmp_buffer+cur_offset, buffer, cur_count);
-
-		/* write the 1st-unaligned-page */
-		retval = ndsspi_write_sector_buffer(bank, tmp_buffer, page_offset, page_size);
-		if (retval != ERROR_OK)
-			goto ndsspi_write_finish;
-
-		buffer += cur_count;
-		offset += cur_count;
-		count -= cur_count;
-	}
-
-	/* central part, aligned words */
+	/* no process addr unaligned page issue, target burn need process it */
 	while (count >= page_size) {
 		if (count >= ndsspi_write_bytes_per_dot) {
 			cur_count = ndsspi_write_bytes_per_dot;
@@ -802,7 +757,7 @@ static int ndsspi_write(struct flash_bank *bank, const uint8_t *buffer,
 			cur_count = (count/page_size) * page_size;
 		}
 
-		retval = ndsspi_write_sector_buffer(bank, buffer, offset, cur_count);
+		retval = ndsspi_write_sector_buffer(bank, buffer, offset, cur_count, cmd_data_size);
 		if (retval != ERROR_OK)
 			goto ndsspi_write_finish;
 
@@ -817,7 +772,7 @@ static int ndsspi_write(struct flash_bank *bank, const uint8_t *buffer,
 		ndsspi_read_buffer(bank, tmp_buffer, offset, page_size, 0);
 		memcpy(tmp_buffer, buffer, count);
 		/* write the last-unaligned-page */
-		retval = ndsspi_write_sector_buffer(bank, tmp_buffer, offset, page_size);
+		retval = ndsspi_write_sector_buffer(bank, tmp_buffer, offset, page_size, cmd_data_size);
 		if (retval != ERROR_OK)
 			goto ndsspi_write_finish;
 	}
@@ -837,7 +792,6 @@ ndsspi_write_finish:
 	}
 	nds_algorithm_wa = NULL;
 	nds_data_wa = NULL;
-	tgt_burn_new_version = false;
 
 	if (retval != ERROR_OK)
 		LOG_USER_N("\nwrite flash error\n");
@@ -901,7 +855,7 @@ uint32_t ndsspi_as_compile(struct algorithm_steps *as, uint8_t *target,
 	LOG_DEBUG("as->used %d", as->used);
 	for (uint32_t s = 0; s < as->used && !finish_early; s++) {
 		uint32_t bytes_left = target_size - offset;
-		LOG_DEBUG("as->steps[s][0] 0x%x", as->steps[s][0]);
+		LOG_DEBUG("as->steps[%d][0] 0x%x", s, as->steps[s][0]);
 
 		switch (as->steps[s][0]) {
 			case STEP_NOP:
@@ -994,11 +948,12 @@ void ndsspi_as_add_rx(struct algorithm_steps *as, uint32_t offset, uint32_t rx_c
 	}
 }
 
-void ndsspi_as_add_tx(struct algorithm_steps *as, uint32_t offset, uint32_t tx_count, const uint8_t *tx_data)
+void ndsspi_as_add_tx(struct algorithm_steps *as, uint32_t offset, uint32_t tx_count,
+		const uint8_t *tx_data, uint32_t cmd_data_size)
 {
 	LOG_DEBUG("tx_count=%d, as->used %d", tx_count, as->used);
 	while (tx_count > 0) {
-		uint32_t step_count = MIN(tx_count, 512);
+		uint32_t step_count = MIN(tx_count, cmd_data_size);
 		assert(as->used < as->size);
 		as->steps[as->used] = malloc(step_count + 7);
 		as->steps[as->used][0] = STEP_TX;
@@ -1122,8 +1077,24 @@ int ndsspi_steps_execute(struct algorithm_steps *as, struct flash_bank *bank)
 			return retval;
 		}
 	}
+
 	as->used = 0;
 	free(data_buf);
+
+	/* TGT_BURN_VER >= 0x102, read error message */
+	if (tgt_burn_new_version && (nds_tgt_version > (TGT_BURN_VER + 1)) && (nds_check_err_msg == 1)) {
+			/* err_str_size must be word-aligned(8 bytes-aligned) */
+			int err_str_size = 128;
+			char *err_string = malloc(err_str_size);
+			target_read_buffer(target, nds_data_addr, err_str_size, (uint8_t *)err_string);
+			if (strncmp(err_string, "E", 1) == 0) {
+				LOG_ERROR("%s", err_string);
+				free(err_string);
+				return ERROR_FAIL;
+			}
+			free(err_string);
+	}
+
 	LOG_DEBUG("target_run_algorithm finish !!");
 	return ERROR_OK;
 }
@@ -1158,7 +1129,7 @@ int ndsspi_data_clean(struct flash_bank *bank)
 }
 
 struct flash_device nds_spi_dev;
-extern char *log_output_path;
+/* extern char *log_output_path; */
 char *user_algorithm_path;
 int ndsspi_algorithm_apis_init(struct flash_bank *bank)
 {
@@ -1179,9 +1150,10 @@ int ndsspi_algorithm_apis_init(struct flash_bank *bank)
 	if (target == NULL)
 		target = bank->target;
 	tgt_burn_new_version = false;
+	nds_check_err_msg = 0;
 
 	if (user_algorithm_path == NULL) {
-		LOG_DEBUG("NOT algorithm_mode");
+		LOG_ERROR("error: algorithm path is NULL");
 		retval = ERROR_FAIL;
 		goto ndsspi_init_finish;
 #if 0
@@ -1203,7 +1175,7 @@ int ndsspi_algorithm_apis_init(struct flash_bank *bank)
 
 	FILE *fp_algorithm = fopen(user_algorithm_path, "rb");
 	if (fp_algorithm == NULL) {
-		LOG_WARNING("Couldn't open algorithm bin file: %s", user_algorithm_path);
+		LOG_ERROR("error: OpenOCD Couldn't open algorithm bin file: %s", user_algorithm_path);
 		retval = ERROR_FAIL;
 		goto ndsspi_init_finish;
 	}
@@ -1217,7 +1189,7 @@ int ndsspi_algorithm_apis_init(struct flash_bank *bank)
 	p_algorithm_bin = malloc(sizeof_algorithm_bin);
 	uint32_t read_size = fread(p_algorithm_bin, 1, sizeof_algorithm_bin, fp_algorithm);
 	if (read_size < sizeof_algorithm_bin) {
-		LOG_ERROR("read size 0x%x is less than filesize 0x%x", read_size, sizeof_algorithm_bin);
+		LOG_ERROR("error: read size 0x%x is less than filesize 0x%x", read_size, sizeof_algorithm_bin);
 		free(p_algorithm_bin);
 		retval = ERROR_FAIL;
 		goto ndsspi_init_finish;
@@ -1235,6 +1207,7 @@ int ndsspi_algorithm_apis_init(struct flash_bank *bank)
 	LOG_DEBUG("cmd_addr: %" PRIu64, algo_hdr->cmd_addr);
 	LOG_DEBUG("cmd_arr_size: %" PRIu64, algo_hdr->cmd_size);
 	LOG_DEBUG("ebreak_offset: %" PRIu64, algo_hdr->ebreak_addr);
+	LOG_DEBUG("check_err_msg: %" PRIu64, algo_hdr->check_err_msg);
 
 	/* if new target burn: set cmd_offset and ebreak offset */
 	if (strcmp(algo_hdr->magic, TGT_BURN_MAGIC) == 0) {
@@ -1251,13 +1224,17 @@ int ndsspi_algorithm_apis_init(struct flash_bank *bank)
 
 			/* check algorithm_bin_size < algo_hdr->max_size */
 			if (algo_hdr->max_size < read_size) {
-				LOG_ERROR("user defined max_size %" PRIu64 " < algorithm_bin file size %d",
+				LOG_ERROR("error: user defined max_size %" PRIu64 " < algorithm_bin file size %d",
 						algo_hdr->max_size, read_size);
 				retval = ERROR_FAIL;
 				goto ndsspi_init_finish;
 			}
+
+			/* TGT_BURN_VER >= 0x102, can access error message from algorithm bin */
+			if (algo_hdr->version > (TGT_BURN_VER + 1))
+				nds_check_err_msg = algo_hdr->check_err_msg;
 		} else {
-			LOG_ERROR("target burn version 0x%x is unknow", algo_hdr->version);
+			LOG_ERROR("error: target burn version 0x%x is unknow", algo_hdr->version);
 			retval = ERROR_FAIL;
 			goto ndsspi_init_finish;
 		}
@@ -1266,7 +1243,7 @@ int ndsspi_algorithm_apis_init(struct flash_bank *bank)
 		if (nds_algorithm_wa == NULL) {
 			if (target_alloc_working_area(target, read_size,
 						&nds_algorithm_wa) != ERROR_OK) {
-				LOG_WARNING("Couldn't allocate %zd-byte working area.",
+				LOG_ERROR("error: Couldn't allocate %zd-byte working area.",
 						read_size);
 				retval = ERROR_FAIL;
 				goto ndsspi_init_finish;
@@ -1277,7 +1254,7 @@ int ndsspi_algorithm_apis_init(struct flash_bank *bank)
 			uint32_t data_wa_size = NDS_AS_DATA_AREA;
 			while (1) {
 				if (data_wa_size < 128) {
-					LOG_ERROR("Couldn't allocate data working area.");
+					LOG_ERROR("error: Couldn't allocate data working area.");
 					target_free_working_area(target, nds_algorithm_wa);
 					retval = ERROR_FAIL;
 					goto ndsspi_init_finish;
@@ -1328,7 +1305,7 @@ int ndsspi_algorithm_apis_init(struct flash_bank *bank)
 	free(p_algorithm_bin);
 
 	if (retval != ERROR_OK) {
-		LOG_ERROR("Failed to write code to 0x%" TARGET_PRIxADDR ": %d", nds_algorithm_addr,
+		LOG_ERROR("error: Failed to write code to 0x%" TARGET_PRIxADDR ": %d", nds_algorithm_addr,
 				retval);
 		if (!tgt_burn_new_version) {
 			target_free_working_area(target, nds_algorithm_wa);
@@ -1341,14 +1318,16 @@ int ndsspi_algorithm_apis_init(struct flash_bank *bank)
 
 
 	if (nds_as == NULL)
-		nds_as = ndsspi_as_new(NDS_AS_NUMS);
+		nds_as = ndsspi_as_new(1);
 
 	/* algorithm mode */
 	if ((nds_data_wa != NULL && !tgt_burn_new_version) || (tgt_burn_new_version && nds_data_wa == NULL)) {
 		ndsspi_as_add_init(nds_as);
 		retval = ndsspi_steps_execute(nds_as, bank);
+		if (nds_as != NULL)
+			nds_as = ndsspi_as_delete(nds_as);
 		if (retval != ERROR_OK) {
-			LOG_ERROR("Failed to ndsspi_as_add_init()");
+			LOG_ERROR("error: Failed to ndsspi_as_add_init()");
 			if (!tgt_burn_new_version) {
 				target_free_working_area(target, nds_algorithm_wa);
 				target_free_working_area(target, nds_data_wa);
@@ -1357,7 +1336,7 @@ int ndsspi_algorithm_apis_init(struct flash_bank *bank)
 			goto ndsspi_init_finish;
 		}
 	} else {
-		LOG_ERROR("NOT target burn");
+		LOG_ERROR("error: NOT target burn");
 		retval = ERROR_FAIL;
 		goto ndsspi_init_finish;
 	}
@@ -1386,7 +1365,7 @@ int ndsspi_algorithm_apis_init(struct flash_bank *bank)
 	    ndsspi_info->dev->sectorsize <= 0 ||
 	    ndsspi_info->dev->pagesize <= 0 ||
 	    nds_data_size <= 0) {
-		LOG_ERROR("FLASH size or sectorsize or pagesize or command array size is less than 0");
+		LOG_ERROR("error: FLASH size or sectorsize or pagesize or command array size is less than 0");
 		if (nds_data_wa != NULL && !tgt_burn_new_version) {
 			target_free_working_area(target, nds_algorithm_wa);
 			target_free_working_area(target, nds_data_wa);
@@ -1404,7 +1383,6 @@ ndsspi_init_finish:
 	if (retval == ERROR_FAIL) {
 		nds_algorithm_wa = NULL;
 		nds_data_wa = NULL;
-		tgt_burn_new_version = false;
 		if (nds_as != NULL)
 			nds_as = ndsspi_as_delete(nds_as);
 		LOG_USER_N(NDSSPI_INIT_FAIL);

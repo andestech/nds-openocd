@@ -347,11 +347,86 @@ static void telnet_move_cursor(struct connection *connection, size_t pos)
 	tc->line_cursor = pos;
 }
 
+#if _NDS32_ONLY_
+extern char *nds_remotetargetburn_fpath;
+extern char *nds_remotetargetburn_buffer;
+extern int nds_remotetargetburn_fsize;
+extern unsigned int nds_remotetargetburn_chksum;
+extern bool collect_remotetargetburn_file;
+extern char *ndsv5_base64_decode(const char *data, int input_length, int *output_length);
+#endif
 static int telnet_input(struct connection *connection)
 {
 	int bytes_read;
 	unsigned char buffer[TELNET_BUFFER_SIZE];
 	unsigned char *buf_p;
+
+#if _NDS32_ONLY_
+	if (collect_remotetargetburn_file) {
+		collect_remotetargetburn_file = false;
+		int remain = nds_remotetargetburn_fsize;
+		buf_p = nds_remotetargetburn_buffer;
+		while (remain > 0) {
+			bytes_read = connection_read(connection, buf_p, remain);
+			if (bytes_read == 0) {
+				free(nds_remotetargetburn_fpath);
+				free(nds_remotetargetburn_buffer);
+				return ERROR_SERVER_REMOTE_CLOSED;
+			} else if (bytes_read == -1) {
+				if (errno == 11) {
+					/* try again; */
+					continue;
+				} else {
+					free(nds_remotetargetburn_fpath);
+					free(nds_remotetargetburn_buffer);
+					LOG_ERROR("error during read: %s", strerror(errno));
+					return ERROR_SERVER_REMOTE_CLOSED;
+				}
+			}
+			LOG_DEBUG("bytes_read: %d", bytes_read);
+			remain = remain - bytes_read;
+			buf_p = buf_p + bytes_read;
+			LOG_DEBUG("remain: %d", remain);
+			if (remain < 0) {
+				free(nds_remotetargetburn_fpath);
+				free(nds_remotetargetburn_buffer);
+				LOG_ERROR("error:received size:%d > expected file size: %d",
+						nds_remotetargetburn_fsize-remain,
+						nds_remotetargetburn_fsize);
+				return ERROR_FAIL;
+			}
+		}
+		unsigned int checksum = 0;
+		for (int count = 0; count < nds_remotetargetburn_fsize; count++)
+			checksum = nds_remotetargetburn_buffer[count] + checksum;
+		if (checksum != nds_remotetargetburn_chksum) {
+			free(nds_remotetargetburn_fpath);
+			free(nds_remotetargetburn_buffer);
+			LOG_ERROR("error:checksum(%d) of received data is different from expected(%d)",
+					checksum, nds_remotetargetburn_chksum);
+			return ERROR_FAIL;
+		}
+		int bin_file_size = 0;
+		char *bin_file_start = ndsv5_base64_decode(nds_remotetargetburn_buffer,
+				nds_remotetargetburn_fsize, &bin_file_size);
+		FILE *O_FILE = fopen(nds_remotetargetburn_fpath, "w");
+		if (O_FILE == NULL) {
+			free(bin_file_start);
+			free(nds_remotetargetburn_fpath);
+			free(nds_remotetargetburn_buffer);
+			LOG_ERROR("error: open file:%s failed", nds_remotetargetburn_fpath);
+			return ERROR_FAIL;
+		}
+		fwrite(bin_file_start, 1, bin_file_size, O_FILE);
+		fclose(O_FILE);
+		LOG_INFO("base64enc_data checksum %d", checksum);
+		free(bin_file_start);
+		free(nds_remotetargetburn_fpath);
+		free(nds_remotetargetburn_buffer);
+		return ERROR_OK;
+	}
+#endif
+
 	struct telnet_connection *t_con = connection->priv;
 	struct command_context *command_context = connection->cmd_ctx;
 
