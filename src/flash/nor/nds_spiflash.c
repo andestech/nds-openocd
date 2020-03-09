@@ -361,36 +361,35 @@ static int ndsspi_protect(struct flash_bank *bank, int set,
 		int first, int last)
 {
 	LOG_DEBUG("%s", __func__);
-	/* default is_protected = 0*/
-	//int sector;
-
-	//for (sector = first; sector <= last; sector++)
-	//	bank->sectors[sector].is_protected = set;
 	int retval = ERROR_OK;
-	if (set == 1) {
-		//do lock after write finish need change_status and new nds_as
-		change_status(bank);
-		if (nds_as == NULL)
-			nds_as = ndsspi_as_new(2);
-		ndsspi_as_add_onlycmd(nds_as, STEP_LOCK);
-		retval = ndsspi_steps_execute(nds_as, bank);
-		if (retval != ERROR_OK) {
-			ndsspi_data_clean(bank);
-			LOG_USER_N("\nlock flash error\n");
+
+	if (tgt_burn_new_version && nds_tgt_version > TGT_BURN_VER) {
+		if (set == 1) {
+			/* do lock after write finish need change_status and new nds_as */
+			change_status(bank);
+			if (nds_as == NULL)
+				nds_as = ndsspi_as_new(2);
+			ndsspi_as_add_onlycmd(nds_as, STEP_LOCK);
+			retval = ndsspi_steps_execute(nds_as, bank);
+			if (retval != ERROR_OK) {
+				ndsspi_data_clean(bank);
+				LOG_USER_N("\nlock flash error\n");
+			}
+			/* delete nds_as and restore_status */
+			if (nds_as != NULL)
+				nds_as = ndsspi_as_delete(nds_as);
+			restore_status(bank);
+		} else if (set == 0) {
+			/* do unlock */
+			ndsspi_as_add_onlycmd(nds_as, STEP_UNLOCK);
+			retval = ndsspi_steps_execute(nds_as, bank);
+			if (retval != ERROR_OK) {
+				ndsspi_data_clean(bank);
+				LOG_USER_N("\nunlock flash error\n");
+			}
 		}
-		//delete nds_as and restore_status
-		if (nds_as != NULL)
-			nds_as = ndsspi_as_delete(nds_as);
-		restore_status(bank);
-	}
-	else if (set == 0) {
-		//do unlock
-		ndsspi_as_add_onlycmd(nds_as, STEP_UNLOCK);
-		retval = ndsspi_steps_execute(nds_as, bank);
-		if (retval != ERROR_OK) {
-			ndsspi_data_clean(bank);
-			LOG_USER_N("\nunlock flash error\n");
-		}
+	} else {
+		LOG_DEBUG("no implement lock/unclok function");
 	}
 
 	return retval;
@@ -420,23 +419,23 @@ static int ndsspi_erase(struct flash_bank *bank, int first, int last)
 	int sector;
 
 	if (target->state != TARGET_HALTED) {
-		LOG_ERROR("Target not halted");
+		LOG_ERROR("error: Target not halted");
 		return ERROR_TARGET_NOT_HALTED;
 	}
 
 	if ((first < 0) || (last < first) || (last >= bank->num_sectors)) {
-		LOG_ERROR("Flash sector invalid");
+		LOG_ERROR("error: Flash sector invalid");
 		return ERROR_FLASH_SECTOR_INVALID;
 	}
 
 	if (!(ndsspi_info->probed)) {
-		LOG_ERROR("Flash bank not probed");
+		LOG_ERROR("error: Flash bank not probed");
 		return ERROR_FLASH_BANK_NOT_PROBED;
 	}
 
 	for (sector = first; sector <= last; sector++) {
 		if (bank->sectors[sector].is_protected) {
-			LOG_ERROR("Flash sector %d protected", sector);
+			LOG_ERROR("error: Flash sector %d protected", sector);
 			return ERROR_FAIL;
 		}
 		if (bank->sectors[sector].is_erased == 1) {
@@ -458,7 +457,7 @@ static int ndsspi_erase(struct flash_bank *bank, int first, int last)
 			bank->sectors[sector].is_erased = 1;
 		return retval;
 	} else {
-		LOG_ERROR("NOT target burn");
+		LOG_ERROR("error: NOT target burn");
 		return ERROR_FAIL;
 	}
 	return ERROR_OK;
@@ -483,7 +482,7 @@ static int ndsspi_write_sector_buffer(struct flash_bank *bank,
 		else
 			ndsspi_data_clean(bank);
 	} else {
-		LOG_ERROR("NOT target burn");
+		LOG_ERROR("error: NOT target burn");
 		return ERROR_FAIL;
 	}
 	return retval;
@@ -572,7 +571,7 @@ static int ndsspi_rx_buffer(struct flash_bank *bank,
 	int sector;
 
 	if (target->state != TARGET_HALTED) {
-		LOG_ERROR("Target not halted");
+		LOG_ERROR("error: Target not halted");
 		printf("Target not halted");
 		fflush(stdout);
 		return ERROR_TARGET_NOT_HALTED;
@@ -591,7 +590,7 @@ static int ndsspi_rx_buffer(struct flash_bank *bank,
 					(bank->sectors[sector].offset + bank->sectors[sector].size))
 				&& ((offset + count - 1) >= bank->sectors[sector].offset)
 				&& bank->sectors[sector].is_protected) {
-			LOG_ERROR("Flash sector %d protected", sector);
+			LOG_ERROR("error: Flash sector %d protected", sector);
 			printf("Flash sector %d protected", sector);
 			fflush(stdout);
 			return ERROR_FAIL;
@@ -651,7 +650,7 @@ int count_writesize_perdot(uint32_t image_size, uint32_t page_size)
 	uint32_t new_data_size = nds_data_size;
 
 	if ((new_data_size < (page_size + 8)) && (image_size > page_size)){
-		LOG_ERROR("data work size <= (page_size + tx_command_size) => NOT page_align");
+		LOG_ERROR("error: data work size <= (page_size + tx_command_size) => NOT page_align");
 		return ERROR_FAIL;
 	}
 
@@ -713,7 +712,7 @@ static int ndsspi_write(struct flash_bank *bank, const uint8_t *buffer,
 	if (target == NULL)
 		target = bank->target;
 	struct ndsspi_flash_bank *ndsspi_info = bank->driver_priv;
-	uint32_t cur_count, cur_offset, sector_size, page_offset, page_size;
+	uint32_t cur_count, /*cur_offset,*/ sector_size, /*page_offset,*/ page_size;
 	int sector;
 	int retval = ERROR_OK;
 	uint8_t *tmp_buffer=NULL;
@@ -723,7 +722,7 @@ static int ndsspi_write(struct flash_bank *bank, const uint8_t *buffer,
 	ndsspi_cur_write_bytes = 0;
 
 	if (target->state != TARGET_HALTED) {
-		LOG_ERROR("Target not halted");
+		LOG_ERROR("error: Target not halted");
 		printf("Target not halted");
 		fflush(stdout);
 		return ERROR_TARGET_NOT_HALTED;
@@ -737,7 +736,7 @@ static int ndsspi_write(struct flash_bank *bank, const uint8_t *buffer,
 					(bank->sectors[sector].offset + bank->sectors[sector].size))
 				&& ((offset + count - 1) >= bank->sectors[sector].offset)
 				&& bank->sectors[sector].is_protected) {
-			LOG_ERROR("Flash sector %d protected", sector);
+			LOG_ERROR("error: Flash sector %d protected", sector);
 			printf("Flash sector %d protected", sector);
 			fflush(stdout);
 			return ERROR_FAIL;
@@ -760,8 +759,7 @@ static int ndsspi_write(struct flash_bank *bank, const uint8_t *buffer,
 	if (tgt_burn_new_version) {
 		if (nds_tgt_version > TGT_BURN_VER) {
 			if (count_writesize_perdot(count, page_size) != ERROR_OK) {
-				tgt_burn_new_version = false;
-				LOG_ERROR("count write size failed");
+				LOG_ERROR("error: count write size failed");
 				return ERROR_FAIL;
 			}
 			LOG_USER_N("\nWRITESIZE: %d\n", ndsspi_write_bytes_per_dot);  // IDE use ?/dot , if not support count_writesize_perdot, default is 8K/dot
@@ -770,7 +768,7 @@ static int ndsspi_write(struct flash_bank *bank, const uint8_t *buffer,
 
 	tmp_buffer = malloc(page_size);
 	if (tmp_buffer == NULL) {
-		LOG_ERROR("not enough memory");
+		LOG_ERROR("error: not enough memory");
 		return ERROR_FAIL;
 	}
 
@@ -845,7 +843,6 @@ ndsspi_write_finish:
 	}
 	nds_algorithm_wa = NULL;
 	nds_data_wa = NULL;
-	tgt_burn_new_version = false;
 
 	if (retval != ERROR_OK)
 		LOG_USER_N("\nwrite flash error\n");
@@ -1129,6 +1126,22 @@ int ndsspi_steps_execute(struct algorithm_steps *as, struct flash_bank *bank)
 			return retval;
 		}
 	}
+
+	/* read algorithm bin error message */
+	if (tgt_burn_new_version) {
+		if (nds_tgt_version > (TGT_BURN_VER + 1)) {
+			char *err_string = calloc(512, 1);
+			target_read_buffer(target, nds_data_addr, 512, (uint8_t *)err_string);
+			if (strncmp(err_string, "error", 5) == 0) {
+				LOG_ERROR("%s", err_string);
+				free(data_buf);
+				free(err_string);
+				return ERROR_FAIL;
+			}
+			free(err_string);
+		}
+	}
+
 	as->used = 0;
 	free(data_buf);
 	LOG_DEBUG("target_run_algorithm finish !!");
@@ -1409,7 +1422,6 @@ ndsspi_init_finish:
     if (retval == ERROR_FAIL) {
 		nds_algorithm_wa = NULL;
 		nds_data_wa = NULL;
-		tgt_burn_new_version = false;
 		if (nds_as != NULL)
 			nds_as = ndsspi_as_delete(nds_as);
         LOG_USER_N(NDSSPI_INIT_FAIL);
