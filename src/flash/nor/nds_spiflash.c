@@ -90,6 +90,7 @@ struct algorithm_header {
 	uint64_t cmd_addr;
 	uint64_t cmd_size;
 	uint64_t ebreak_addr;
+	uint64_t err_str_size;
 }*algo_hdr;
 
 uint32_t ndsspi_cur_write_bytes = 0;
@@ -112,20 +113,21 @@ struct algorithm_steps {
 	uint8_t **steps;
 };
 
-struct algorithm_steps *nds_as = NULL;
-struct working_area *nds_algorithm_wa = NULL;
-struct working_area *nds_data_wa = NULL;
+struct algorithm_steps *nds_as;
+struct working_area *nds_algorithm_wa;
+struct working_area *nds_data_wa;
 
-static uint8_t *p_algorithm_bin = NULL;
+static uint8_t *p_algorithm_bin;
 bool algorithm_bin_read = false;
 uint64_t g_value_milmb = 1;
-uint64_t nds_algorithm_ebreak_offset = 0;
+uint64_t nds_algorithm_ebreak_offset;
 int ndsspi_data_clean(struct flash_bank *bank);
 int count_writesize_perdot(uint32_t image_size, uint32_t page_size);
-uint64_t nds_algorithm_addr = 0;
-uint64_t nds_data_addr = 0;
-uint64_t nds_data_size = 0;
-uint32_t nds_tgt_version = 0;
+uint64_t nds_algorithm_addr;
+uint64_t nds_data_addr;
+uint64_t nds_data_size;
+uint64_t nds_err_str_size;
+uint32_t nds_tgt_version;
 struct algorithm_steps *ndsspi_as_new(uint32_t size);
 struct algorithm_steps *ndsspi_as_delete(struct algorithm_steps *as);
 int ndsspi_steps_execute(struct algorithm_steps *as, struct flash_bank *bank);
@@ -1104,11 +1106,11 @@ int ndsspi_steps_execute(struct algorithm_steps *as, struct flash_bank *bank)
 		}
 	}
 
-	/* read algorithm bin error message */
+	/* TGT_BURN_VER >= 0x102, read algorithm bin error message */
 	if (tgt_burn_new_version) {
 		if (nds_tgt_version > (TGT_BURN_VER + 1)) {
-			char *err_string = calloc(512, 1);
-			target_read_buffer(target, nds_data_addr, 512, (uint8_t *)err_string);
+			char *err_string = malloc(nds_err_str_size);
+			target_read_buffer(target, nds_data_addr, nds_err_str_size, (uint8_t *)err_string);
 			if (strncmp(err_string, "error", 5) == 0) {
 				LOG_ERROR("%s", err_string);
 				free(data_buf);
@@ -1234,25 +1236,30 @@ int ndsspi_algorithm_apis_init(struct flash_bank *bank)
 	LOG_DEBUG("cmd_addr: %" PRIu64, algo_hdr->cmd_addr);
 	LOG_DEBUG("cmd_arr_size: %" PRIu64, algo_hdr->cmd_size);
 	LOG_DEBUG("ebreak_offset: %" PRIu64, algo_hdr->ebreak_addr);
+	LOG_DEBUG("err_str_size: %" PRIu64, algo_hdr->err_str_size);
 
-	//if new target burn: set cmd_offset and ebreak offset
+	/* if new target burn: set cmd_offset and ebreak offset */
 	if (strcmp(algo_hdr->magic, TGT_BURN_MAGIC) == 0) {
 		if (algo_hdr->version >= TGT_BURN_VER) {
 			LOG_DEBUG("NEW TARGET BURN");
 			tgt_burn_new_version = true;
 			nds_tgt_version = algo_hdr->version;
-			//target_burn stat.S prepare 64bit for nds_ebreadk, algorithm_addr and cmd_addr(if v3 no support 64bit,the heigher 32bit is 0)
+			/* target_burn stat.S prepare 64bit for nds_ebreadk,
+			 * algorithm_addr and cmd_addr(if v3 no support 64bit,the heigher 32bit is 0) */
 			nds_algorithm_ebreak_offset = algo_hdr->ebreak_addr;
 			nds_algorithm_addr = algo_hdr->start_addr;
 			nds_data_addr = algo_hdr->cmd_addr;
 			nds_data_size = algo_hdr->cmd_size;
 
-			//check algorithm_bin_size < algo_hdr->max_size
+			/* check algorithm_bin_size < algo_hdr->max_size */
 			if (algo_hdr->max_size < read_size) {
 				LOG_ERROR("user defined max_size %" PRIu64 " < algorithm_bin file size %d", algo_hdr->max_size, read_size);
 				retval = ERROR_FAIL;
 				goto ndsspi_init_finish;
 			}
+			/* TGT_BURN_VER >= 0x102, can access error message from algorithm bin */
+			if (algo_hdr->version > (TGT_BURN_VER + 1))
+				nds_err_str_size = algo_hdr->err_str_size;
 		} else {
 			LOG_ERROR("target burn version 0x%x is unknow", algo_hdr->version);
 			retval = ERROR_FAIL;
