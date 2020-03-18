@@ -137,7 +137,10 @@ NDS32_SRC = \
 	%D%/ndsv5_ace.c \
 	%D%/ndsv5_burner_server.c \
 	%D%/ndsv5_cmd.c \
-	%D%/ndsv5_profiling.c
+	%D%/ndsv5_profiling.c \
+	%D%/nds_vtarget.c \
+	%D%/nds_vtarget_cmd.c
+
 
 STM8_SRC = \
 	%D%/stm8.c
