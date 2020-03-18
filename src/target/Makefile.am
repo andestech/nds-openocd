@@ -132,7 +132,10 @@ NDS32_SRC = \
 	%D%/nds32_v5_ace.c \
 	%D%/nds32_v5_cmd.c \
 	%D%/nds32_v5_profiling.c \
-	%D%/nds32_v5_burner_server.c
+	%D%/nds32_v5_burner_server.c \
+	%D%/nds_vtarget.c \
+	%D%/nds_vtarget_cmd.c
+	
 
 RISCV_SRC = \
 	%D%/riscv/riscv-011.c \
