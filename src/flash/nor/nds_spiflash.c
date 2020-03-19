@@ -44,6 +44,7 @@
 #include <target/algorithm.h>
 #include "target/nds32_log.h"
 #include "target/riscv/encoding.h"
+#include "target/riscv/ndsv5_encoding.h"
 #include "target/riscv/program.h"
 #include "target/riscv/ndsv5.h"
 

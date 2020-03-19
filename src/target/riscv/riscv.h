@@ -9,6 +9,12 @@ struct riscv_program;
 #include "jtag/jtag.h"
 #include "target/register.h"
 
+#if _NDS_V5_ONLY_
+#include "target/breakpoints.h"	/* FIXED compiler warning */
+#include "target/target.h"	/* FIXED compiler warning */
+#endif /* _NDS_V5_ONLY_ */
+
+
 /* The register cache is statically allocated. */
 #define RISCV_MAX_HARTS 1024
 #define RISCV_MAX_REGISTERS 5000
@@ -335,5 +341,17 @@ int riscv_semihosting(struct target *target, int *retval);
 
 void riscv_add_bscan_tunneled_scan(struct target *target, struct scan_field *field,
 		riscv_bscan_tunneled_scan_context_t *ctxt);
+
+#if _NDS_V5_ONLY_
+/* Move this struct declaration from riscv.c */
+struct trigger {
+	uint64_t address;
+	uint32_t length;
+	uint64_t mask;
+	uint64_t value;
+	bool read, write, execute;
+	int unique_id;
+};
+#endif /* _NDS_V5_ONLY_ */
 
 #endif
