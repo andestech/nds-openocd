@@ -90,7 +90,7 @@ struct algorithm_header {
 	uint64_t cmd_addr;
 	uint64_t cmd_size;
 	uint64_t ebreak_addr;
-	uint64_t err_str_size;
+	uint64_t check_err_msg;
 }*algo_hdr;
 
 uint32_t ndsspi_cur_write_bytes = 0;
@@ -1106,14 +1106,19 @@ int ndsspi_steps_execute(struct algorithm_steps *as, struct flash_bank *bank)
 		}
 	}
 
-	/* TGT_BURN_VER >= 0x102, read algorithm bin error message */
+	as->used = 0;
+	free(data_buf);
+
+	/* TGT_BURN_VER >= 0x102, read error message */
 	if (tgt_burn_new_version) {
-		if (nds_tgt_version > (TGT_BURN_VER + 1)) {
-			char *err_string = malloc(nds_err_str_size);
-			target_read_buffer(target, nds_data_addr, nds_err_str_size, (uint8_t *)err_string);
-			if (strncmp(err_string, "error", 5) == 0) {
+		if ((nds_tgt_version > (TGT_BURN_VER + 1)) && (nds_check_err_msg == 1)) {
+			/* err_str_size should be <= 512bytes, because step_count <= 512 and
+			 * must be word-aligned(8 bytes-aligned) */
+			int err_str_size = 128;
+			char *err_string = malloc(err_str_size);
+			target_read_buffer(target, nds_data_addr, err_str_size, (uint8_t *)err_string);
+			if (strncmp(err_string, "E", 1) == 0) {
 				LOG_ERROR("%s", err_string);
-				free(data_buf);
 				free(err_string);
 				return ERROR_FAIL;
 			}
@@ -1121,8 +1126,6 @@ int ndsspi_steps_execute(struct algorithm_steps *as, struct flash_bank *bank)
 		}
 	}
 
-	as->used = 0;
-	free(data_buf);
 	LOG_DEBUG("target_run_algorithm finish !!");
 	return ERROR_OK;
 }
@@ -1178,6 +1181,7 @@ int ndsspi_algorithm_apis_init(struct flash_bank *bank)
 	if (target == NULL)
 		target = bank->target;
 	tgt_burn_new_version = false;
+	nds_check_err_msg = 0;
 
 	if(user_algorithm_path == NULL) {
 		LOG_DEBUG("NOT algorithm_mode");
@@ -1204,7 +1208,7 @@ int ndsspi_algorithm_apis_init(struct flash_bank *bank)
 
 	FILE *fp_algorithm = fopen(user_algorithm_path, "rb");
 	if (fp_algorithm == NULL) {
-		LOG_WARNING("Couldn't open algorithm bin file: %s", user_algorithm_path);
+		LOG_WARNING("error: Couldn't open algorithm bin file: %s", user_algorithm_path);
 		retval = ERROR_FAIL;
 		goto ndsspi_init_finish;
 	}
@@ -1218,7 +1222,7 @@ int ndsspi_algorithm_apis_init(struct flash_bank *bank)
 	p_algorithm_bin = malloc(sizeof_algorithm_bin);
 	uint32_t read_size = fread(p_algorithm_bin, 1, sizeof_algorithm_bin, fp_algorithm);
 	if (read_size < sizeof_algorithm_bin) {
-		LOG_ERROR("read size 0x%x is less than filesize 0x%x", read_size, sizeof_algorithm_bin);
+		LOG_ERROR("error: read size 0x%x is less than filesize 0x%x", read_size, sizeof_algorithm_bin);
 		free(p_algorithm_bin);
 		retval = ERROR_FAIL;
 		goto ndsspi_init_finish;
@@ -1236,7 +1240,7 @@ int ndsspi_algorithm_apis_init(struct flash_bank *bank)
 	LOG_DEBUG("cmd_addr: %" PRIu64, algo_hdr->cmd_addr);
 	LOG_DEBUG("cmd_arr_size: %" PRIu64, algo_hdr->cmd_size);
 	LOG_DEBUG("ebreak_offset: %" PRIu64, algo_hdr->ebreak_addr);
-	LOG_DEBUG("err_str_size: %" PRIu64, algo_hdr->err_str_size);
+	LOG_DEBUG("check_err_msg: %" PRIu64, algo_hdr->check_err_msg);
 
 	/* if new target burn: set cmd_offset and ebreak offset */
 	if (strcmp(algo_hdr->magic, TGT_BURN_MAGIC) == 0) {
@@ -1253,15 +1257,16 @@ int ndsspi_algorithm_apis_init(struct flash_bank *bank)
 
 			/* check algorithm_bin_size < algo_hdr->max_size */
 			if (algo_hdr->max_size < read_size) {
-				LOG_ERROR("user defined max_size %" PRIu64 " < algorithm_bin file size %d", algo_hdr->max_size, read_size);
+				LOG_ERROR("error: user defined max_size %" PRIu64 " < algorithm_bin file size %d",
+						algo_hdr->max_size, read_size);
 				retval = ERROR_FAIL;
 				goto ndsspi_init_finish;
 			}
 			/* TGT_BURN_VER >= 0x102, can access error message from algorithm bin */
 			if (algo_hdr->version > (TGT_BURN_VER + 1))
-				nds_err_str_size = algo_hdr->err_str_size;
+				nds_check_err_msg = algo_hdr->check_err_msg;
 		} else {
-			LOG_ERROR("target burn version 0x%x is unknow", algo_hdr->version);
+			LOG_ERROR("error: target burn version 0x%x is unknow", algo_hdr->version);
 			retval = ERROR_FAIL;
 			goto ndsspi_init_finish;
 		}
@@ -1281,7 +1286,7 @@ int ndsspi_algorithm_apis_init(struct flash_bank *bank)
 			uint32_t data_wa_size = NDS_AS_DATA_AREA;
 			while (1) {
 				if (data_wa_size < 128) {
-					LOG_ERROR("Couldn't allocate data working area.");
+					LOG_ERROR("error: Couldn't allocate data working area.");
 					target_free_working_area(target, nds_algorithm_wa);
 					retval = ERROR_FAIL;
 					goto ndsspi_init_finish;
@@ -1330,7 +1335,7 @@ int ndsspi_algorithm_apis_init(struct flash_bank *bank)
 	free(p_algorithm_bin);
 
 	if (retval != ERROR_OK) {
-		LOG_ERROR("Failed to write code to 0x%" TARGET_PRIxADDR ": %d", nds_algorithm_addr,
+		LOG_ERROR("error: Failed to write code to 0x%" TARGET_PRIxADDR ": %d", nds_algorithm_addr,
 				retval);
 		if (!tgt_burn_new_version) {
 			target_free_working_area(target, nds_algorithm_wa);
@@ -1351,7 +1356,7 @@ int ndsspi_algorithm_apis_init(struct flash_bank *bank)
 		ndsspi_as_add_init(nds_as);
 		retval = ndsspi_steps_execute(nds_as, bank);
 		if (retval != ERROR_OK) {
-			LOG_ERROR("Failed to ndsspi_as_add_init()");
+			LOG_ERROR("error: Failed to ndsspi_as_add_init()");
 			if (!tgt_burn_new_version) {
 				target_free_working_area(target, nds_algorithm_wa);
 				target_free_working_area(target, nds_data_wa);
@@ -1360,7 +1365,7 @@ int ndsspi_algorithm_apis_init(struct flash_bank *bank)
 			goto ndsspi_init_finish;
 		}
 	} else {
-		LOG_ERROR("NOT target burn");
+		LOG_ERROR("error: NOT target burn");
 		retval = ERROR_FAIL;
 		goto ndsspi_init_finish;
 	}
@@ -1388,7 +1393,7 @@ int ndsspi_algorithm_apis_init(struct flash_bank *bank)
 	LOG_DEBUG("devicd_addr 0x%x", bank->base);
 
 	if (ndsspi_info->dev->size_in_bytes <= 0 || ndsspi_info->dev->sectorsize <= 0 || ndsspi_info->dev->pagesize <= 0 || nds_data_size <= 0) {
-		LOG_ERROR("FLASH size or sectorsize or pagesize or command array size is less than 0");
+		LOG_ERROR("error: FLASH size or sectorsize or pagesize or command array size is less than 0");
 		if (nds_data_wa != NULL && !tgt_burn_new_version) {
 			target_free_working_area(target, nds_algorithm_wa);
 			target_free_working_area(target, nds_data_wa);
