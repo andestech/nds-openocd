@@ -651,8 +651,8 @@ int count_writesize_perdot(uint32_t image_size, uint32_t page_size)
 	int remain = 0;
 	uint32_t new_data_size = nds_data_size;
 
-	if ((new_data_size < (page_size + 8)) && (image_size > page_size)){
-		LOG_ERROR("error: data work size <= (page_size + tx_command_size) => NOT page_align");
+	if ((new_data_size < (page_size + 8))) {
+		LOG_ERROR("error: data work size < (page_size + tx_command_size)");
 		return ERROR_FAIL;
 	}
 
