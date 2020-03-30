@@ -671,7 +671,7 @@ int count_writesize_perdot(uint32_t image_size, uint32_t page_size)
 		if (ndsspi_write_bytes_per_dot < page_size)
 			ndsspi_write_bytes_per_dot = page_size;
 */
-		ndsspi_write_bytes_per_dot = image_size;
+		ndsspi_write_bytes_per_dot = (image_size / page_size) * page_size;
 	} else {
 		/*remain = new_data_size % page_size;
 		ndsspi_write_bytes_per_dot = new_data_size - remain;
