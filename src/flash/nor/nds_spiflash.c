@@ -18,7 +18,7 @@
 
 /* The Freedom E SPI controller is a SPI bus controller
  * specifically designed for SPI Flash Memories on Freedom E platforms.
- * 
+ *
  * Two working modes are available:
  * - SW mode: the SPI is controlled by SW. Any custom commands can be sent
  *   on the bus. Writes are only possible in this mode.
@@ -126,14 +126,15 @@ int count_writesize_perdot(uint32_t image_size, uint32_t page_size);
 uint64_t nds_algorithm_addr;
 uint64_t nds_data_addr;
 uint64_t nds_data_size;
-uint64_t nds_err_str_size;
+uint64_t nds_check_err_msg;
 uint32_t nds_tgt_version;
 struct algorithm_steps *ndsspi_as_new(uint32_t size);
 struct algorithm_steps *ndsspi_as_delete(struct algorithm_steps *as);
 int ndsspi_steps_execute(struct algorithm_steps *as, struct flash_bank *bank);
 int ndsspi_algorithm_apis_init(struct flash_bank *bank);
 void ndsspi_as_add_rx(struct algorithm_steps *as, uint32_t offset, uint32_t count);
-void ndsspi_as_add_tx(struct algorithm_steps *as, uint32_t offset, uint32_t count, const uint8_t *data);
+void ndsspi_as_add_tx(struct algorithm_steps *as, uint32_t offset, uint32_t count,
+		const uint8_t *data, uint32_t cmd_data_size);
 void ndsspi_as_add_erase(struct algorithm_steps *as, uint32_t sector_1st, uint32_t sector_last);
 void ndsspi_as_add_init(struct algorithm_steps *as);
 void ndsspi_as_add_onlycmd(struct algorithm_steps *as, int cmd);
@@ -370,7 +371,7 @@ static int ndsspi_protect(struct flash_bank *bank, int set,
 			/* do lock after write finish need change_status and new nds_as */
 			change_status(bank);
 			if (nds_as == NULL)
-				nds_as = ndsspi_as_new(2);
+				nds_as = ndsspi_as_new(1);
 			ndsspi_as_add_onlycmd(nds_as, STEP_LOCK);
 			retval = ndsspi_steps_execute(nds_as, bank);
 			if (retval != ERROR_OK) {
@@ -383,12 +384,16 @@ static int ndsspi_protect(struct flash_bank *bank, int set,
 			restore_status(bank);
 		} else if (set == 0) {
 			/* do unlock */
+			if (nds_as == NULL)
+				nds_as = ndsspi_as_new(1);
 			ndsspi_as_add_onlycmd(nds_as, STEP_UNLOCK);
 			retval = ndsspi_steps_execute(nds_as, bank);
 			if (retval != ERROR_OK) {
 				ndsspi_data_clean(bank);
 				LOG_USER_N("\nunlock flash error\n");
 			}
+			if (nds_as != NULL)
+				nds_as = ndsspi_as_delete(nds_as);
 		}
 	} else {
 		LOG_DEBUG("no implement lock/unclok function");
@@ -466,22 +471,21 @@ static int ndsspi_erase(struct flash_bank *bank, int first, int last)
 }
 
 static int ndsspi_write_sector_buffer(struct flash_bank *bank,
-		const uint8_t *buffer, uint32_t offset, uint32_t len)
+		const uint8_t *buffer, uint32_t offset, uint32_t len, uint32_t cmd_data_size)
 {
 	LOG_DEBUG("offset=0x%x, len=0x%x", offset, len);
 	int retval = 0;
 
 	/* algorithm mode */
 	if ((nds_data_wa != NULL && !tgt_burn_new_version) || (tgt_burn_new_version && nds_data_wa == NULL)) {
-		ndsspi_as_add_tx(nds_as, offset, len, buffer);
+		ndsspi_as_add_tx(nds_as, offset, len, buffer, cmd_data_size);
 		retval = ndsspi_steps_execute(nds_as, bank);
 		if (retval == ERROR_OK) {
 			if (tgt_burn_new_version && (nds_tgt_version > TGT_BURN_VER))
 				LOG_USER_N(NDSSPI_DOT);
 			else
 				LOG_USER_N(NDSSPI_WRITE_8K);
-		}
-		else
+		} else
 			ndsspi_data_clean(bank);
 	} else {
 		LOG_ERROR("error: NOT target burn");
@@ -646,56 +650,6 @@ static int ndsspi_read(struct flash_bank *bank,
 	return retval;
 }
 
-int count_writesize_perdot(uint32_t image_size, uint32_t page_size)
-{
-	int remain = 0;
-	uint32_t new_data_size = nds_data_size;
-
-	if ((new_data_size < (page_size + 8))) {
-		LOG_ERROR("error: data work size < (page_size + tx_command_size)");
-		return ERROR_FAIL;
-	}
-
-	if (image_size % 512)
-		remain = 1;
-
-	if (new_data_size >= (image_size + (((image_size / 512) + remain) * 7) + 1)) {
-		//at least print 2 dot
-/*		remain = image_size % page_size;
-		if (remain)
-			ndsspi_write_bytes_per_dot = image_size - remain;
-		else {
-			remain = image_size - page_size;
-			ndsspi_write_bytes_per_dot = remain;
-		}
-		if (ndsspi_write_bytes_per_dot < page_size)
-			ndsspi_write_bytes_per_dot = page_size;
-*/
-		ndsspi_write_bytes_per_dot = (image_size / page_size) * page_size;
-	} else {
-		/*remain = new_data_size % page_size;
-		ndsspi_write_bytes_per_dot = new_data_size - remain;
-
-		remain = (ndsspi_write_bytes_per_dot % 512) ? 1 : 0;
-		while (new_data_size < (ndsspi_write_bytes_per_dot + (((ndsspi_write_bytes_per_dot / 512) + remain) * 7) + 1)) {
-			ndsspi_write_bytes_per_dot = ndsspi_write_bytes_per_dot - page_size;
-			if (ndsspi_write_bytes_per_dot < page_size) {
-				ndsspi_write_bytes_per_dot = page_size;
-				return ERROR_OK;
-			}
-			remain = (ndsspi_write_bytes_per_dot % 512) ? 1 : 0;
-		}
-		*/
-		remain = (new_data_size - 1) / (512 + 7);
-		if (remain == 0)
-			ndsspi_write_bytes_per_dot = page_size;
-		else
-			ndsspi_write_bytes_per_dot = remain * 512;
-	}
-
-	return ERROR_OK;
-}
-
 static int ndsspi_write(struct flash_bank *bank, const uint8_t *buffer,
 		uint32_t offset, uint32_t count)
 {
@@ -714,7 +668,7 @@ static int ndsspi_write(struct flash_bank *bank, const uint8_t *buffer,
 	if (target == NULL)
 		target = bank->target;
 	struct ndsspi_flash_bank *ndsspi_info = bank->driver_priv;
-	uint32_t cur_count, sector_size, page_size;
+	uint32_t cur_count, sector_size, page_size, cmd_data_size = 0;
 	int sector;
 	int retval = ERROR_OK;
 	uint8_t *tmp_buffer=NULL;
@@ -757,15 +711,35 @@ static int ndsspi_write(struct flash_bank *bank, const uint8_t *buffer,
 	}
 	LOG_DEBUG("\ntotal size: %d\n", count);
 
-	/* version > 0x100 : Count write size per dot */
-	if (tgt_burn_new_version) {
-		if (nds_tgt_version > TGT_BURN_VER) {
-			if (count_writesize_perdot(count, page_size) != ERROR_OK) {
-				LOG_ERROR("error: count write size failed");
-				return ERROR_FAIL;
-			}
-			LOG_USER_N("\nWRITESIZE: %d\n", ndsspi_write_bytes_per_dot);  // IDE use ?/dot , if not support count_writesize_perdot, default is 8K/dot
+	/* check data_size >= page_size + command */
+	if ((nds_data_size < (page_size + 8))) {
+		LOG_ERROR("error: data work size:%" PRIu64 " < (page_size:%d + tx_command_size:8)",
+				nds_data_size, page_size);
+		return ERROR_FAIL;
+	}
+
+	/* count ndsspi_write_bytes_per_dot and cmd_data_size */
+	cmd_data_size = ((nds_data_size - 8) / page_size) * page_size;
+	LOG_DEBUG("cmd_data_size: %d", cmd_data_size);
+	if (tgt_burn_new_version && (nds_tgt_version > TGT_BURN_VER))
+		ndsspi_write_bytes_per_dot = cmd_data_size;
+	else {
+		/* older AndeSight 8k/dot, ndsspi_write_bytes_per_dot = 8k */
+		if (NDSSPI_SIZE_PER_DOT % page_size) {
+			LOG_ERROR("error: older AndeSight 8K/dot,so page_size(%d) must be a factor of %d => NDSSPI_SIZE_PER_DOT %% page_size = 0",
+					page_size, NDSSPI_SIZE_PER_DOT);
+			return ERROR_FAIL;
 		}
+		ndsspi_write_bytes_per_dot = NDSSPI_SIZE_PER_DOT;
+	}
+	/* IDE use ?/dot ,older AndeSight default is 8K/dot */
+	LOG_USER_N("\nWRITESIZE: %d\n", ndsspi_write_bytes_per_dot);
+
+	if (nds_as == NULL) {
+		/* if ndsspi_write_bytes_per_dot < cmd_data_size, size:1 */
+		uint32_t nds_new_size = (ndsspi_write_bytes_per_dot / cmd_data_size) + 1;
+		nds_as = ndsspi_as_new(nds_new_size);
+		LOG_DEBUG("NDS_AS NEW %d", nds_new_size);
 	}
 
 	tmp_buffer = malloc(page_size);
@@ -774,7 +748,7 @@ static int ndsspi_write(struct flash_bank *bank, const uint8_t *buffer,
 		return ERROR_FAIL;
 	}
 
-	// erase need sector, sector range 0~255
+	/* erase need sector, sector range 0~255 */
 	retval = ndsspi_erase(bank, offset/sector_size, (offset + count + (sector_size - 1))/sector_size - 1);
 	if (retval != ERROR_OK)
 		goto ndsspi_write_finish;
@@ -788,7 +762,7 @@ static int ndsspi_write(struct flash_bank *bank, const uint8_t *buffer,
 			cur_count = (count/page_size) * page_size;
 		}
 
-		retval = ndsspi_write_sector_buffer(bank, buffer, offset, cur_count);
+		retval = ndsspi_write_sector_buffer(bank, buffer, offset, cur_count, cmd_data_size);
 		if (retval != ERROR_OK)
 			goto ndsspi_write_finish;
 
@@ -803,7 +777,7 @@ static int ndsspi_write(struct flash_bank *bank, const uint8_t *buffer,
 		ndsspi_read_buffer(bank, tmp_buffer, offset, page_size, 0);
 		memcpy(tmp_buffer, buffer, count);
 		/* write the last-unaligned-page */
-		retval = ndsspi_write_sector_buffer(bank, tmp_buffer, offset, page_size);
+		retval = ndsspi_write_sector_buffer(bank, tmp_buffer, offset, page_size, cmd_data_size);
 		if (retval != ERROR_OK)
 			goto ndsspi_write_finish;
 	}
@@ -885,7 +859,7 @@ uint32_t ndsspi_as_compile(struct algorithm_steps *as, uint8_t *target,
 	LOG_DEBUG("as->used %d", as->used);
 	for (uint32_t s = 0; s < as->used && !finish_early; s++) {
 		uint32_t bytes_left = target_size - offset;
-		LOG_DEBUG("as->steps[s][0] 0x%x", as->steps[s][0]);
+		LOG_DEBUG("as->steps[%d][0] 0x%x", s, as->steps[s][0]);
 
 		switch (as->steps[s][0]) {
 			case STEP_NOP:
@@ -979,11 +953,12 @@ void ndsspi_as_add_rx(struct algorithm_steps *as, uint32_t offset, uint32_t rx_c
 	}
 }
 
-void ndsspi_as_add_tx(struct algorithm_steps *as, uint32_t offset, uint32_t tx_count, const uint8_t *tx_data)
+void ndsspi_as_add_tx(struct algorithm_steps *as, uint32_t offset, uint32_t tx_count,
+		const uint8_t *tx_data, uint32_t cmd_data_size)
 {
 	LOG_DEBUG("tx_count=%d, as->used %d", tx_count, as->used);
 	while (tx_count > 0) {
-		uint32_t step_count = MIN(tx_count, 512);
+		uint32_t step_count = MIN(tx_count, cmd_data_size);
 		assert(as->used < as->size);
 		as->steps[as->used] = malloc(step_count + 7);
 		as->steps[as->used][0] = STEP_TX;
@@ -1110,10 +1085,8 @@ int ndsspi_steps_execute(struct algorithm_steps *as, struct flash_bank *bank)
 	free(data_buf);
 
 	/* TGT_BURN_VER >= 0x102, read error message */
-	if (tgt_burn_new_version) {
-		if ((nds_tgt_version > (TGT_BURN_VER + 1)) && (nds_check_err_msg == 1)) {
-			/* err_str_size should be <= 512bytes, because step_count <= 512 and
-			 * must be word-aligned(8 bytes-aligned) */
+	if (tgt_burn_new_version && (nds_tgt_version > (TGT_BURN_VER + 1)) && (nds_check_err_msg == 1)) {
+			/* err_str_size must be word-aligned(8 bytes-aligned) */
 			int err_str_size = 128;
 			char *err_string = malloc(err_str_size);
 			target_read_buffer(target, nds_data_addr, err_str_size, (uint8_t *)err_string);
@@ -1123,7 +1096,6 @@ int ndsspi_steps_execute(struct algorithm_steps *as, struct flash_bank *bank)
 				return ERROR_FAIL;
 			}
 			free(err_string);
-		}
 	}
 
 	LOG_DEBUG("target_run_algorithm finish !!");
@@ -1347,14 +1319,15 @@ int ndsspi_algorithm_apis_init(struct flash_bank *bank)
 	LOG_DEBUG("write code to 0x%" TARGET_PRIxADDR ": 0x%x bytes", nds_algorithm_addr, read_size);
 
 
-	if (nds_as == NULL) {
-		nds_as = ndsspi_as_new(NDS_AS_NUMS);
-	}
+	if (nds_as == NULL)
+		nds_as = ndsspi_as_new(1);
 
 	/* algorithm mode */
 	if ((nds_data_wa != NULL && !tgt_burn_new_version) || (tgt_burn_new_version && nds_data_wa == NULL)) {
 		ndsspi_as_add_init(nds_as);
 		retval = ndsspi_steps_execute(nds_as, bank);
+		if (nds_as != NULL)
+			nds_as = ndsspi_as_delete(nds_as);
 		if (retval != ERROR_OK) {
 			LOG_ERROR("error: Failed to ndsspi_as_add_init()");
 			if (!tgt_burn_new_version) {
@@ -1404,18 +1377,18 @@ int ndsspi_algorithm_apis_init(struct flash_bank *bank)
 
 	retval = ERROR_OK;
 
-	//for SPI_Burn check offset+image size < flash size
+	/* for SPI_Burn check offset+image size < flash size */
 	LOG_USER_N("\nflash total size:0x%x:\n", (unsigned int)ndsspi_info->dev->size_in_bytes);
 
 ndsspi_init_finish:
-    if (retval == ERROR_FAIL) {
+	if (retval == ERROR_FAIL) {
 		nds_algorithm_wa = NULL;
 		nds_data_wa = NULL;
 		if (nds_as != NULL)
 			nds_as = ndsspi_as_delete(nds_as);
-        LOG_USER_N(NDSSPI_INIT_FAIL);
-    }
-    return retval;
+		LOG_USER_N(NDSSPI_INIT_FAIL);
+	}
+	return retval;
 }
 /* ====================================================== */
 
