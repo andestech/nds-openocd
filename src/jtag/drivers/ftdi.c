@@ -767,7 +767,30 @@ static int ftdi_initialize(void)
 				nds_ftdi_devices = 1;
 				LOG_DEBUG("Find Andes FTDI device!!");
 				NDS32_LOG("Andes AICE-MINI+");
-				nds_jtag_max_scans = 32;
+				unsigned max_taps = jtag_tap_count();
+				LOG_DEBUG("max tap count: %d, jtag_max_scans %d", max_taps, nds_jtag_max_scans);
+				if (nds_jtag_max_scans > 32) {
+					LOG_DEBUG("original jtag_max_scans %d, set to 32", nds_jtag_max_scans);
+					nds_jtag_max_scans = 32;
+				}
+
+				/* e-16803: when using multi-tap, the jtag_max_scans should be reduced */
+				/*
+				 *	jtag_scans_optimize = 0
+				 *	write bytes = [23+3*(#tap-1)]*[#scan+1] + 1
+				 *	read bytes  = 2 + 6*[#scan+1]
+				 *
+				 *	AICE-MINI+ only provide 1K to write & 1K to read.
+				 *	We only consider write buffer:
+				 *		#scan < {1023 / [23+3*(#tap-1)]} - 1
+				 */
+				unsigned int predict_jtag_max_scans = (1023/(23+3*(max_taps-1))) - 1;
+				predict_jtag_max_scans--; /* reduce 1 for remaining */
+				LOG_DEBUG("jtag_max_scans %d, predict_jtag_max_scans %d", nds_jtag_max_scans, predict_jtag_max_scans);
+				if (nds_jtag_max_scans > predict_jtag_max_scans) {
+					nds_jtag_max_scans = predict_jtag_max_scans;
+					LOG_INFO("Force set nds_jtag_max_scans to predict_jtag_max_scans");
+				}
 			}
 			break;
 		}

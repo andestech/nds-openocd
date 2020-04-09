@@ -954,6 +954,13 @@ static bool jtag_examine_chain_check(uint8_t *idcodes, unsigned count)
 	 *     + at least a few dozen TAPs all have an all-ones IDCODE
 	 */
 	if (zero_check == 0x00 || one_check == 0xff) {
+#if _NDS32_ONLY_
+		if (nds_scan_retry_times > 100) {
+			/* Skip retry, return false directly */
+			return false;
+		}
+#endif /* _NDS32_ONLY_ */
+
 		LOG_ERROR("JTAG scan chain interrogation failed: all %s",
 			(zero_check == 0x00) ? "zeroes" : "ones");
 		LOG_ERROR("Check JTAG interface, timings, target power, etc.");
@@ -970,9 +977,7 @@ static bool jtag_examine_chain_check(uint8_t *idcodes, unsigned count)
 				exit(-1);
 		} else
 			nds_scan_retry_times--;
-
 #endif
-
 		return false;
 	}
 	return true;

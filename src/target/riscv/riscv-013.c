@@ -1873,6 +1873,7 @@ static int examine(struct target *target)
 		}
 	}
 	LOG_DEBUG("info->sbcs = 0x%x, nds_sys_bus_supported = 0x%x", (int)info->sbcs, nds_sys_bus_supported);
+	LOG_DEBUG("nds_jtag_max_scans: %d", nds_jtag_max_scans);
 #endif
 
 	/* Check that abstract data registers are accessible. */

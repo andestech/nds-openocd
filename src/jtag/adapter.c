@@ -451,6 +451,20 @@ static const struct command_registration adapter_command_handlers[] = {
 	COMMAND_REGISTRATION_DONE
 };
 
+#if _NDS32_ONLY_
+COMMAND_HANDLER(handle_retry_times_command)
+{
+	extern uint32_t nds_scan_retry_times;
+
+	if (CMD_ARGC > 1)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+	if (CMD_ARGC == 1)
+		COMMAND_PARSE_NUMBER(uint, CMD_ARGV[0], nds_scan_retry_times);
+	command_print(CMD, "retry_times: %u", nds_scan_retry_times);
+	return ERROR_OK;
+}
+#endif
+
 static const struct command_registration interface_command_handlers[] = {
 	{
 		.name = "adapter",
@@ -523,6 +537,14 @@ static const struct command_registration interface_command_handlers[] = {
 			"[srst_push_pull|srst_open_drain] "
 			"[connect_deassert_srst|connect_assert_srst]",
 	},
+#if _NDS32_ONLY_
+	{
+		.name = "adapter_retry_times",
+		.handler = handle_retry_times_command,
+		.mode = COMMAND_ANY,
+		.help = "Set retry times during JTAG initial",
+	},
+#endif
 	COMMAND_REGISTRATION_DONE
 };
 
