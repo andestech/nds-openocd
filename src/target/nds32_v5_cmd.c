@@ -360,15 +360,16 @@ __COMMAND_HANDLER(handle_ndsv5_configure_command)
 		if (script_fd)
 			nds_script_dmi_write = script_fd;
 	} else if (strcmp(CMD_ARGV[0], "jtag_max_scans") == 0) {
+		uint32_t tmp_jtag_max_scans;
 		if (CMD_ARGC > 1)
-			COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], nds_jtag_max_scans);
-		if (nds_jtag_max_scans < 32)
-			nds_jtag_max_scans = 32;
+			COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], tmp_jtag_max_scans);
+		command_print(CMD_CTX, "configure: %s = 0x%08x", CMD_ARGV[0], tmp_jtag_max_scans);
 
-		if (nds_ftdi_devices == 1 )		// For Andes FTDI Device(0x1cfc, 0x0001)
-			nds_jtag_max_scans = 32;
-
-		command_print(CMD_CTX, "configure: %s = 0x%08x", CMD_ARGV[0], nds_jtag_max_scans);
+		if (tmp_jtag_max_scans < nds_jtag_max_scans) {
+			LOG_INFO("Setting nds_jtag_max_scans(%d) to tmp_jtag_max_scans(%d)",
+					nds_jtag_max_scans, tmp_jtag_max_scans);
+			nds_jtag_max_scans = tmp_jtag_max_scans;
+		}
 	} else if (strcmp(CMD_ARGV[0], "dis_condition_break") == 0) {
 		nds_dis_condition_break = 1;
 		command_print(CMD_CTX, "configure: %s = 0x%08x", CMD_ARGV[0], nds_dis_condition_break);
