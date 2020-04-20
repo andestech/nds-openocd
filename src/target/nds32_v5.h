@@ -231,6 +231,9 @@ extern char **gpr_and_fpu_name;
 #define CSR_MMSC_CFG       0xFC2
 #define CSR_MMSC_CFG2      0xFC3
 
+#define CSR_MCRASH_STATESAVE  0xFC8
+#define CSR_MSTATUS_CRASHSAVE 0xFC9
+
 #define CSR_MILMB          0x7C0
 #define CSR_MDLMB          0x7C1
 #define CSR_MECC_CODE      0x7C2
@@ -253,6 +256,7 @@ extern char **gpr_and_fpu_name;
 
 #define CSR_MPFT_CTL       0x7C5
 #define CSR_MMISC_CTL      0x7D0
+#define CSR_MCLK_CTL       0x7DF
 
 #define CSR_MCOUNTERWEN    0x7CE
 #define CSR_MCOUNTERINTEN  0x7CF
