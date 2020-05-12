@@ -1828,6 +1828,7 @@ static struct nds_csr_reg nds_all_csr[] = {
 	{ CSR_MDCM_CFG, "mdcm_cfg"},
 	{ CSR_MMSC_CFG, "mmsc_cfg"},
 	{ CSR_MMSC_CFG2, "mmsc_cfg2"},
+	{ CSR_MVEC_CFG, "mvec_cfg"},
 	{ CSR_MCRASH_STATESAVE, "mcrash_statesave"},
 	{ CSR_MSTATUS_CRASHSAVE, "mstatus_crashsave"},
 	{ CSR_MILMB, "milmb"},
@@ -2185,41 +2186,75 @@ static int ndsv5_init_option_reg(struct target *target)
 		target->reg_cache->reg_list[REG_CSR0 + CSR_USCRATCH].exist = false;
 		target->reg_cache->reg_list[REG_CSR0 + CSR_UDCAUSE].exist = false;
 	}
-	/* misa.V[21] == 1 */
-	if ((reg_misa_value & 0x200000) == 0) {
-		NDS_INFO("disable CSR_MCLK_CTL register");
-		target->reg_cache->reg_list[REG_CSR0 + CSR_MCLK_CTL].exist = false;
-	}
 
 	reg_name = ndsv5_get_CSR_name(target, CSR_MMSC_CFG);
 	p_cur_reg = register_get_by_name(target->reg_cache, reg_name, 1);
 	p_cur_reg->type->get(p_cur_reg);
 	reg_mmsc_cfg_value = buf_get_u64(p_cur_reg->value, 0, p_cur_reg->size);
 
-	/* misa.MXL == 1 & mmsc_cfg[31] == 1 */
-	if (((reg_misa_value & 0x40000000) == 0) || ((reg_mmsc_cfg_value & 0x80000000) == 0)) {
-		NDS_INFO("disable CSR_MMSC_CFG2");
-		target->reg_cache->reg_list[REG_CSR0 + CSR_MMSC_CFG2].exist = false;
-	} else {
-		reg_name = ndsv5_get_CSR_name(target, CSR_MMSC_CFG2);
-		p_cur_reg = register_get_by_name(target->reg_cache, reg_name, 1);
-		p_cur_reg->type->get(p_cur_reg);
-		reg_mmsc_cfg2_value = buf_get_u64(p_cur_reg->value, 0, p_cur_reg->size);
-		/* if RV32 mmsc_cfg2.CRASHSAVE == 1 */
-		if ((riscv_xlen(target) == 32) && ((reg_mmsc_cfg2_value & 0x8) == 0)) {
+	/* MMSC_CFG2 : misa.MXL == 1 & mmsc_cfg[31] == 1
+	 * if rv64 CSR_MMSC_CFG2 already not exist and use mmsc_cfg as CSR_MCRASH_STATESAVE,
+	 * CSR_MSTATUS_CRASHSAVE and CSR_MCLK_CTL existence condition */
+	if ((reg_misa_value & 0x40000000) == 1) {
+		if ((reg_mmsc_cfg_value & 0x80000000) == 0) {
+			NDS_INFO("disable CSR_MMSC_CFG2");
+			target->reg_cache->reg_list[REG_CSR0 + CSR_MMSC_CFG2].exist = false;
+			/* if RV32 mmsc_cfg2.CRASHSAVE == 1 */
+			NDS_INFO("disable CSR_MCRASH_STATESAVE, CSR_MSTATUS_CRASHSAVE registers");
+			target->reg_cache->reg_list[REG_CSR0 + CSR_MCRASH_STATESAVE].exist = false;
+			target->reg_cache->reg_list[REG_CSR0 + CSR_MSTATUS_CRASHSAVE].exist = false;
+			/* misa.V[21] == 1 && if RV32 mmsc_cfg2.veccfg == 1 */
+			NDS_INFO("disable CSR_MVEC_CFG register");
+			target->reg_cache->reg_list[REG_CSR0 + CSR_MVEC_CFG].exist = false;
+			/* misa.V[21] == 1 | if RV32 mmsc_cfg2.BF16CVT == 1 */
+			if ((reg_misa_value & 0x200000) == 0) {
+				NDS_INFO("disable CSR_MCLK_CTL register");
+				target->reg_cache->reg_list[REG_CSR0 + CSR_MCLK_CTL].exist = false;
+			}
+		} else {
+			/* mmsc_cfg2 exist */
+			reg_name = ndsv5_get_CSR_name(target, CSR_MMSC_CFG2);
+			p_cur_reg = register_get_by_name(target->reg_cache, reg_name, 1);
+			p_cur_reg->type->get(p_cur_reg);
+			reg_mmsc_cfg2_value = buf_get_u64(p_cur_reg->value, 0, p_cur_reg->size);
+			/* if RV32 mmsc_cfg2.CRASHSAVE == 1 */
+			if ((reg_mmsc_cfg2_value & 0x8) == 0) {
+				NDS_INFO("disable CSR_MCRASH_STATESAVE, CSR_MSTATUS_CRASHSAVE registers");
+				target->reg_cache->reg_list[REG_CSR0 + CSR_MCRASH_STATESAVE].exist = false;
+				target->reg_cache->reg_list[REG_CSR0 + CSR_MSTATUS_CRASHSAVE].exist = false;
+			}
+			/* misa.V[21] == 1 | if RV32 mmsc_cfg2.BF16CVT == 1 */
+			if (((reg_misa_value & 0x200000) == 0) && ((reg_mmsc_cfg2_value & 0x1) == 0)) {
+				NDS_INFO("disable CSR_MCLK_CTL register");
+				target->reg_cache->reg_list[REG_CSR0 + CSR_MCLK_CTL].exist = false;
+			}
+			/* misa.V[21] == 1 && if RV32 mmsc_cfg2.veccfg == 1 */
+			if ((reg_misa_value & 0x200000) == 0 || ((reg_mmsc_cfg2_value & 0x10) == 0)) {
+				NDS_INFO("disable CSR_MVEC_CFG register");
+				target->reg_cache->reg_list[REG_CSR0 + CSR_MVEC_CFG].exist = false;
+			}
+		}
+	}
+
+	/* RV64 */
+	if (riscv_xlen(target) == 64) {
+		/* if RV64 mmsc_cfg.CRASHSAVE == 1 */
+		if ((reg_mmsc_cfg_value & 0x800000000) == 0) {
 			NDS_INFO("disable CSR_MCRASH_STATESAVE, CSR_MSTATUS_CRASHSAVE registers");
 			target->reg_cache->reg_list[REG_CSR0 + CSR_MCRASH_STATESAVE].exist = false;
 			target->reg_cache->reg_list[REG_CSR0 + CSR_MSTATUS_CRASHSAVE].exist = false;
 		}
+		/* misa.V[21] == 1 | if RV64 mmsc_cfg.BF16CVT == 1 */
+		if ((reg_misa_value & 0x200000) == 0 && ((reg_mmsc_cfg_value & 0x100000000) == 0)) {
+			NDS_INFO("disable CSR_MCLK_CTL register");
+			target->reg_cache->reg_list[REG_CSR0 + CSR_MCLK_CTL].exist = false;
+		}
+		/* misa.V[21] == 1 && if RV64 mmsc_cfg.veccfg == 1 */
+		if ((reg_misa_value & 0x200000) == 0 || ((reg_mmsc_cfg_value & 0x1000000000) == 0)) {
+			NDS_INFO("disable CSR_MVEC_CFG register");
+			target->reg_cache->reg_list[REG_CSR0 + CSR_MVEC_CFG].exist = false;
+		}
 	}
-
-	/* if RV64 mmsc_cfg.CRASHSAVE == 1 */
-	if ((riscv_xlen(target) == 64) && ((reg_mmsc_cfg_value & 0x800000000) == 0)) {
-		NDS_INFO("disable CSR_MCRASH_STATESAVE, CSR_MSTATUS_CRASHSAVE registers");
-		target->reg_cache->reg_list[REG_CSR0 + CSR_MCRASH_STATESAVE].exist = false;
-		target->reg_cache->reg_list[REG_CSR0 + CSR_MSTATUS_CRASHSAVE].exist = false;
-	}
-
 	/* mmsc_cfg.PMNDS == 1 */
 	if ((reg_mmsc_cfg_value & 0x8000) == 0) {
 		NDS_INFO("disable CSR_MCOUNTERINTEN, CSR_MCOUNTEROVF registers");

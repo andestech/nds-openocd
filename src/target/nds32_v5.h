@@ -230,6 +230,7 @@ extern char **gpr_and_fpu_name;
 #define CSR_MDCM_CFG       0xFC1
 #define CSR_MMSC_CFG       0xFC2
 #define CSR_MMSC_CFG2      0xFC3
+#define CSR_MVEC_CFG       0xFC7
 
 #define CSR_MCRASH_STATESAVE  0xFC8
 #define CSR_MSTATUS_CRASHSAVE 0xFC9
