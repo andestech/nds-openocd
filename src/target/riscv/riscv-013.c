@@ -5880,5 +5880,11 @@ int ndsv5_set_vector_register(struct target *target, enum gdb_regno r, char *pRe
 	return ERROR_OK;
 }
 
+int ndsv5_get_delay_count(struct target *target)
+{
+	riscv013_info_t *info = get_info(target);
+	LOG_DEBUG("dmi_busy_delay=%d", info->dmi_busy_delay);
+	return info->dmi_busy_delay;
+}
 #endif
 

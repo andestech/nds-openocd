@@ -1261,6 +1261,30 @@ static int ndsv5_jtag_cur_tap_name(Jim_Interp *interp, int argc, Jim_Obj *const 
 	return JIM_OK;
 }
 
+extern int ndsv5_get_delay_count(struct target *target);
+static int ndsv5_get_dmi_delay(Jim_Interp *interp, int argc, Jim_Obj * const *argv)
+{
+	Jim_GetOptInfo goi;
+	Jim_GetOpt_Setup(&goi, interp, argc-1, argv + 1);
+	if (goi.argc != 0) {
+		Jim_WrongNumArgs(goi.interp, 1, goi.argv, "Too many parameters");
+		return JIM_ERR;
+	}
+	struct command_context *cmd_ctx = global_cmd_ctx;
+	struct target *target = get_current_target(cmd_ctx);
+	uint32_t ndsv5_cur_dmi_delay = (uint32_t)ndsv5_get_delay_count(target);
+	NDS_INFO("get ndsv5_dmi_delay = 0x%x", ndsv5_cur_dmi_delay);
+	char *str = buf_to_str(&ndsv5_cur_dmi_delay, 32, 16);
+
+	Jim_SetResult(goi.interp, Jim_NewListObj(goi.interp, NULL, 0));
+	Jim_ListAppendElement(goi.interp,
+			Jim_GetResult(goi.interp),
+			Jim_NewStringObj(goi.interp,
+				str, -1));
+	free(str);
+	return JIM_OK;
+}
+
 int ndsv5cmd_set_auto_convert_hw_bp(struct target *target, bool auto_convert_hw_bp)
 {
 	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
@@ -1384,6 +1408,13 @@ static const struct command_registration ndsv5_exec_command_handlers[] = {
 	{
 		.name = "jtag_tap_name",
 		.jim_handler = ndsv5_jtag_cur_tap_name,
+		.mode = COMMAND_ANY,
+		.help = " ",
+		.usage = " ",
+	},
+	{
+		.name = "get_dmi_delay",
+		.jim_handler = ndsv5_get_dmi_delay,
 		.mode = COMMAND_ANY,
 		.help = " ",
 		.usage = " ",
