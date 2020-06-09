@@ -2224,9 +2224,9 @@ static int ndsv5_init_option_reg(struct target *target)
 	reg_mmsc_cfg_value = buf_get_u64(p_cur_reg->value, 0, p_cur_reg->size);
 
 	/* MMSC_CFG2 : misa.MXL == 1 & mmsc_cfg[31] == 1
-	 * if rv64 CSR_MMSC_CFG2 already not exist and use mmsc_cfg as CSR_MCRASH_STATESAVE,
-	 * CSR_MSTATUS_CRASHSAVE and CSR_MCLK_CTL existence condition */
-	if ((reg_misa_value & 0x40000000) == 1) {
+	 * if rv64 CSR_MMSC_CFG2 already not exist and use mmsc_cfg
+	 * as CSR_MCRASH_STATESAVE, CSR_MSTATUS_CRASHSAVE and CSR_MCLK_CTL existence condition */
+	if ((reg_misa_value & 0x40000000)) {
 		if ((reg_mmsc_cfg_value & 0x80000000) == 0) {
 			NDS_INFO("disable CSR_MMSC_CFG2");
 			target->reg_cache->reg_list[REG_CSR0 + CSR_MMSC_CFG2].exist = false;
