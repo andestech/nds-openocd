@@ -365,7 +365,11 @@ __COMMAND_HANDLER(handle_ndsv5_configure_command)
 			COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], tmp_jtag_max_scans);
 		command_print(CMD_CTX, "configure: %s = 0x%08x", CMD_ARGV[0], tmp_jtag_max_scans);
 
-		if (tmp_jtag_max_scans < nds_jtag_max_scans) {
+		if ((nds_ftdi_devices == 1) && (tmp_jtag_max_scans >= nds_jtag_max_scans)) {
+			LOG_INFO("nds_ftdi_devices=1 and user defined jtag_max_scans >= %d,
+					don't update nds_jtag_max_scans", nds_jtag_max_scans);
+			LOG_INFO("nds_jtag_max_scans: %d", nds_jtag_max_scans);
+		} else {
 			LOG_INFO("Setting nds_jtag_max_scans(%d) to tmp_jtag_max_scans(%d)",
 					nds_jtag_max_scans, tmp_jtag_max_scans);
 			nds_jtag_max_scans = tmp_jtag_max_scans;
