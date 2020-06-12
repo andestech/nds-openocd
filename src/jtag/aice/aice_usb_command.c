@@ -1006,6 +1006,7 @@ int aice_usb_execute_custom_script(struct target *target, const char *script)
 			sscanf(curr_str + strlen(compare_str), " %s", &tmp_buffer[0]);
 			write_pins_num = strlen(&tmp_buffer[0]);
 			LOG_DEBUG("custom_script write_pins, %d %s", write_pins_num, &tmp_buffer[0]);
+			idx = 0;
 			for (i = 0; i < ((write_pins_num + 1) >> 1); i ++) {
 				Nibble1 = 0;
 				Nibble2 = 0;
