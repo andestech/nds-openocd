@@ -2905,6 +2905,8 @@ int nds32_merge_target_descript(FILE *fp_desc, FILE *fp_out)
 				for (i = 0; i < bit_reg_nums; i++) {
 					if (strncmp(pline_buf1, gpRegString, cmp_cnt) == 0) {
 						/* compare with "bitsize="64"" to check if bitsize is the same */
+						LOG_DEBUG("pline_buf1: %s", pline_buf1);
+						LOG_DEBUG("gpRegString: %s", gpRegString);
 						if (strncmp(curr_str, gpRegString+cmp_cnt, 12) == 0) {
 							/* hit the reg name */
 							bit_reg_hit = 1;
@@ -4131,6 +4133,8 @@ static int gdb_v_packet(struct connection *connection,
 			return out;
 	}
 
+#if _NDS32_ONLY_
+#else
 	if (strncmp(packet, "vCont", 5) == 0) {
 		bool handled;
 
@@ -4143,6 +4147,7 @@ static int gdb_v_packet(struct connection *connection,
 
 		return ERROR_OK;
 	}
+#endif
 
 	if (strncmp(packet, "vRun", 4) == 0) {
 		bool handled;

@@ -27,6 +27,9 @@
 
 #if _NDS_V5_ONLY_
 #include "ndsv5.h"
+#include "ndsv5-013.h"
+#include "target/nds32_new/nds32_log.h"
+#include "target/ndsv5_ace.h"
 #endif
 
 #define get_field(reg, mask) (((reg) & (mask)) / ((mask) & ~((mask) << 1)))
@@ -409,7 +412,11 @@ static int riscv_init_target(struct command_context *cmd_ctx,
 			bscan_tunnel_nested_tap_select_dmi[2].num_bits = bscan_tunnel_ir_width;
 	}
 
+#if _NDS_V5_ONLY_
+	/* To support NDS virtual hosting */
+#else
 	riscv_semihosting_init(target);
+#endif /* _NDS_V5_ONLY_ */
 
 	target->debug_reason = DBG_REASON_DBGRQ;
 
@@ -548,6 +555,20 @@ static int maybe_add_trigger_t2(struct target *target,
 			CSR_MCONTROL_ACTION_DEBUG_MODE);
 	tdata1 = set_field(tdata1, CSR_MCONTROL_MATCH, CSR_MCONTROL_MATCH_EQUAL);
 	tdata1 |= CSR_MCONTROL_M;
+
+#if _NDS_V5_ONLY_
+	tdata1 = set_field(tdata1, MCONTROL_TYPE(riscv_xlen(target)), 2);
+	if (trigger->execute) {
+		/* trigger from breakpoint:ignor address alignment and length issue */
+		tdata1 = set_field(tdata1, CSR_MCONTROL_MATCH, CSR_MCONTROL_MATCH_EQUAL);
+	} else {
+		if (trigger->length == 1)
+			tdata1 = set_field(tdata1, CSR_MCONTROL_MATCH, CSR_MCONTROL_MATCH_EQUAL);
+		else
+			tdata1 = set_field(tdata1, CSR_MCONTROL_MATCH, CSR_MCONTROL_MATCH_NAPOT);
+	}
+#endif /* _NDS_V5_ONLY_ */
+
 	if (r->misa & (1 << ('S' - 'A')))
 		tdata1 |= CSR_MCONTROL_S;
 	if (r->misa & (1 << ('U' - 'A')))
@@ -658,6 +679,24 @@ static int add_trigger(struct target *target, struct trigger *trigger)
 		int type = get_field(tdata1, CSR_TDATA1_TYPE(riscv_xlen(target)));
 
 		result = ERROR_OK;
+
+#if _NDS_V5_ONLY_
+		if (trigger->execute) {
+			/* trigger from breakpoint:ignor address alignment and length issue */
+		} else {
+			/* trigger from watchpoint:address alignment and extend length */
+			LOG_DEBUG("ori_trigger_address:0x%lx, ori_trigger_length:0x%x",
+					(long unsigned int)trigger->address, trigger->length);
+			uint64_t end_address;
+			end_address = trigger->address + trigger->length;
+			/* 8bytes alignment:contain rv32(4bytes or rv32dc:8bytes) and rv64(8bytes) */
+			trigger->address &= ~((0x1 << 3) - 1);
+			trigger->length = end_address - trigger->address;
+			/* redefine: trigger->address */
+			modify_trigger_address_mbit_match(target, trigger);
+		}
+#endif
+
 		switch (type) {
 			case 1:
 				result = maybe_add_trigger_t1(target, trigger, tdata1);
@@ -685,6 +724,9 @@ static int add_trigger(struct target *target, struct trigger *trigger)
 	riscv_set_register(target, GDB_REGNO_TSELECT, tselect);
 
 	if (i >= r->trigger_count) {
+#if _NDS_V5_ONLY_
+		NDS32_LOG(NDS32_ERRMSG_TARGET_MAX_HW_BREAKPOINT, r->trigger_count);
+#endif
 		LOG_ERROR("Couldn't find an available hardware trigger.");
 		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
 	}
@@ -840,8 +882,30 @@ int riscv_add_breakpoint(struct target *target, struct breakpoint *breakpoint)
 		if (riscv_write_by_any_size(target, breakpoint->address, breakpoint->length, buff) != ERROR_OK) {
 			LOG_ERROR("Failed to write %d-byte breakpoint instruction at 0x%"
 					TARGET_PRIxADDR, breakpoint->length, breakpoint->address);
+
+#if _NDS_V5_ONLY_
+			/* auto convert to hardware breakpoint if failed */
+			struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+			if (nds32->auto_convert_hw_bp) {
+				LOG_INFO("auto_convert to hw bp at 0x%" TARGET_PRIxADDR, breakpoint->address);
+				breakpoint->type = BKPT_HARD;
+				return riscv_add_breakpoint(target, breakpoint);
+			}
+#endif /* _NDS_V5_ONLY_ */
+
 			return ERROR_FAIL;
 		}
+
+#if _NDS_V5_ONLY_
+		/* Read back to check write successful!? */
+		uint8_t *instr = malloc(4);
+		target_read_memory(target, breakpoint->address, breakpoint->length, 1,
+				instr);
+		if (memcmp(breakpoint->orig_instr, instr, breakpoint->length) == 0) {
+			free(instr);
+			return ERROR_FAIL;
+		}
+#endif /* _NDS_V5_ONLY_ */
 
 	} else if (breakpoint->type == BKPT_HARD) {
 		struct trigger trigger;
@@ -883,7 +947,15 @@ static int remove_trigger(struct target *target, struct trigger *trigger)
 	if (result != ERROR_OK)
 		return result;
 	riscv_set_register(target, GDB_REGNO_TSELECT, i);
+
+#if _NDS_V5_ONLY_
+	/* Fix Hardware bug: don't disable trigger module */
+	riscv_set_register(target, GDB_REGNO_TDATA1,
+			set_field(0, MCONTROL_TYPE(riscv_xlen(target)), 2));
+#else /* _NDS_V5_ONLY_ */
 	riscv_set_register(target, GDB_REGNO_TDATA1, 0);
+#endif /* _NDS_V5_ONLY_ */
+
 	riscv_set_register(target, GDB_REGNO_TSELECT, tselect);
 	r->trigger_unique_id[i] = -1;
 
@@ -1314,7 +1386,11 @@ int halt_go(struct target *target)
 
 static int halt_finish(struct target *target)
 {
+#if _NDS_V5_ONLY_ & (!_NDS_SUPPORT_WITHOUT_ANNOUNCING_)
 	return target_call_event_callbacks(target, TARGET_EVENT_HALTED);
+#else
+	return ERROR_OK;
+#endif
 }
 
 int riscv_halt(struct target *target)
@@ -1368,12 +1444,25 @@ static int riscv_assert_reset(struct target *target)
 {
 	LOG_DEBUG("[%d]", target->coreid);
 	struct target_type *tt = get_target_type(target);
+#if _NDS_V5_ONLY_
+	/* Avoid use reg_cache when target not examined (CPU unavailable on examine) */
+	LOG_DEBUG("Assert reset on [%s] hart %d", target->tap->dotted_name, target->coreid);
+	riscv_select_current_hart(target);
+	if (target_was_examined(target))
+		riscv_invalidate_register_cache(target);
+#else /* _NDS_V5_ONLY_ */
 	riscv_invalidate_register_cache(target);
+#endif /* _NDS_V5_ONLY_ */
 	return tt->assert_reset(target);
 }
 
 static int riscv_deassert_reset(struct target *target)
 {
+#if _NDS_V5_ONLY_
+	LOG_DEBUG("Deassert reset on [%s] hart %d", target->tap->dotted_name, target->coreid);
+	riscv_select_current_hart(target);
+#endif /* _NDS_V5_ONLY_ */
+
 	LOG_DEBUG("[%d]", target->coreid);
 	struct target_type *tt = get_target_type(target);
 	return tt->deassert_reset(target);
@@ -1783,6 +1872,85 @@ static int riscv_read_memory(struct target *target, target_addr_t address,
 	if (riscv_select_current_hart(target) != ERROR_OK)
 		return ERROR_FAIL;
 
+#if _NDS_V5_ONLY_
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	struct nds32_v5_memory *memory = &(nds32->memory);
+	int retval = ERROR_OK;
+	uint64_t reg_mcache_ctl_value = 0;
+
+	target_addr_t physical_address = address;
+	if (ndsv5_virtual_to_physical(target, address, &physical_address) != ERROR_OK)
+		return ERROR_FAIL;
+
+	/* ilm and dlm exist and mmsc_cfg.LMSLVP == 1, when bus mode access address need add LM_BASE */
+	if (memory->access_channel == NDS_MEMORY_ACC_BUS) {
+		if (!nds32->execute_register_init && (ndsv5_dis_cache_busmode == 1)) {
+			struct reg *reg_name = ndsv5_get_reg_by_CSR(target, CSR_MICM_CFG);
+			uint64_t micm_cfg_value = ndsv5_get_register_value(reg_name);
+			NDS_INFO("micm_cfg = 0x%" PRIx64, micm_cfg_value);
+			reg_name = ndsv5_get_reg_by_CSR(target, CSR_MDCM_CFG);
+			uint64_t mdcm_cfg_value = ndsv5_get_register_value(reg_name);
+			NDS_INFO("mdcm_cfg = 0x%" PRIx64, mdcm_cfg_value);
+
+			/* micm_cfg.ISZ != 0 | mdcm_cfg.DSZ != 0 (bit 8-6), CSR_MCACHE_CTL exist */
+			if (((micm_cfg_value & 0x1c0) == 0) && ((mdcm_cfg_value & 0x1c0) == 0)) {
+				NDS_INFO("CSR_MCACHE_CTL not exist");
+				ndsv5_dis_cache_busmode = 0;
+			}
+		}
+		if (ndsv5_dis_cache_busmode == 1) {
+			/* if dis cache bus mode, saved and disable cache */
+			bus_mode_on(target, &reg_mcache_ctl_value);
+		} else {
+			/* according to eticket 16199, default no support system bus access,
+			 * so ndsv5_system_bus_access default value is 0 */
+			if (ndsv5_system_bus_access == 1) {
+				retval = ndsv5_lm_slvp_support(target, physical_address, CSR_MILMB);
+				if (retval == ERROR_OK)
+					physical_address = physical_address + LM_BASE;
+				else if (retval == ERROR_TARGET_RESOURCE_NOT_AVAILABLE) {
+					retval = ndsv5_lm_slvp_support(target, physical_address, CSR_MDLMB);
+					if (retval == ERROR_OK)
+						physical_address = physical_address + LM_BASE;
+				}
+			}
+		}
+	}
+
+	if (ndsv5_byte_access_from_burn == 1)
+		retval = ndsv5_readwrite_byte(target, physical_address, size, count, buffer, 0);
+	else
+		retval = ndsv5_read_memory(target, physical_address, size, count, buffer);
+
+	if (ndsv5_use_mprv_mode == 1) {
+		uint64_t dcsr;
+		if ((nds_dmi_quick_access) && (!riscv_is_halted(target))) {
+			/* Resotre mstatus */
+			ndsv5_set_csr_reg_quick_access(target, GDB_REGNO_MSTATUS, ndsv5_backup_mstatus);
+			/* Restore dcsr */
+			ndsv5_get_csr_reg_quick_access(target, GDB_REGNO_DCSR, &dcsr);
+			dcsr &= ~(0x10);
+			ndsv5_set_csr_reg_quick_access(target, GDB_REGNO_DCSR, dcsr);
+		} else {
+			/* Resotre mstatus */
+			riscv_set_register(target, GDB_REGNO_MSTATUS, ndsv5_backup_mstatus);
+
+			/* Restore dcsr */
+			riscv_get_register(target, &dcsr, GDB_REGNO_DCSR);
+			dcsr &= ~(0x10);
+			riscv_set_register(target, GDB_REGNO_DCSR, dcsr);
+		}
+	}
+	if (memory->access_channel == NDS_MEMORY_ACC_BUS) {
+		if (ndsv5_dis_cache_busmode == 1) {
+			/* if bus mode, restore cache */
+			bus_mode_off(target, reg_mcache_ctl_value);
+		}
+	}
+
+	return retval;
+#endif /* _NDS_V5_ONLY_ */
+
 	target_addr_t physical_addr;
 	if (target->type->virt2phys(target, address, &physical_addr) == ERROR_OK)
 		address = physical_addr;
@@ -1810,6 +1978,84 @@ static int riscv_write_memory(struct target *target, target_addr_t address,
 
 	if (riscv_select_current_hart(target) != ERROR_OK)
 		return ERROR_FAIL;
+
+#if _NDS_V5_ONLY_
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	struct nds32_v5_memory *memory = &(nds32->memory);
+	int retval = ERROR_OK;
+	uint64_t reg_mcache_ctl_value = 0;
+
+	target_addr_t physical_address = address;
+	if (ndsv5_virtual_to_physical(target, address, &physical_address) != ERROR_OK)
+		return ERROR_FAIL;
+
+	/* ilm and dlm exist and mmsc_cfg.LMSLVP == 1, when bus mode access address need add LM_BASE */
+	if (memory->access_channel == NDS_MEMORY_ACC_BUS) {
+		if (!nds32->execute_register_init && (ndsv5_dis_cache_busmode == 1)) {
+			struct reg *reg_name = ndsv5_get_reg_by_CSR(target, CSR_MICM_CFG);
+			uint64_t micm_cfg_value = ndsv5_get_register_value(reg_name);
+			NDS_INFO("micm_cfg = 0x%" PRIx64, micm_cfg_value);
+			reg_name = ndsv5_get_reg_by_CSR(target, CSR_MDCM_CFG);
+			uint64_t mdcm_cfg_value = ndsv5_get_register_value(reg_name);
+			NDS_INFO("mdcm_cfg = 0x%" PRIx64, mdcm_cfg_value);
+
+			/* micm_cfg.ISZ != 0 | mdcm_cfg.DSZ != 0 (bit 8-6), CSR_MCACHE_CTL exist */
+			if (((micm_cfg_value & 0x1c0) == 0) && ((mdcm_cfg_value & 0x1c0) == 0)) {
+				NDS_INFO("CSR_MCACHE_CTL not exist");
+				ndsv5_dis_cache_busmode = 0;
+			}
+		}
+		if (ndsv5_dis_cache_busmode == 1) {
+			/* if dis cache bus mode, saved and disable cache */
+			bus_mode_on(target, &reg_mcache_ctl_value);
+		} else {
+			/* according to eticket 16199, default no support system bus access,
+			 * so ndsv5_system_bus_access default value is 0 */
+			if (ndsv5_system_bus_access == 1) {
+				retval = ndsv5_lm_slvp_support(target, physical_address, CSR_MILMB);
+				if (retval == ERROR_OK)
+					physical_address = physical_address + LM_BASE;
+				else if (retval == ERROR_TARGET_RESOURCE_NOT_AVAILABLE) {
+					retval = ndsv5_lm_slvp_support(target, physical_address, CSR_MDLMB);
+					if (retval == ERROR_OK)
+						physical_address = physical_address + LM_BASE;
+				}
+			}
+		}
+	}
+
+	if (ndsv5_byte_access_from_burn == 1)
+		retval = ndsv5_readwrite_byte(target, physical_address, size, count, buffer, 1);
+	else
+		retval = ndsv5_write_memory(target, physical_address, size, count, buffer);
+
+	if (ndsv5_use_mprv_mode == 1) {
+		uint64_t dcsr;
+		if ((nds_dmi_quick_access) && (!riscv_is_halted(target))) {
+			/* Resotre mstatus */
+			ndsv5_set_csr_reg_quick_access(target, GDB_REGNO_MSTATUS, ndsv5_backup_mstatus);
+			/* Restore dcsr */
+			ndsv5_get_csr_reg_quick_access(target, GDB_REGNO_DCSR, &dcsr);
+			dcsr &= ~(0x10);
+			ndsv5_set_csr_reg_quick_access(target, GDB_REGNO_DCSR, dcsr);
+		} else {
+			/* Resotre mstatus */
+			riscv_set_register(target, GDB_REGNO_MSTATUS, ndsv5_backup_mstatus);
+
+			/* Restore dcsr */
+			riscv_get_register(target, &dcsr, GDB_REGNO_DCSR);
+			dcsr &= ~(0x10);
+			riscv_set_register(target, GDB_REGNO_DCSR, dcsr);
+		}
+	}
+	if (memory->access_channel == NDS_MEMORY_ACC_BUS) {
+		if (ndsv5_dis_cache_busmode == 1) {
+			/* if bus mode, restore cache */
+			bus_mode_off(target, reg_mcache_ctl_value);
+		}
+	}
+	return retval;
+#endif /* _NDS_V5_ONLY_ */
 
 	target_addr_t physical_addr;
 	if (target->type->virt2phys(target, address, &physical_addr) == ERROR_OK)
@@ -1847,12 +2093,30 @@ static int riscv_get_gdb_reg_list_internal(struct target *target,
 	if (riscv_select_current_hart(target) != ERROR_OK)
 		return ERROR_FAIL;
 
+#if _NDS_V5_ONLY_
+	unsigned int acr_reg_count_v5_cnt = 0;
+#endif /* _NDS_V5_ONLY_ */
+
 	switch (reg_class) {
 		case REG_CLASS_GENERAL:
+#if _NDS_V5_ONLY_
+			if (riscv_supports_extension(target, 'E'))
+				*reg_list_size = 16;
+			else
+				*reg_list_size = 33;	/* TODO: WHY!? */
+#else /* _NDS_V5_ONLY_ */
 			*reg_list_size = 33;
+#endif /* _NDS_V5_ONLY_ */
 			break;
 		case REG_CLASS_ALL:
+#if _NDS_V5_ONLY_
+			/* TODO: Should be GDB_REGNO_COUNT or target->reg_cache->num_regs ?! */
+			if (global_acr_reg_count_v5 != 0)
+				acr_reg_count_v5_cnt = *global_acr_reg_count_v5;
+			*reg_list_size = target->reg_cache->num_regs + acr_reg_count_v5_cnt;
+#else /* _NDS_V5_ONLY_ */
 			*reg_list_size = target->reg_cache->num_regs;
+#endif /* _NDS_V5_ONLY_ */
 			break;
 		default:
 			LOG_ERROR("Unsupported reg_class: %d", reg_class);
@@ -1883,6 +2147,14 @@ static int riscv_get_gdb_reg_list_noread(struct target *target,
 		struct reg **reg_list[], int *reg_list_size,
 		enum target_register_class reg_class)
 {
+#if _NDS_V5_ONLY_
+	/* TODO: Check if this is necessory */
+	if (!target_was_examined(target)) {
+		NDS_INFO("target was NOT examined");
+		ndsv5_examine(target);
+	}
+#endif /* _NDS_V5_ONLY_ */
+
 	return riscv_get_gdb_reg_list_internal(target, reg_list, reg_list_size,
 			reg_class, false);
 }
@@ -1891,6 +2163,14 @@ static int riscv_get_gdb_reg_list(struct target *target,
 		struct reg **reg_list[], int *reg_list_size,
 		enum target_register_class reg_class)
 {
+#if _NDS_V5_ONLY_
+	/* TODO: Check if this is necessory */
+	if (!target_was_examined(target)) {
+		NDS_INFO("target was NOT examined");
+		ndsv5_examine(target);
+	}
+#endif /* _NDS_V5_ONLY_ */
+
 	return riscv_get_gdb_reg_list_internal(target, reg_list, reg_list_size,
 			reg_class, true);
 }
@@ -1973,8 +2253,13 @@ static int riscv_run_algorithm(struct target *target, int num_mem_params,
 		int64_t now = timeval_ms();
 		if (now - start > timeout_ms) {
 			LOG_ERROR("Algorithm timed out after %" PRId64 " ms.", now - start);
+#if _NDS_V5_ONLY_
+			ndsv5_openocd_halt_one_hart(target, nds_targetburn_corenum);
+			ndsv5_openocd_poll_one_hart(target, nds_targetburn_corenum);
+#else /* _NDS_V5_ONLY_ */
 			riscv_halt(target);
 			old_or_new_riscv_poll(target);
+#endif /* _NDS_V5_ONLY_ */
 			enum gdb_regno regnums[] = {
 				GDB_REGNO_RA, GDB_REGNO_SP, GDB_REGNO_GP, GDB_REGNO_TP,
 				GDB_REGNO_T0, GDB_REGNO_T1, GDB_REGNO_T2, GDB_REGNO_FP,
@@ -1997,7 +2282,11 @@ static int riscv_run_algorithm(struct target *target, int num_mem_params,
 			return ERROR_TARGET_TIMEOUT;
 		}
 
+#if _NDS_V5_ONLY_
+		int result = ndsv5_openocd_poll_one_hart(target, nds_targetburn_corenum);
+#else /* _NDS_V5_ONLY_ */
 		int result = old_or_new_riscv_poll(target);
+#endif /* _NDS_V5_ONLY_ */
 		if (result != ERROR_OK)
 			return result;
 	}
@@ -2134,7 +2423,9 @@ static int riscv_checksum_memory(struct target *target,
 }
 
 /*** OpenOCD Helper Functions ***/
-
+#if _NDS_V5_ONLY_
+enum riscv_poll_hart riscv_poll_hart(struct target *target, int hartid)
+#else /* _NDS_V5_ONLY_ */
 enum riscv_poll_hart {
 	RPH_NO_CHANGE,
 	RPH_DISCOVERED_HALTED,
@@ -2142,6 +2433,7 @@ enum riscv_poll_hart {
 	RPH_ERROR
 };
 static enum riscv_poll_hart riscv_poll_hart(struct target *target, int hartid)
+#endif /* _NDS_V5_ONLY_ */
 {
 	RISCV_INFO(r);
 	if (riscv_set_current_hartid(target, hartid) != ERROR_OK)
@@ -2347,6 +2639,13 @@ int riscv_openocd_poll(struct target *target)
 			target_call_event_callbacks(target, TARGET_EVENT_HALTED);
 	}
 
+#if _NDS_V5_ONLY_
+	ndsv5_triggered_hart = halted_hart;
+#endif /* _NDS_V5_ONLY_ */
+
+#if _NDS_V5_ONLY_ & (!_NDS_SUPPORT_WITHOUT_ANNOUNCING_)
+	target_call_event_callbacks(target, TARGET_EVENT_HALTED);
+#endif
 	return ERROR_OK;
 }
 
@@ -2401,8 +2700,27 @@ _exit:
 		target_call_event_callbacks(target, TARGET_EVENT_RESUMED);
 		target->state = TARGET_HALTED;
 		target->debug_reason = DBG_REASON_SINGLESTEP;
+
+#if _NDS_V5_ONLY_
+		/* TODO: should we need this!? */
+		LOG_DEBUG("checking reason");
+		if (ndsv5_handle_triggered(target) != ERROR_OK) {
+			LOG_DEBUG("ndsv5_handle_triggered ERROR");
+			return ERROR_FAIL;
+		}
+#endif /* _NDS_V5_ONLY_ */
+
 		target_call_event_callbacks(target, TARGET_EVENT_HALTED);
 	}
+
+#if _NDS_V5_ONLY_ & _NDS_SUPPORT_WITHOUT_ANNOUNCING_
+	if (ndsv5_without_announce) {
+		ndsv5_without_announce = 0;
+		return success ? ERROR_OK : ERROR_FAIL;
+	}
+#endif /* _NDS_V5_ONLY_ */
+
+
 	return success ? ERROR_OK : ERROR_FAIL;
 }
 
@@ -3703,10 +4021,22 @@ void riscv_invalidate_register_cache(struct target *target)
 
 	LOG_DEBUG("[%d]", target->coreid);
 	register_cache_invalidate(target->reg_cache);
+#if _NDS_V5_ONLY_
+	unsigned int acr_reg_count_v5_cnt = 0;
+	if (global_acr_reg_count_v5 != 0)
+		acr_reg_count_v5_cnt = *global_acr_reg_count_v5;
+
+	/* TODO: Should be GDB_REGNO_COUNT or target->reg_cache->num_regs ?! */
+	for (size_t i = 0; i < target->reg_cache->num_regs + acr_reg_count_v5_cnt; ++i) {
+		struct reg *reg = &target->reg_cache->reg_list[i];
+		reg->valid = false;
+	}
+#else /* _NDS_V5_ONLY_ */
 	for (size_t i = 0; i < target->reg_cache->num_regs; ++i) {
 		struct reg *reg = &target->reg_cache->reg_list[i];
 		reg->valid = false;
 	}
+#endif /* _NDS_V5_ONLY_ */
 
 	r->registers_initialized = true;
 }
@@ -3880,7 +4210,10 @@ int riscv_save_register(struct target *target, enum gdb_regno regid)
 bool riscv_is_halted(struct target *target)
 {
 	RISCV_INFO(r);
+#if _NDS_V5_ONLY_ & _NDS_DISABLE_ABORT_
+#else
 	assert(r->is_halted);
+#endif
 	return r->is_halted(target);
 }
 
@@ -4262,6 +4595,12 @@ static int register_set(struct reg *reg, uint8_t *buf)
 			return ERROR_FAIL;
 	}
 
+
+#if _NDS_V5_ONLY_
+	/* Presume all reg to invalid, force to read reg anytime */
+	reg->valid = false;
+#endif /* _NDS_V5_ONLY_ */
+
 	if (reg->number >= GDB_REGNO_V0 && reg->number <= GDB_REGNO_V31) {
 		if (!r->set_register_buf) {
 			LOG_ERROR("Writing register %s not supported on this RISC-V target.",
@@ -4275,6 +4614,20 @@ static int register_set(struct reg *reg, uint8_t *buf)
 		uint64_t value = buf_get_u64(buf, 0, reg->size);
 		if (riscv_set_register(target, reg->number, value) != ERROR_OK)
 			return ERROR_FAIL;
+
+#if _NDS_V5_ONLY_
+		/* Read CSR back to check */
+		if (reg->number >= GDB_REGNO_CSR0) {
+			uint64_t actual_value;
+			riscv_get_register(target, &actual_value, reg->number);
+			if (value != actual_value) {
+				LOG_ERROR("Written reg %s (0x%" PRIx64 ") does not match read back "
+					  "value (0x%" PRIx64 ")", reg->name, value, actual_value);
+				memcpy(reg->value, (uint8_t *)&actual_value, DIV_ROUND_UP(reg->size, 8));
+			}
+		}
+#endif /* _NDS_V5_ONLY_ */
+
 	}
 
 	return ERROR_OK;
@@ -4309,7 +4662,11 @@ int riscv_init_registers(struct target *target)
 	if (!target->reg_cache)
 		return ERROR_FAIL;
 	target->reg_cache->name = "RISC-V Registers";
+#if _NDS_V5_ONLY_
+	target->reg_cache->num_regs = GDB_REGNO_COUNT + acr_reg_count_v5;
+#else /* _NDS_V5_ONLY_ */
 	target->reg_cache->num_regs = GDB_REGNO_COUNT;
+#endif /* _NDS_V5_ONLY_ */
 
 	if (!list_empty(&info->expose_custom)) {
 		range_list_t *entry;
@@ -4348,9 +4705,13 @@ int riscv_init_registers(struct target *target)
 	static struct reg_feature feature_virtual = {
 		.name = "org.gnu.gdb.riscv.virtual"
 	};
+#if _NDS_V5_ONLY_
+	/* Mark this out to fix compile warning */
+#else /* _NDS_V5_ONLY_ */
 	static struct reg_feature feature_custom = {
 		.name = "org.gnu.gdb.riscv.custom"
 	};
+#endif /* _NDS_V5_ONLY_ */
 
 	/* These types are built into gdb. */
 	static struct reg_data_type type_ieee_single = { .type = REG_TYPE_IEEE_SINGLE, .id = "ieee_single" };
@@ -4373,6 +4734,24 @@ int riscv_init_registers(struct target *target)
 	static struct reg_data_type type_uint32 = { .type = REG_TYPE_UINT32, .id = "uint32" };
 	static struct reg_data_type type_uint64 = { .type = REG_TYPE_UINT64, .id = "uint64" };
 	static struct reg_data_type type_uint128 = { .type = REG_TYPE_UINT128, .id = "uint128" };
+
+#if _NDS_V5_ONLY_
+	static struct reg_data_type type_vec128 = {
+		.type = REG_TYPE_ARCH_DEFINED,
+		.type_class = REG_TYPE_CLASS_VENDOR_DEF,
+		.id = "vec128"
+	};
+	static struct reg_data_type type_vec256 = {
+		.type = REG_TYPE_ARCH_DEFINED,
+		.type_class = REG_TYPE_CLASS_VENDOR_DEF,
+		.id = "vec256"
+	};
+	static struct reg_data_type type_vec512 = {
+		.type = REG_TYPE_ARCH_DEFINED,
+		.type_class = REG_TYPE_CLASS_VENDOR_DEF,
+		.id = "vec512"
+	};
+#endif /* _NDS_V5_ONLY_ */
 
 	/* This is roughly the XML we want:
 	 * <vector id="bytes" type="uint8" count="16"/>
@@ -4472,7 +4851,10 @@ int riscv_init_registers(struct target *target)
 	qsort(csr_info, ARRAY_SIZE(csr_info), sizeof(*csr_info), cmp_csr_info);
 	unsigned csr_info_index = 0;
 
+#if _NDS_V5_ONLY_
+#else
 	int custom_within_range = 0;
+#endif
 
 	riscv_reg_info_t *shared_reg_info = calloc(1, sizeof(riscv_reg_info_t));
 	if (!shared_reg_info)
@@ -4499,6 +4881,30 @@ int riscv_init_registers(struct target *target)
 		if (number <= GDB_REGNO_XPR31) {
 			r->exist = number <= GDB_REGNO_XPR15 ||
 				!riscv_supports_extension(target, 'E');
+
+#if _NDS_V5_ONLY_
+			/* RV32E only use first 15 gprs(ex: x0~x15) */
+			if (riscv_supports_extension(target, 'E')) {
+				if (number > GDB_REGNO_XPR15)
+					r->exist = false;
+			}
+
+			/* TODO: Do we still need code_ptr, data_ptr?! */
+			static struct reg_data_type type_data_ptr = { .type = REG_TYPE_DATA_PTR, .id = "data_ptr" };
+			static struct reg_data_type type_code_ptr = { .type = REG_TYPE_CODE_PTR, .id = "code_ptr" };
+			switch (number) {
+				case GDB_REGNO_RA:
+					r->reg_data_type = &type_code_ptr;
+					break;
+				case GDB_REGNO_SP:
+				case GDB_REGNO_GP:
+				case GDB_REGNO_TP:
+				case GDB_REGNO_S0:
+					r->reg_data_type = &type_data_ptr;
+					break;
+			}
+#endif /* _NDS_V5_ONLY_ */
+
 			/* TODO: For now we fake that all GPRs exist because otherwise gdb
 			 * doesn't work. */
 			r->exist = true;
@@ -4731,6 +5137,8 @@ int riscv_init_registers(struct target *target)
 					csr_info_index < ARRAY_SIZE(csr_info) - 1) {
 				csr_info_index++;
 			}
+
+			/* NDS_TODO: Support symbolic name */
 			if (csr_info[csr_info_index].number == csr_number) {
 				r->name = csr_info[csr_info_index].name;
 			} else {
@@ -4850,6 +5258,30 @@ int riscv_init_registers(struct target *target)
 					break;
 			}
 
+#if _NDS_V5_ONLY_
+			if (riscv_xlen(target) == 64) {
+				switch (csr_number) {
+					case CSR_SCOUNTEREN:
+					case CSR_MCOUNTEREN:
+					case CSR_DCSR:
+					case CSR_MCOUNTERWEN:
+					case CSR_MCOUNTERINTEN:
+					case CSR_MCOUNTERMASK_M:
+					case CSR_MCOUNTERMASK_S:
+					case CSR_MCOUNTERMASK_U:
+					case CSR_MCOUNTEROVF:
+					case CSR_SCOUNTERINTEN:
+					case CSR_SCOUNTERMASK_S:
+					case CSR_SCOUNTERMASK_U:
+					case CSR_SCOUNTEROVF:
+					case CSR_MCOUNTINHIBIT:
+					case CSR_SCOUNTINHIBIT:
+					case CSR_SCOUNTERMASK_M:
+						r->size = 32;
+				}
+			}
+#endif /* _NDS_V5_ONLY_  */
+
 			if (!r->exist && !list_empty(&info->expose_csr)) {
 				range_list_t *entry;
 				list_for_each_entry(entry, &info->expose_csr, list)
@@ -4882,6 +5314,26 @@ int riscv_init_registers(struct target *target)
 			r->feature = &feature_vector;
 			r->reg_data_type = &info->type_vector;
 
+#if _NDS_V5_ONLY_
+			/* TODO: Check we still have this?! */
+			struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+			if (nds32->nds_vector_length == 128) {
+				r->reg_data_type = &type_vec128;
+				r->size = 128;
+			} else if (nds32->nds_vector_length == 256) {
+				r->reg_data_type = &type_vec256;
+				r->size = 256;
+			} else {
+				/* if (nds32->nds_vector_length == 512) { */
+				r->reg_data_type = &type_vec512;
+				r->size = 512;
+			}
+#endif /* _NDS_V5_ONLY_ */
+
+#if _NDS_V5_ONLY_
+		/* To support ACR, make the following code out */
+		} /* Don't delete this braces, it will causing compile error */
+#else
 		} else if (number >= GDB_REGNO_COUNT) {
 			/* Custom registers. */
 			assert(!list_empty(&info->expose_custom));
@@ -4913,6 +5365,7 @@ int riscv_init_registers(struct target *target)
 				list_rotate_left(&info->expose_custom);
 			}
 		}
+#endif /* _NDS_V5_ONLY_ */
 
 		if (reg_name[0]) {
 			r->name = reg_name;
@@ -4922,6 +5375,56 @@ int riscv_init_registers(struct target *target)
 		}
 		r->value = calloc(1, DIV_ROUND_UP(r->size, 8));
 	}
+
+#if _NDS_V5_ONLY_
+	/* TODO: Check ACR still working!? */
+	/* Handle ACR */
+	/* ACR_info acr_list[] = {
+	 *   {"r32b", 32, 2, {"rd32_r77b", "rd64_r77b"}, {"wr32_r77b", "wr64_r77b"} },
+	 *   {"r64b", 64, 5, {"rd32_r12b", ""}, {"wr32_r12b", ""} },
+	 *   {"sram_matrix", 64, 256, {"", ""}, {"", ""} },
+	 * };
+	 */
+	LOG_DEBUG("ACR ID starts from %d", GDB_REGNO_COUNT);
+	unsigned int reg_list_idx = GDB_REGNO_COUNT;
+	for (unsigned int i = 0; i < acr_type_count_v5; i++) {
+		unsigned int acr_number = acr_info_list_v5->num;
+		unsigned int acr_width = acr_info_list_v5->width;
+		char *acr_name = acr_info_list_v5->name;
+		LOG_DEBUG("ACR info -> Name : %s, Num : %d, Width : %d", acr_name, acr_number, acr_width);
+
+		for (unsigned int idx = 0; idx < acr_number; idx++, reg_list_idx++) {
+			struct reg *r = &target->reg_cache->reg_list[reg_list_idx];
+			r->number = reg_list_idx;
+			r->caller_save = true;
+			r->dirty = false;
+			r->valid = false;
+			r->exist = true;
+			r->type = &nds_ace_reg_access_type;
+			r->arch_info = target;
+			r->size = acr_width;
+			r->group = "ace";
+			/* ByteSize = ceil(reg->size / 8) */
+			unsigned int ByteSize = (!r->size%8) ? r->size/8 : (r->size/8) + 1;
+			r->value = (uint8_t *)calloc(ByteSize, sizeof(char));
+
+			r->feature = calloc(sizeof(struct reg_feature), 1);
+			r->feature->name = "org.gnu.gdb.riscv.ace";
+
+			r->reg_data_type = calloc(sizeof(struct reg_data_type), 1);
+			r->reg_data_type->type = REG_TYPE_UINT8;
+			r->reg_data_type->id = acr_name;
+
+			char *acr_reg_name = calloc(strlen(acr_name) + 10, 1);
+			sprintf(acr_reg_name, "%s_%d", acr_name, idx);
+			if (acr_reg_name[0])
+				r->name = acr_reg_name;
+			LOG_DEBUG("\t\tRegister ACR : %s, size = %d", r->name, r->size);
+		}
+		acr_info_list_v5++;
+	}
+
+#endif /* _NDS_V5_ONLY_ */
 
 	return ERROR_OK;
 }

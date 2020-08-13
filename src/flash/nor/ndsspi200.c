@@ -93,7 +93,6 @@ struct algorithm_steps {
 	uint8_t **steps;
 };
 extern int nds_targetburn_targetnum;
-extern int nds_targetburn_corenum;
 
 static int inw(struct flash_bank *bank, uint32_t get_address, uint32_t *get_value)
 {
