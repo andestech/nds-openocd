@@ -1069,9 +1069,10 @@ int aice_dump_cache(struct target *target, unsigned int cache_type, const char* 
 
 			aice_read_reg(target, R0, &tag);
 			keep_alive();
-			ce[idx][way].dirty = (uint8_t)(tag & CCTL_mskDIRTY) >> CCTL_offDIRTY;
-			ce[idx][way].valid = (uint8_t)(tag & CCTL_mskVALID) >> CCTL_offVALID;
-			ce[idx][way].lock = (uint8_t)(tag & CCTL_mskLOCK) >> CCTL_offLOCK;
+			LOG_DEBUG("TAG VALUE: 0x%x", tag);
+			ce[idx][way].dirty = (uint8_t)((tag & CCTL_mskDIRTY) >> CCTL_offDIRTY);
+			ce[idx][way].valid = (uint8_t)((tag & CCTL_mskVALID) >> CCTL_offVALID);
+			ce[idx][way].lock = (uint8_t)((tag & CCTL_mskLOCK) >> CCTL_offLOCK);
 			ce[idx][way].pa = (tag & CCTL_mskTAG) >> CCTL_offTAG << NDS_PAGE_SHIFT;
 
 			for( i = 0; i < line_size/4; i++ ) {
@@ -1246,9 +1247,10 @@ int aice_dump_cache_va(struct target *target, unsigned int cache_type, uint32_t 
 
 
 		aice_read_reg(target, R0, &tag);
-		ces[way].dirty = (uint8_t)(tag & CCTL_mskDIRTY) >> CCTL_offDIRTY;
-		ces[way].valid = (uint8_t)(tag & CCTL_mskVALID) >> CCTL_offVALID;
-		ces[way].lock = (uint8_t)(tag & CCTL_mskLOCK) >> CCTL_offLOCK;
+		LOG_DEBUG("TAG VALUE: 0x%x", tag);
+		ces[way].dirty = (uint8_t)((tag & CCTL_mskDIRTY) >> CCTL_offDIRTY);
+		ces[way].valid = (uint8_t)((tag & CCTL_mskVALID) >> CCTL_offVALID);
+		ces[way].lock = (uint8_t)((tag & CCTL_mskLOCK) >> CCTL_offLOCK);
 		ces[way].pa = (tag & CCTL_mskTAG) >> CCTL_offTAG << NDS_PAGE_SHIFT;
 		//if (check_way == ways && ces[way].pa == check_addr)
 		//	check_way = way;
