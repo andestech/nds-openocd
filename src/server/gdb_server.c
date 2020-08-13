@@ -432,12 +432,13 @@ static int gdb_put_packet_inner(struct connection *connection,
 
 	while (1) {
 		debug_buffer = strndup(buffer, len);
-		LOG_DEBUG("sending packet '$%s#%2.2x'", debug_buffer, my_checksum);
 #if _NDS32_ONLY_
 		if (nds_skip_print)
 			nds_skip_print = 0;
 		else
 			NDS_INFO("sending packet '$%s#%2.2x'", debug_buffer, my_checksum);
+#else
+		LOG_DEBUG("sending packet '$%s#%2.2x'", debug_buffer, my_checksum);
 #endif /* _NDS32_ONLY_ */
 
 		free(debug_buffer);
@@ -2746,6 +2747,8 @@ int nds32_merge_target_descript(FILE *fp_desc, FILE *fp_out)
 				for (i = 0; i < bit_reg_nums; i++) {
 					if (strncmp(pline_buf1, gpRegString, cmp_cnt) == 0) {
 						/* compare with "bitsize="64"" to check if bitsize is the same */
+						LOG_DEBUG("pline_buf1: %s", pline_buf1);
+						LOG_DEBUG("gpRegString: %s", gpRegString);
 						if (strncmp(curr_str, gpRegString+cmp_cnt, 12) == 0) {
 							/* hit the reg name */
 							bit_reg_hit = 1;
@@ -3817,6 +3820,8 @@ static int gdb_v_packet(struct connection *connection,
 			return out;
 	}
 
+#if _NDS32_ONLY_
+#else
 	if (strncmp(packet, "vCont", 5) == 0) {
 		bool handled;
 
@@ -3829,6 +3834,7 @@ static int gdb_v_packet(struct connection *connection,
 
 		return ERROR_OK;
 	}
+#endif
 
 	/* if flash programming disabled - send a empty reply */
 

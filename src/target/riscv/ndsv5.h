@@ -15,10 +15,30 @@
 #include "target/breakpoints.h"
 #include "target/register.h"
 #include "target/target_type.h"
+#include "target/ndsv5_ace.h"
 #include "opcodes.h"
 #include "gdb_regs.h"
 #include "encoding.h"
 #include "riscv.h"
+
+
+/********************************************************************/
+/* NDSV5 compiler flags */
+/********************************************************************/
+#define _NDS_DMI_CHECK_TIMEOUT_ 1
+#define _NDS_JTAG_SCANS_OPTIMIZE_EXE_PBUF 1
+#define _NDS_JTAG_SCANS_OPTIMIZE_R_PBUF 1
+#define _NDS_JTAG_SCANS_OPTIMIZE_ 1
+#define _NDS_MEM_Q_ACCESS_ 1
+#define _NDS_DISABLE_ABORT_ 1
+#define _NDS_IDE_MESSAGE_ 1
+#define _NDS_USE_SCRIPT_ 1
+#define _NDS_BATCH_RUN_RETRY_ 1
+#define _NDS_SUPPORT_WITHOUT_ANNOUNCING_ 1
+
+
+/********************************************************************/
+
 
 /*
 // gdb's register list is defined in riscv_gdb_reg_names gdb/riscv-tdep.c in
@@ -66,15 +86,18 @@ extern int riscv_examine(struct target *target);
 /********************************************************************/
 /* NDSV5 flags */
 /********************************************************************/
-uint32_t ndsv5_dmi_quick_access;
 uint32_t ndsv5_use_mprv_mode;
-uint32_t ndsv5_skip_dmi;
+uint32_t nds_skip_dmi;
 uint32_t ndsv5_system_bus_access;
 uint32_t ndsv5_without_announce;
-uint32_t ndsv5_sys_bus_supported;
-uint32_t ndsv5_dmi_quick_access_ena;
 uint32_t ndsv5_dmi_abstractcs;
 uint32_t ndsv5_byte_access_from_burn;
+
+#if _NDS_MEM_Q_ACCESS_
+uint32_t nds_dmi_quick_access;
+uint32_t nds_dmi_abstractcs;
+uint32_t nds_dmi_quick_access_ena;
+#endif /* _NDS_MEM_Q_ACCESS_ */
 /********************************************************************/
 
 
@@ -87,12 +110,18 @@ int ndsv5_triggered_hart;
 extern uint64_t LM_BASE;
 extern uint32_t ndsv5_dis_cache_busmode;
 extern uint32_t ndsv5_dmi_busy_retry_times;
+extern unsigned* global_acr_reg_count_v5;
+extern unsigned* global_acr_type_count_v5;
+extern ACR_INFO_T_V5 *acr_info_list_v5;
+extern struct reg_arch_type nds_ace_reg_access_type;
+extern int nds_targetburn_corenum;
 
 uint64_t ndsv5_ilm_bpa, ndsv5_ilm_lmsz;
 uint64_t ndsv5_dlm_bpa, ndsv5_dlm_lmsz;
 uint32_t ndsv5_ilm_ena, ndsv5_dlm_ena;
 uint32_t ndsv5_local_memory_slave_port;
 uint32_t ndsv5_check_idlm_capability_before;
+uint64_t ndsv5_backup_mstatus;
 /********************************************************************/
 
 
@@ -348,6 +377,8 @@ extern int ndsv5_dcache_wb(struct target *target);
 extern int ndsv5_dcache_invalidate(struct target *target);
 extern int ndsv5_dcache_wb_invalidate(struct target *target);
 extern int ndsv5_icache_invalidate(struct target *target);
+//extern int ndsv5_redefine_CSR_name(struct target *target);
+//extern int ndsv5_redefine_GPR_FPU_name(struct target *target);
 
 #define NDSV5_COMMON_MAGIC (int)0xADE55555
 
@@ -370,6 +401,18 @@ struct reg *ndsv5_get_reg_by_CSR(struct target *target, uint32_t csr_id);
 uint64_t ndsv5_get_register_value(struct reg *reg);
 void ndsv5_set_register_value(struct reg *reg, uint64_t reg_value);
 const char *ndsv5_get_gdb_arch(struct target *target);
+
+int ndsv5_openocd_poll_one_hart(struct target *target, int hartid);
+int ndsv5_openocd_halt_one_hart(struct target *target, int hartid);
+int ndsv5_openocd_resume_one_hart(
+		struct target *target,
+		int current,
+		target_addr_t address,
+		int handle_breakpoints,
+		int debug_execution,
+		int hartid
+);
+int ndsv5_lm_slvp_support(struct target *target, target_addr_t address, uint32_t csr_id_lmb);
 
 
 

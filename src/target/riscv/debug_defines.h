@@ -1581,7 +1581,11 @@
 #define SHORTNAME_FIELD_OFFSET              0
 #define SHORTNAME_FIELD_LENGTH              8
 #define SHORTNAME_FIELD                     (0xffU << SHORTNAME_FIELD_OFFSET)
-#define AC_ACCESS_REGISTER                  None
+#if _NDS_V5_ONLY_
+	#define AC_ACCESS_REGISTER                  (0x17 | 0x80)
+#else /* _NDS_V5_ONLY_ */
+	#define AC_ACCESS_REGISTER                  None
+#endif /* _NDS_V5_ONLY_ */
 /*
 * This is 0 to indicate Access Register Command.
  */

@@ -141,7 +141,6 @@ struct ndsspi_flash_bank {
 	struct flash_device *dev;
 };
 extern int nds_targetburn_targetnum;
-extern int nds_targetburn_corenum;
 
 
 

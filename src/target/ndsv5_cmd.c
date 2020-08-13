@@ -221,7 +221,7 @@ __COMMAND_HANDLER(handle_ndsv5_query_capability_command)
 	/* According to eticket 16199: system bus access incomplete support by hardware,
 	 * so report 0 to AndeSight query(means:bus mode auto refresh not support),
 	 * before hardware incomplete support system bus access, ndsv5_sys_bus_supported is 0 */
-	uint32_t system_bus_access = ndsv5_sys_bus_supported;
+	uint32_t system_bus_access = nds_sys_bus_supported;
 
 	struct target *target = get_current_target(CMD_CTX);
 	if (riscv_debug_buffer_size(target) >= 7)
@@ -435,8 +435,8 @@ __COMMAND_HANDLER(handle_ndsv5_configure_command)
 		}
 	} else if (strcmp(CMD_ARGV[0], "dmi_quick_access") == 0) {
 		if (CMD_ARGC > 1)
-			COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], ndsv5_dmi_quick_access);
-		command_print(CMD, "configure: %s = 0x%08x", CMD_ARGV[0], ndsv5_dmi_quick_access);
+			COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], nds_dmi_quick_access);
+		command_print(CMD, "configure: %s = 0x%08x", CMD_ARGV[0], nds_dmi_quick_access);
 
 	} else if (strcmp(CMD_ARGV[0], "dmi_access_mem") == 0) {
 		if (CMD_ARGC > 1)
@@ -1538,7 +1538,7 @@ int ndsv5_script_do_custom_reset(struct target *target, FILE *script_fd)
 	if (script_fd == NULL)
 		return ERROR_FAIL;
 
-	ndsv5_skip_dmi = 1;
+	nds_skip_dmi = 1;
 	fseek(script_fd, 0, SEEK_SET);
 	while (fgets(line_buffer, 512, script_fd) != NULL) {
 		if ((line_buffer[0] == '#') || (line_buffer[0] == '\r'))
@@ -1565,7 +1565,7 @@ int ndsv5_script_do_custom_reset(struct target *target, FILE *script_fd)
 			command_run_line(cmd_ctx, line_buffer);
 		}
 	}
-	ndsv5_skip_dmi = 0;
+	nds_skip_dmi = 0;
 	fclose(script_fd);
 	return ERROR_OK;
 }
@@ -1581,13 +1581,13 @@ int ndsv5_script_dmi_read(uint16_t address, uint64_t *dmi_read_data)
 
 	ndsv5_cur_dmi_addr = address;
 	ndsv5_cur_script_status = 0;
-	ndsv5_skip_dmi = 1;
+	nds_skip_dmi = 1;
 	fseek(script_fd, 0, SEEK_SET);
 	NDS_INFO("ndsv5_script_dmi_read");
 	while (fgets(line_buffer, 512, script_fd) != NULL)
 		command_run_line(cmd_ctx, line_buffer);
 
-	ndsv5_skip_dmi = 0;
+	nds_skip_dmi = 0;
 	if (ndsv5_cur_script_status != 0) {
 		NDS_INFO("dmiread-0x%x ERROR", ndsv5_cur_dmi_addr);
 		return ERROR_FAIL;
@@ -1608,13 +1608,13 @@ int ndsv5_script_dmi_write(uint16_t address, uint64_t value)
 	ndsv5_cur_dmi_addr = address;
 	ndsv5_cur_dmi_data = value;
 	ndsv5_cur_script_status = 0;
-	ndsv5_skip_dmi = 1;
+	nds_skip_dmi = 1;
 	fseek(script_fd, 0, SEEK_SET);
 	NDS_INFO("address-0x%x = 0x%" PRIx64, address, value);
 	while (fgets(line_buffer, 512, script_fd) != NULL)
 		command_run_line(cmd_ctx, line_buffer);
 
-	ndsv5_skip_dmi = 0;
+	nds_skip_dmi = 0;
 	if (ndsv5_cur_script_status != 0) {
 		NDS_INFO("dmiwrite-0x%x ERROR", ndsv5_cur_dmi_addr);
 		return ERROR_FAIL;
@@ -1634,12 +1634,12 @@ int ndsv5_script_reg_read(uint64_t *value, uint32_t number)
 	ndsv5_cur_reg_number = number;
 	ndsv5_cur_reg_value = 0;
 	ndsv5_cur_script_status = 0;
-	ndsv5_skip_dmi = 1;
+	nds_skip_dmi = 1;
 	fseek(script_fd, 0, SEEK_SET);
 	while (fgets(line_buffer, 512, script_fd) != NULL)
 		command_run_line(cmd_ctx, line_buffer);
 
-	ndsv5_skip_dmi = 0;
+	nds_skip_dmi = 0;
 	if (ndsv5_cur_script_status != 0) {
 		NDS_INFO("reg-0x%x ERROR", ndsv5_cur_reg_number);
 		return ERROR_FAIL;
@@ -1662,12 +1662,12 @@ int ndsv5_script_reg_write(unsigned number, uint64_t value)
 	ndsv5_cur_reg_number = number;
 	ndsv5_cur_reg_value = value;
 	ndsv5_cur_script_status = 0;
-	ndsv5_skip_dmi = 1;
+	nds_skip_dmi = 1;
 	fseek(script_fd, 0, SEEK_SET);
 	while (fgets(line_buffer, 512, script_fd) != NULL)
 		command_run_line(cmd_ctx, line_buffer);
 
-	ndsv5_skip_dmi = 0;
+	nds_skip_dmi = 0;
 	if (ndsv5_cur_script_status != 0) {
 		NDS_INFO("reg-0x%x ERROR", ndsv5_cur_reg_number);
 		return ERROR_FAIL;
@@ -1765,52 +1765,54 @@ struct reg_arch_type ndsv5_vector_reg_access_type = {
 	.set = ndsv5_register_vector_set
 };
 
-struct nds_csr_reg {
-	uint32_t csr_id;
-	const char *name;
-};
+//struct nds_csr_reg {
+//	uint32_t csr_id;
+//	const char *name;
+//};
+//
+//static struct nds_csr_reg nds_all_csr[] = {
+//#define DECLARE_CSR(name, number) { number, #name },
+//#include "riscv/ndsv5_encoding.h"
+//#undef DECLARE_CSR
+//	{ 0, NULL},
+//};
 
-static struct nds_csr_reg nds_all_csr[] = {
-#define DECLARE_CSR(name, number) { number, #name },
-#include "riscv/ndsv5_encoding.h"
-#undef DECLARE_CSR
-	{ 0, NULL},
-};
-
-int ndsv5_redefine_CSR_name(struct target *target)
-{
-	uint32_t i;
-	NDS_INFO("%s", __func__);
-
-	/* disable all CSR register */
-	for (i = GDB_REGNO_CSR0; i <= GDB_REGNO_CSR4095; i++)
-		target->reg_cache->reg_list[i].exist = false;
-
-	for (i = 0; nds_all_csr[i].name != NULL; i++) {
-		NDS_INFO("%d, %s", nds_all_csr[i].csr_id, nds_all_csr[i].name);
-		uint32_t csr_id = GDB_REGNO_CSR0 + nds_all_csr[i].csr_id;
-		target->reg_cache->reg_list[csr_id].exist = true;
-
-		if (nds_reg_symbolic_name == 1)
-			target->reg_cache->reg_list[csr_id].name = nds_all_csr[i].name;
-	}
-
-/*
-	while(1) {
-		if ((p_nds_csr->csr_id > 4095) ||
-			(p_nds_csr->name == NULL)) {
-			break;
-		}
-		NDS_INFO("%d, %s", p_nds_csr->csr_id, p_nds_csr->name);
-		csr_id = GDB_REGNO_CSR0 + p_nds_csr->csr_id;
-		target->reg_cache->reg_list[csr_id].exist = true;
-		if (nds_reg_symbolic_name == 1)
-			target->reg_cache->reg_list[csr_id].name = p_nds_csr->name;
-		p_nds_csr ++;
-	}
-*/
-	return ERROR_OK;
-}
+//int ndsv5_redefine_CSR_name(struct target *target)
+//{
+//	uint32_t i;
+//	NDS_INFO("%s", __func__);
+//
+//	/* disable all CSR register */
+//	for (i = GDB_REGNO_CSR0; i <= GDB_REGNO_CSR4095; i++)
+//		target->reg_cache->reg_list[i].exist = false;
+//
+//	for (i = 0; nds_all_csr[i].name != NULL; i++) {
+//		NDS_INFO("define: %d, %s", nds_all_csr[i].csr_id, nds_all_csr[i].name);
+//		uint32_t csr_id = GDB_REGNO_CSR0 + nds_all_csr[i].csr_id;
+//		target->reg_cache->reg_list[csr_id].exist = true;
+//
+//		if (nds_reg_symbolic_name == 1) {
+//			target->reg_cache->reg_list[csr_id].name = nds_all_csr[i].name;
+//			NDS_INFO("redefine: %d, %s", nds_all_csr[i].csr_id, nds_all_csr[i].name);
+//		}
+//	}
+//
+///*
+//	while(1) {
+//		if ((p_nds_csr->csr_id > 4095) ||
+//			(p_nds_csr->name == NULL)) {
+//			break;
+//		}
+//		NDS_INFO("%d, %s", p_nds_csr->csr_id, p_nds_csr->name);
+//		csr_id = GDB_REGNO_CSR0 + p_nds_csr->csr_id;
+//		target->reg_cache->reg_list[csr_id].exist = true;
+//		if (nds_reg_symbolic_name == 1)
+//			target->reg_cache->reg_list[csr_id].name = p_nds_csr->name;
+//		p_nds_csr ++;
+//	}
+//*/
+//	return ERROR_OK;
+//}
 
 char *ndsv5_get_CSR_name(struct target *target, uint32_t csr_id)
 {
@@ -1854,24 +1856,24 @@ char *reg_arch_name[] = {
 };
 
 /* for gdb : default is abi name zero->x0 */
-char **gpr_and_fpu_name = reg_arch_name;
-int ndsv5_redefine_GPR_FPU_name(struct target *target)
-{
-	LOG_DEBUG("%s", __func__);
-	if (nds_reg_symbolic_name == 1) {
-		LOG_DEBUG("change to abi name");
-		gpr_and_fpu_name = reg_abi_name;
-		uint32_t i = 0;
-		while (1) {
-			if (i >= 65)
-				break;
-			NDS_INFO("%d, %s", i, gpr_and_fpu_name[i]);
-			target->reg_cache->reg_list[i].name = gpr_and_fpu_name[i];
-			i++;
-		}
-	}
-	return ERROR_OK;
-}
+char **gpr_and_fpu_name = reg_abi_name;
+//int ndsv5_redefine_GPR_FPU_name(struct target *target)
+//{
+//	LOG_DEBUG("%s", __func__);
+//	if (nds_reg_symbolic_name == 1) {
+//		LOG_DEBUG("change to abi name");
+//		gpr_and_fpu_name = reg_abi_name;
+//		uint32_t i = 0;
+//		while (1) {
+//			if (i >= 65)
+//				break;
+//			NDS_INFO("%d, %s", i, gpr_and_fpu_name[i]);
+//			target->reg_cache->reg_list[i].name = gpr_and_fpu_name[i];
+//			i++;
+//		}
+//	}
+//	return ERROR_OK;
+//}
 
 void addtional_pm_counters(struct target *target, int start)
 {
@@ -2725,7 +2727,6 @@ uint64_t nds_support_syscall_id[NDS_EBREAK_NUMS] = {
 	NDS_EBREAK_GETTIMEOFDAY,
 };
 
-extern bool rv32e;
 int ndsv5_virtual_hosting_check(struct target *target)
 {
 	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
@@ -2788,10 +2789,10 @@ int ndsv5_virtual_hosting_check(struct target *target)
 			if (pre == 0x01f01013 && ebreak == 0x00100073 && (post == 0x40505013 || post == 0x41505013)) {
 				if (post == 0x40505013) {
 					/* for RV32I/RV64I, use $a7 */
-					reg_syscall = register_get_by_name(target->reg_cache, gpr_and_fpu_name[17], 1);
+					reg_syscall = register_get_by_name(target->reg_cache, "a7", 1);
 				} else {
 					/* for RV32E, use $t0 */
-					reg_syscall = register_get_by_name(target->reg_cache, gpr_and_fpu_name[5], 1);
+					reg_syscall = register_get_by_name(target->reg_cache, "t0", 1);
 				}
 			}
 		}
@@ -2799,7 +2800,7 @@ int ndsv5_virtual_hosting_check(struct target *target)
 		/* rv32e cannot access $a7
 		 * If not hit the new implementation, use old way(read $a7 directly) */
 		if (reg_syscall == NULL && rv32e == false)
-			reg_syscall = register_get_by_name(target->reg_cache, gpr_and_fpu_name[17], 1);
+			reg_syscall = register_get_by_name(target->reg_cache, "a7", 1);
 
 		if (reg_syscall != NULL) {
 			reg_syscall->type->get(reg_syscall);

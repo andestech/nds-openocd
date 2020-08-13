@@ -352,6 +352,19 @@ struct trigger {
 	bool read, write, execute;
 	int unique_id;
 };
+
+enum riscv_poll_hart {
+	RPH_NO_CHANGE,
+	RPH_DISCOVERED_HALTED,
+	RPH_DISCOVERED_RUNNING,
+	RPH_ERROR
+};
+
+/********************************************************************/
+/* function/var. from riscv.c                                       */
+/********************************************************************/
+enum riscv_poll_hart riscv_poll_hart(struct target *target, int hartid);
+/********************************************************************/
 #endif /* _NDS_V5_ONLY_ */
 
 #endif

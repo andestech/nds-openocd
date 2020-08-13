@@ -2691,6 +2691,7 @@ DECLARE_CAUSE("store page fault", CAUSE_STORE_PAGE_FAULT)
 
 #if _NDS_V5_ONLY_
 #define MATCH_BFOZ 0x205b
+#define DCSR_STEPIE         (1<<11)
 
 #include "ndsv5_encoding.h"
 #endif /* _NDS_V5_ONLY_ */

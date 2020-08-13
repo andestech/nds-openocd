@@ -3022,11 +3022,11 @@ int nds32_halt(struct target *target)
 }
 
 extern int nds32_tracer_polling(struct target *target);
-extern uint32_t ndsv5_skip_dmi;
+extern uint32_t nds_skip_dmi;
 /* poll current target status */
 int nds32_poll(struct target *target)
 {
-	if (ndsv5_skip_dmi == 1)
+	if (nds_skip_dmi == 1)
 		return ERROR_OK;
 
 	struct nds32 *nds32 = target_to_nds32(target);

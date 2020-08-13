@@ -28,6 +28,13 @@
 #include "asm.h"
 #include "batch.h"
 
+#if _NDS_V5_ONLY_
+#include "ndsv5.h"
+#include "ndsv5-013.h"
+#include "target/nds32_log.h"
+#endif
+
+
 #define DMI_DATA1 (DMI_DATA0 + 1)
 #define DMI_PROGBUF1 (DMI_PROGBUF0 + 1)
 
@@ -103,6 +110,9 @@ typedef enum {
 	DMI_OP_WRITE = 2
 } dmi_op_t;
 typedef enum {
+#if _NDS_DMI_CHECK_TIMEOUT_
+	DMI_STATUS_CHECK_TIMEOUT = 0xFF,
+#endif /* _NDS_DMI_CHECK_TIMEOUT_ */
 	DMI_STATUS_SUCCESS = 0,
 	DMI_STATUS_FAILED = 2,
 	DMI_STATUS_BUSY = 3
@@ -357,6 +367,18 @@ static void decode_dmi(char *text, unsigned address, unsigned data)
 		{ DMI_SBCS, DMI_SBCS_SBACCESS32, "sbaccess32" },
 		{ DMI_SBCS, DMI_SBCS_SBACCESS16, "sbaccess16" },
 		{ DMI_SBCS, DMI_SBCS_SBACCESS8, "sbaccess8" },
+#if _NDS_V5_ONLY_
+		/*{ AC_ACCESS_REGISTER, DMI_COMMAND_AC_QUICK_ACCESS, "quick" },*/
+		{ AC_ACCESS_REGISTER, AC_ACCESS_REGISTER_POSTEXEC, "postexec" },
+		{ AC_ACCESS_REGISTER, AC_ACCESS_REGISTER_AARSIZE, "size" },
+		{ AC_ACCESS_REGISTER, AC_ACCESS_REGISTER_TRANSFER, "transfer" },
+		{ AC_ACCESS_REGISTER, AC_ACCESS_REGISTER_WRITE, "write" },
+		{ AC_ACCESS_REGISTER, AC_ACCESS_REGISTER_REGNO, "regno" },
+		{ DMI_DMCS2, DMI_DMCS2_HGSELECT, "hgselect" },
+		{ DMI_DMCS2, DMI_DMCS2_HGWRITE, "hgwrite" },
+		{ DMI_DMCS2, DMI_DMCS2_HALTGROUP, "haltgroup" },
+		{ DMI_DMCS2, DMI_DMCS2_EXTTRIGGER, "exttrigger" },
+#endif /* _NDS_V5_ONLY_ */
 	};
 
 	text[0] = 0;
@@ -384,8 +406,13 @@ static void dump_field(int idle, const struct scan_field *field)
 	static const char * const op_string[] = {"-", "r", "w", "?"};
 	static const char * const status_string[] = {"+", "?", "F", "b"};
 
+#if _NDS_V5_ONLY_
+	if (debug_level < LOG_LVL_INFO)
+		return;
+#else /* _NDS_V5_ONLY_ */
 	if (debug_level < LOG_LVL_DEBUG)
 		return;
+#endif /* _NDS_V5_ONLY_ */
 
 	uint64_t out = buf_get_u64(field->out_value, 0, field->num_bits);
 	unsigned int out_op = get_field(out, DTM_DMI_OP);
@@ -480,8 +507,10 @@ static dmi_status_t dmi_scan(struct target *target, uint32_t *address_in,
 	RISCV_INFO(r);
 	unsigned num_bits = info->abits + DTM_DMI_OP_LENGTH + DTM_DMI_DATA_LENGTH;
 	size_t num_bytes = (num_bits + 7) / 8;
-	uint8_t in[num_bytes];
-	uint8_t out[num_bytes];
+	//uint8_t in[num_bytes];
+	//uint8_t out[num_bytes];
+	uint8_t in[8] = {0};
+	uint8_t out[8];
 	struct scan_field field = {
 		.num_bits = num_bits,
 		.out_value = out,
@@ -497,13 +526,16 @@ static dmi_status_t dmi_scan(struct target *target, uint32_t *address_in,
 		}
 	}
 
-	memset(in, 0, num_bytes);
+	//memset(in, 0, num_bytes);
 
 	assert(info->abits != 0);
 
-	buf_set_u32(out, DTM_DMI_OP_OFFSET, DTM_DMI_OP_LENGTH, op);
-	buf_set_u32(out, DTM_DMI_DATA_OFFSET, DTM_DMI_DATA_LENGTH, data_out);
-	buf_set_u32(out, DTM_DMI_ADDRESS_OFFSET, info->abits, address_out);
+	//buf_set_u32(out, DTM_DMI_OP_OFFSET, DTM_DMI_OP_LENGTH, op);
+	//buf_set_u32(out, DTM_DMI_DATA_OFFSET, DTM_DMI_DATA_LENGTH, data_out);
+	///buf_set_u32(out, DTM_DMI_ADDRESS_OFFSET, info->abits, address_out);
+	buf_set_u64(out, DTM_DMI_OP_OFFSET, DTM_DMI_OP_LENGTH, op);
+	buf_set_u64(out, DTM_DMI_DATA_OFFSET, DTM_DMI_DATA_LENGTH, data_out);
+	buf_set_u64(out, DTM_DMI_ADDRESS_OFFSET, info->abits, address_out);
 
 	/* I wanted to place this code in a different function, but the way JTAG command
 	   queueing works in the jtag handling functions, the scan fields either have to be
@@ -519,6 +551,12 @@ static dmi_status_t dmi_scan(struct target *target, uint32_t *address_in,
 	}
 
 	int idle_count = info->dmi_busy_delay;
+
+#if _NDS_V5_ONLY_
+	if ( idle_count < info->dtmcs_idle )
+		idle_count = info->dtmcs_idle;
+#endif /* _NDS_V5_ONLY_ */
+
 	if (exec)
 		idle_count += info->ac_busy_delay;
 
@@ -541,7 +579,18 @@ static dmi_status_t dmi_scan(struct target *target, uint32_t *address_in,
 
 	if (address_in)
 		*address_in = buf_get_u32(in, DTM_DMI_ADDRESS_OFFSET, info->abits);
+
+#if _NDS_V5_ONLY_
+	/* Check if target hang or disconnect */
+	uint32_t in_value = buf_get_u32(in, 0, 32);
+	if (in_value == 0xFFFFFFFF) {
+		NDS32_LOG(NDS32_ERRMSG_TARGET_DISCONNECT);
+		exit(-1);
+	}
+#endif /* _NDS_V5_ONLY_ */
+
 	dump_field(idle_count, &field);
+
 	return buf_get_u32(in, DTM_DMI_OP_OFFSET, DTM_DMI_OP_LENGTH);
 }
 
@@ -609,6 +658,9 @@ static int dmi_op_timeout(struct target *target, uint32_t *data_in,
 
 	if (status != DMI_STATUS_SUCCESS) {
 		LOG_ERROR("Failed %s at 0x%x; status=%d", op_name, address, status);
+#if _NDS_DISABLE_ABORT_
+		NDS32_LOG("Failed %s at 0x%x; status=%d", op_name, address, status);
+#endif
 		return ERROR_FAIL;
 	}
 
@@ -792,6 +844,60 @@ static int execute_abstract_command(struct target *target, uint32_t command)
 		}
 	}
 
+#if _NDS_JTAG_SCANS_OPTIMIZE_
+	uint32_t cs = 0;
+	if (nds_jtag_scans_optimize > 0) {
+		if (write_debug_buffer_batch == NULL) {
+			write_debug_buffer_batch = riscv_batch_alloc(target, nds_jtag_max_scans, info->dmi_busy_delay + info->ac_busy_delay);
+		}
+		riscv_batch_add_dmi_write(write_debug_buffer_batch, DMI_COMMAND, command);
+		size_t index_ABSTRACTCS = riscv_batch_add_dmi_read(write_debug_buffer_batch, DMI_ABSTRACTCS);
+
+#if _NDS_MEM_Q_ACCESS_
+		if (nds_dmi_quick_access_ena)
+			index_ABSTRACTCS = riscv_batch_add_dmi_read(write_debug_buffer_batch, DMI_ABSTRACTCS);
+#endif /* _NDS_MEM_Q_ACCESS_ */
+
+		uint32_t retry_cnt = 0;
+		while (retry_cnt < ndsv5_dmi_busy_retry_times) {
+			retry_cnt ++;
+			if (riscv_batch_run(write_debug_buffer_batch) != ERROR_OK) {
+				LOG_DEBUG("riscv_batch_run_FAIL");
+				increase_dmi_busy_delay(target);
+				riscv013_clear_abstract_error(target);
+				write_debug_buffer_batch->idle_count = info->dmi_busy_delay + info->ac_busy_delay;
+				if (retry_cnt == ndsv5_dmi_busy_retry_times) {
+					LOG_ERROR("please set dmi_busy_retry_times > %d to increase delay cycles", ndsv5_dmi_busy_retry_times);
+					return ERROR_FAIL;
+				}
+			} else {
+				break;
+			}
+		}
+		uint64_t dmi_out = riscv_batch_get_dmi_read(write_debug_buffer_batch, index_ABSTRACTCS);
+		riscv_batch_free(write_debug_buffer_batch);
+		write_debug_buffer_batch = NULL;
+
+		cs = (uint32_t)buf_get_u64((uint8_t *)&dmi_out, DTM_DMI_DATA_OFFSET, DTM_DMI_DATA_LENGTH);
+		if (get_field(cs, DMI_ABSTRACTCS_BUSY) != 0) {
+			wait_for_idle(target, (uint32_t *)&cs);
+		}
+	} else {
+		dmi_write(target, DMI_COMMAND, command);
+		uint32_t abstractcs = 0;
+		wait_for_idle(target, &abstractcs);
+		dmi_read(target, &cs, DMI_ABSTRACTCS);
+	}
+
+	info->cmderr = get_field(cs, DMI_ABSTRACTCS_CMDERR);
+	if (info->cmderr != 0) {
+		LOG_DEBUG("command 0x%x failed; abstractcs=0x%x", command, cs);
+		/* Clear the error. */
+		dmi_write(target, DMI_ABSTRACTCS, DMI_ABSTRACTCS_CMDERR);
+		return ERROR_FAIL;
+	}
+#else /* _NDS_JTAG_SCANS_OPTIMIZE_ */
+
 	if (dmi_write_exec(target, DMI_COMMAND, command, false) != ERROR_OK)
 		return ERROR_FAIL;
 
@@ -805,6 +911,7 @@ static int execute_abstract_command(struct target *target, uint32_t command)
 		dmi_write(target, DMI_ABSTRACTCS, DMI_ABSTRACTCS_CMDERR);
 		return ERROR_FAIL;
 	}
+#endif /* _NDS_JTAG_SCANS_OPTIMIZE_ */
 
 	return ERROR_OK;
 }
@@ -812,6 +919,11 @@ static int execute_abstract_command(struct target *target, uint32_t command)
 static riscv_reg_t read_abstract_arg(struct target *target, unsigned index,
 		unsigned size_bits)
 {
+#if _NDS_V5_ONLY_
+	if ((index >= GDB_REGNO_FPR0) && (index <= GDB_REGNO_FPR31))
+		size_bits = 64;
+#endif
+
 	riscv_reg_t value = 0;
 	uint32_t v;
 	unsigned offset = index * size_bits / 32;
@@ -833,6 +945,11 @@ static riscv_reg_t read_abstract_arg(struct target *target, unsigned index,
 static int write_abstract_arg(struct target *target, unsigned index,
 		riscv_reg_t value, unsigned size_bits)
 {
+#if _NDS_V5_ONLY_
+	if ((index >= GDB_REGNO_FPR0) && (index <= GDB_REGNO_FPR31))
+		size_bits = 64;
+#endif
+
 	unsigned offset = index * size_bits / 32;
 	switch (size_bits) {
 		default:
@@ -897,6 +1014,11 @@ static int register_read_abstract(struct target *target, uint64_t *value,
 {
 	RISCV013_INFO(info);
 
+#if _NDS_IDE_MESSAGE_
+	if (number > GDB_REGNO_CSR4095)
+		NDS32_LOG("Unsupported register (enum gdb_regno)(%d)", number);
+#endif
+
 	if (number >= GDB_REGNO_FPR0 && number <= GDB_REGNO_FPR31 &&
 			!info->abstract_read_fpr_supported)
 		return ERROR_FAIL;
@@ -906,6 +1028,12 @@ static int register_read_abstract(struct target *target, uint64_t *value,
 	/* The spec doesn't define abstract register numbers for vector registers. */
 	if (number >= GDB_REGNO_V0 && number <= GDB_REGNO_V31)
 		return ERROR_FAIL;
+
+#if _NDS_V5_ONLY_
+	if ((number >= GDB_REGNO_FPR0) && (number <= GDB_REGNO_FPR31))
+		size = 64;
+	//read_abstract_reg_number = number;
+#endif
 
 	uint32_t command = access_register_command(target, number, size,
 			AC_ACCESS_REGISTER_TRANSFER);
@@ -941,6 +1069,15 @@ static int register_write_abstract(struct target *target, uint32_t number,
 	if (number >= GDB_REGNO_CSR0 && number <= GDB_REGNO_CSR4095 &&
 			!info->abstract_write_csr_supported)
 		return ERROR_FAIL;
+
+#if _NDS_IDE_MESSAGE_
+	if (number > GDB_REGNO_CSR4095)
+		NDS32_LOG("Unsupported register (enum gdb_regno)(%d)", number);
+
+	if ((number >= GDB_REGNO_FPR0) && (number <= GDB_REGNO_FPR31))
+		size = 64;
+#endif
+
 
 	uint32_t command = access_register_command(target, number, size,
 			AC_ACCESS_REGISTER_TRANSFER |
@@ -1294,8 +1431,21 @@ static int register_write_direct(struct target *target, unsigned number,
 	RISCV013_INFO(info);
 	RISCV_INFO(r);
 
+#if _NDS_V5_ONLY_
+	char in_text[500];
+	in_text[0] = 0x0;
+	ndsv5_decode_csr(in_text, number, value);
+	NDS_INFO("[%s] hart[%d] reg[%s] <- 0x%" PRIx64 " %s", target->tap->dotted_name, riscv_current_hartid(target),
+			gdb_regno_name(number), value, in_text);
+#else /* _NDS_V5_ONLY_ */
 	LOG_DEBUG("{%d} %s <- 0x%" PRIx64, riscv_current_hartid(target),
 			gdb_regno_name(number), value);
+#endif /* _NDS_V5_ONLY_ */
+
+#if _NDS_USE_SCRIPT_
+	if (ndsv5_script_reg_write(number, value) == ERROR_OK)
+		return ERROR_OK;
+#endif /* _NDS_USE_SCRIPT_ */
 
 	int result = register_write_abstract(target, number, value,
 			register_size(target, number));
@@ -1364,6 +1514,9 @@ static int register_write_direct(struct target *target, unsigned number,
 			riscv_program_csrw(&program, S0, number);
 		} else {
 			LOG_ERROR("Unsupported register (enum gdb_regno)(%d)", number);
+#if _NDS_DISABLE_ABORT_
+			NDS32_LOG("Unsupported register (enum gdb_regno)(%d)", number);
+#endif
 			return ERROR_FAIL;
 		}
 	}
@@ -1410,6 +1563,11 @@ static int register_read_direct(struct target *target, uint64_t *value, uint32_t
 {
 	RISCV013_INFO(info);
 	RISCV_INFO(r);
+
+#if _NDS_USE_SCRIPT_
+	if (ndsv5_script_reg_read(value, number) == ERROR_OK)
+		return ERROR_OK;
+#endif
 
 	int result = register_read_abstract(target, value, number,
 			register_size(target, number));
@@ -1487,8 +1645,16 @@ static int register_read_direct(struct target *target, uint64_t *value, uint32_t
 	}
 
 	if (result == ERROR_OK) {
+#if _NDS_V5_ONLY_
+		char in_text[500];
+		in_text[0] = 0x0;
+		ndsv5_decode_csr(in_text, number, *value);
+		NDS_INFO("[%s] hart[%d] reg[%s] = 0x%" PRIx64 " %s", target->tap->dotted_name, riscv_current_hartid(target),
+				gdb_regno_name(number), *value, in_text);
+#else /* _NDS_V5_ONLY_ */
 		LOG_DEBUG("{%d} %s = 0x%" PRIx64, riscv_current_hartid(target),
 				gdb_regno_name(number), *value);
+#endif /* _NDS_V5_ONLY_ */
 	}
 
 	return result;
@@ -1523,6 +1689,31 @@ static void deinit_target(struct target *target)
 {
 	LOG_DEBUG("riscv_deinit_target()");
 	riscv_info_t *info = (riscv_info_t *) target->arch_info;
+
+#if _NDS_V5_ONLY_
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	if (target_was_examined(target)) {
+		if (nds32->attached) {
+			LOG_DEBUG("deinit_target(): gdb_detach process, resume dcsr");
+			if (target->state != TARGET_HALTED)
+				target_halt(target);
+
+			/* clear all breakpoints & watchpoints */
+			breakpoint_clear_target(nds32->target);
+			watchpoint_clear_target(nds32->target);
+
+			nds32->gdb_run_mode = RUN_MODE_DEBUG;
+
+			/* Set attached to false before resume */
+			nds32->attached = false;
+
+			/* free run in debug mode */
+			target_resume(target, 1, 0, 0, 0);
+		}
+	}
+#endif
+
+
 	free(info->version_specific);
 	/* TODO: free register arch_info */
 	info->version_specific = NULL;
@@ -1589,6 +1780,28 @@ static int examine(struct target *target)
 		dm->was_reset = true;
 	}
 
+#if _NDS_V5_ONLY_
+	/* -H: reset as init */
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	if (!target_was_examined(target)) {
+		if (nds32->reset_halt_as_examine) {
+			if (nds_script_custom_reset_halt) {
+				ndsv5_script_do_custom_reset(target, nds_script_custom_reset_halt);
+			} else if (!reset_halt){
+				ndsv5_reset_halt_as_examine(target);
+			}
+			NDS32_LOG(NDS32_MSG_HW_RESET_HOLD);
+
+			/* reset info->dmi_busy_delay=info->dtmcontrol_idle
+			   if info->dmi_busy_delay was incease by the 1st dmi_scan*/
+			info->dmi_busy_delay = v5_dmi_busy_delay_count;
+		}
+	}
+
+	LOG_DEBUG("info->dmi_busy_delay: 0x%08x", info->dmi_busy_delay);
+#endif /* _NDS_V5_ONLY_ */
+
+
 	dmi_write(target, DMI_DMCONTROL, DMI_DMCONTROL_HARTSELLO |
 			DMI_DMCONTROL_HARTSELHI | DMI_DMCONTROL_DMACTIVE |
 			DMI_DMCONTROL_HASEL);
@@ -1646,6 +1859,22 @@ static int examine(struct target *target)
 	if (dmi_read(target, &info->sbcs, DMI_SBCS) != ERROR_OK)
 		return ERROR_FAIL;
 
+#if _NDS_V5_ONLY_
+	ndsv5_dis_cache_busmode = 1;
+	if (info->sbcs & 0x1F) {
+		int sb_version = get_field(info->sbcs, DMI_SBCS_SBVERSION);
+		if ((sb_version == 0) || (sb_version == 1)) {
+			/* According to e-16199, default no support system bus access,
+			   so ndsv5_system_bus_access default value is 0 */
+			if (ndsv5_system_bus_access == 1) {
+				nds_sys_bus_supported = 1;
+				ndsv5_dis_cache_busmode = 0;
+			}
+		}
+	}
+	LOG_DEBUG("info->sbcs = 0x%x, nds_sys_bus_supported = 0x%x", (int)info->sbcs, nds_sys_bus_supported);
+#endif
+
 	/* Check that abstract data registers are accessible. */
 	uint32_t abstractcs;
 	if (dmi_read(target, &abstractcs, DMI_ABSTRACTCS) != ERROR_OK)
@@ -1674,7 +1903,15 @@ static int examine(struct target *target)
 
 	/* Before doing anything else we must first enumerate the harts. */
 	if (dm->hart_count < 0) {
+#if _NDS_V5_ONLY_
+		int user_def_hart_count = (int)target->corenums;
+		if (user_def_hart_count == 0)
+			user_def_hart_count = RISCV_MAX_HARTS;
+		LOG_DEBUG("user_def_hart_count = 0x%x", (int)user_def_hart_count);
+		for (int i = 0; i < user_def_hart_count; ++i) {
+#else /* _NDS_V5_ONLY_ */
 		for (int i = 0; i < MIN(RISCV_MAX_HARTS, 1 << info->hartsellen); ++i) {
+#endif /* _NDS_V5_ONLY_ */
 			r->current_hartid = i;
 			if (riscv013_select_current_hart(target) != ERROR_OK)
 				return ERROR_FAIL;
@@ -1709,6 +1946,44 @@ static int examine(struct target *target)
 		if (riscv013_select_current_hart(target) != ERROR_OK)
 			return ERROR_FAIL;
 
+#if _NDS_V5_ONLY_
+		uint32_t s;
+		dmi_read(target, &s, DMI_DMSTATUS);
+		if(get_field(s, DMI_DMSTATUS_ANYHAVERESET)) {
+			uint32_t control;
+			dmi_read(target, &control, DMI_DMCONTROL);
+			control = set_field(control, DMI_DMCONTROL_ACKHAVERESET, 1);
+			dmi_write(target, DMI_DMCONTROL, control);
+		}
+
+		if (!riscv_is_halted(target)) {
+			if (riscv013_halt_go(target) != ERROR_OK) {
+				if (riscv_rtos_enabled(target)) {
+					if (i != 0) {
+						LOG_DEBUG("riscv_rtos_enabled, riscv013_halt_current_hart %d FAIL, but return OK", i);
+						return ERROR_OK;
+					}
+				}
+				r->debug_buffer_size[i] = info->progbufsize;
+				r->xlen[i] = 0;
+				LOG_DEBUG("riscv013_halt_current_hart FAIL return");
+				return ERROR_FAIL;
+			}
+		}
+
+		/* Enable halt-on-reset */
+		if ( nds_halt_on_reset == 1 ) {
+			if(get_field(s, DMI_DMSTATUS_HASRESETHALTREQ)) {
+				uint32_t control;
+				dmi_read(target, &control, DMI_DMCONTROL);
+				control = set_field(control, DMI_DMCONTROL_SETRESETHALTREQ, 1);
+				dmi_write(target, DMI_DMCONTROL, control);
+				LOG_DEBUG("hart [%s] %d: halt-on-reset is on!", target->tap->dotted_name, i);
+			} else {
+				LOG_ERROR("The Debug Module doesn't supports halt-on-reset functionality!!");
+			}
+		}
+#else /* _NDS_V5_ONLY_ */
 		bool halted = riscv_is_halted(target);
 		if (!halted) {
 			if (riscv013_halt_go(target) != ERROR_OK) {
@@ -1716,6 +1991,7 @@ static int examine(struct target *target)
 				return ERROR_FAIL;
 			}
 		}
+#endif /* _NDS_V5_ONLY_ */
 
 		/* Without knowing anything else we can at least mess with the
 		 * program buffer. */
@@ -1724,18 +2000,25 @@ static int examine(struct target *target)
 		int result = register_read_abstract(target, NULL, GDB_REGNO_S0, 64);
 		if (result == ERROR_OK)
 			r->xlen[i] = 64;
-		else
+		else {
+#if _NDS_V5_ONLY_
+			riscv013_clear_abstract_error(target);
+#endif /* _NDS_V5_ONLY_ */
 			r->xlen[i] = 32;
+		}
 
 		if (register_read(target, &r->misa[i], GDB_REGNO_MISA)) {
 			LOG_ERROR("Fatal: Failed to read MISA from hart %d.", i);
 			return ERROR_FAIL;
 		}
 
+#if _NDS_V5_ONLY_
+#else /* _NDS_V5_ONLY_ */
 		if (riscv_supports_extension(target, i, 'V')) {
 			if (discover_vlenb(target, i) != ERROR_OK)
 				return ERROR_FAIL;
 		}
+#endif /* _NDS_V5_ONLY_ */
 
 		/* Now init registers based on what we discovered. */
 		if (riscv_init_registers(target) != ERROR_OK)
@@ -1743,11 +2026,39 @@ static int examine(struct target *target)
 
 		/* Display this as early as possible to help people who are using
 		 * really slow simulators. */
+#if _NDS_V5_ONLY_
+		LOG_DEBUG(" [%s] hart %d: XLEN=%d, misa=0x%" PRIx64, target->tap->dotted_name, i, r->xlen[i],
+				r->misa[i]);
+#else /* _NDS_V5_ONLY_ */
 		LOG_DEBUG(" hart %d: XLEN=%d, misa=0x%" PRIx64, i, r->xlen[i],
 				r->misa[i]);
+#endif /* _NDS_V5_ONLY_ */
 
+#if _NDS_V5_ONLY_
+		/* Init V */
+		if (riscv_supports_extension(target, i, 'V'))
+			ndsv5_get_vector_VLMAX(target);
+
+		/* Check if rv32e for target burn*/
+		rv32e = false;
+		if (riscv_supports_extension(target, i, 'E')) {
+			rv32e = true;
+			LOG_DEBUG("target is rv32e");
+		}
+
+		if(nds32->reset_halt_as_examine) {
+			LOG_DEBUG("reset_halt_as_examine, target->state: 0x%08x", target->state);
+			target->debug_reason = DBG_REASON_DBGRQ;
+			target->state = TARGET_HALTED;
+			LOG_DEBUG("reset_halt_as_examine, target->state: 0x%08x", target->state);
+		} else {
+			riscv013_step_or_resume_current_hart(target, false, false);
+			target->state = TARGET_RUNNING;
+		}
+#else /* _NDS_V5_ONLY_ */
 		if (!halted)
 			riscv013_step_or_resume_current_hart(target, false, false);
+#endif /* _NDS_V5_ONLY_ */
 	}
 
 	target_set_examined(target);
@@ -1770,12 +2081,21 @@ static int examine(struct target *target)
 	LOG_INFO("Examined RISC-V core; found %d harts",
 			riscv_count_harts(target));
 	for (int i = 0; i < riscv_count_harts(target); ++i) {
+#if _NDS_V5_ONLY_
+		if (riscv_hart_enabled(target, i)) {
+			LOG_INFO(" [%s] hart %d: XLEN=%d, %d triggers", target->tap->dotted_name, i, r->xlen[i],
+					r->trigger_count[i]);
+		} else {
+			LOG_INFO(" [%s] hart %d: currently disabled", target->tap->dotted_name, i);
+		}
+#else /* _NDS_V5_ONLY_ */
 		if (riscv_hart_enabled(target, i)) {
 			LOG_INFO(" hart %d: XLEN=%d, misa=0x%" PRIx64, i, r->xlen[i],
 					r->misa[i]);
 		} else {
 			LOG_INFO(" hart %d: currently disabled", i);
 		}
+#endif /* _NDS_V5_ONLY_ */
 	}
 	return ERROR_OK;
 }
@@ -1997,6 +2317,20 @@ static int init_target(struct command_context *cmd_ctx,
 	LOG_DEBUG("init");
 	riscv_info_t *generic_info = (riscv_info_t *) target->arch_info;
 
+#if _NDS_V5_ONLY_
+	LOG_DEBUG("ACE init");
+	if (global_acr_reg_count_v5 != 0) {
+		acr_reg_count_v5 = *global_acr_reg_count_v5;
+		LOG_DEBUG("*global_acr_reg_count_v5 = %d", *global_acr_reg_count_v5);
+	}
+	if (global_acr_type_count_v5 != 0) {
+		acr_type_count_v5 = *global_acr_type_count_v5;
+		LOG_DEBUG("*global_acr_type_count_v5 = %d", *global_acr_type_count_v5);
+	}
+	LOG_DEBUG("acr_reg_count_v5 = %d", acr_reg_count_v5);
+	LOG_DEBUG("acr_type_count_v5 = %d", acr_type_count_v5);
+#endif
+
 	generic_info->get_register = &riscv013_get_register;
 	generic_info->set_register = &riscv013_set_register;
 	generic_info->get_register_buf = &riscv013_get_register_buf;
@@ -2033,7 +2367,11 @@ static int init_target(struct command_context *cmd_ctx,
 
 	info->progbufsize = -1;
 
+#if _NDS_V5_ONLY_
+	info->dmi_busy_delay = v5_dmi_busy_delay_count;
+#else /* _NDS_V5_ONLY_ */
 	info->dmi_busy_delay = 0;
+#endif /* _NDS_V5_ONLY_ */
 	info->bus_master_read_delay = 0;
 	info->bus_master_write_delay = 0;
 	info->ac_busy_delay = 0;
@@ -2053,11 +2391,34 @@ static int init_target(struct command_context *cmd_ctx,
 
 static int assert_reset(struct target *target)
 {
+#if _NDS_V5_ONLY_
+	/* Disable halt-on-reset when reset-run */
+	if ((nds_halt_on_reset == 1) && (target->reset_halt == 0))
+		ndsv5_haltonreset(target, 0);
+
+	if ((nds_script_custom_reset_halt) && (target->reset_halt == 1)) {
+		ndsv5_script_do_custom_reset(target, nds_script_custom_reset_halt);
+		return ERROR_OK;
+	} else if ((nds_script_custom_reset) && (target->reset_halt == 0)) {
+		ndsv5_script_do_custom_reset(target, nds_script_custom_reset);
+		return ERROR_OK;
+	}
+#endif /* _NDS_V5_ONLY_ */
+
 	RISCV_INFO(r);
 
 	select_dmi(target);
 
 	uint32_t control_base = set_field(0, DMI_DMCONTROL_DMACTIVE, 1);
+
+#if _NDS_V5_ONLY_
+	if (target->reset_halt) {
+		/* single core no execute haltonreset: bitmap built before 2019/5 */
+		if (target->rtos)
+			ndsv5_haltonreset(target, 1);
+	} else
+		ndsv5_haltonreset(target, 0);
+#endif /* _NDS_V5_ONLY_ */
 
 	if (target->rtos) {
 		/* There's only one target, and OpenOCD thinks each hart is a thread.
@@ -2089,6 +2450,10 @@ static int assert_reset(struct target *target)
 		dmi_write(target, DMI_DMCONTROL, control);
 	}
 
+#if _NDS_V5_ONLY_
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	alive_sleep(nds32->reset_time);
+#endif
 	target->state = TARGET_RESET;
 
 	dm013_info_t *dm = get_dm(target);
@@ -2107,18 +2472,32 @@ static int deassert_reset(struct target *target)
 	RISCV013_INFO(info);
 	select_dmi(target);
 
+#if _NDS_V5_ONLY_
+	isAceCsrEnable = false;
+#endif
+
+
 	/* Clear the reset, but make sure haltreq is still set */
 	uint32_t control = 0;
 	control = set_field(control, DMI_DMCONTROL_HALTREQ, target->reset_halt ? 1 : 0);
 	control = set_field(control, DMI_DMCONTROL_DMACTIVE, 1);
+#if _NDS_V5_ONLY_
+	control = set_field(control, DMI_DMCONTROL_ACKHAVERESET, 1);
+#endif
 	dmi_write(target, DMI_DMCONTROL,
 			set_hartsel(control, r->current_hartid));
 
 	uint32_t dmstatus;
 	int dmi_busy_delay = info->dmi_busy_delay;
+#if _NDS_V5_ONLY_
+#else
 	time_t start = time(NULL);
+#endif
 
 	for (int i = 0; i < riscv_count_harts(target); ++i) {
+#if _NDS_V5_ONLY_
+		time_t start = time(NULL);
+#endif
 		int index = i;
 		if (target->rtos) {
 			if (!riscv_hart_enabled(target, index))
@@ -2156,10 +2535,27 @@ static int deassert_reset(struct target *target)
 						"dmstatus=0x%x; "
 						"Increase the timeout with riscv set_reset_timeout_sec.",
 						index, operation, riscv_reset_timeout_sec, dmstatus);
+
 				return ERROR_FAIL;
 			}
 		}
+
+#if _NDS_V5_ONLY_
+		if (target->reset_halt) {
+			target->state = TARGET_HALTED;
+			control = set_field(control, DMI_DMCONTROL_HALTREQ, 0);
+			dmi_write(target, DMI_DMCONTROL,
+					set_hartsel(control, index));
+			NDS32_LOG(NDS32_MSG_HW_RESET_HOLD_ID, target->tap->dotted_name, index);
+		} else {
+			/* Halt again */
+			struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+			alive_sleep(nds32->boot_time);
+			riscv013_halt_go(target);
+		}
+#else /* _NDS_V5_ONLY_ */
 		target->state = TARGET_HALTED;
+#endif /* _NDS_V5_ONLY_ */
 
 		if (get_field(dmstatus, DMI_DMSTATUS_ALLHAVERESET)) {
 			/* Ack reset. */
@@ -2171,6 +2567,17 @@ static int deassert_reset(struct target *target)
 		if (!target->rtos)
 			break;
 	}
+
+#if _NDS_V5_ONLY_
+	/* Restore halt-on-reset */
+	if(nds_halt_on_reset == 1) {
+		/* single core no execute haltonreset: bitmap built before 2019/5 */
+		if (target->rtos)
+			ndsv5_haltonreset(target, 1);
+	} else
+		ndsv5_haltonreset(target, 0);
+#endif /* _NDS_V5_ONLY_ */
+
 	info->dmi_busy_delay = dmi_busy_delay;
 	return ERROR_OK;
 }
@@ -2235,6 +2642,8 @@ static void write_to_buf(uint8_t *buffer, uint64_t value, unsigned size)
 
 static int execute_fence(struct target *target)
 {
+	LOG_ERROR("EXECUTE FENCE!");
+
 	int old_hartid = riscv_current_hartid(target);
 
 	/* FIXME: For non-coherent systems we need to flush the caches right
@@ -2269,6 +2678,8 @@ static int execute_fence(struct target *target)
 	}
 
 	riscv_set_current_hartid(target, old_hartid);
+
+	LOG_ERROR("EXECUTE FENCE(DONE)!");
 
 	return ERROR_OK;
 }
@@ -2778,8 +3189,13 @@ static int read_memory_progbuf_inner(struct target *target, target_addr_t addres
 		LOG_DEBUG("creating burst to read from 0x%" PRIx64
 				" up to 0x%" PRIx64, read_addr, fin_addr);
 		assert(read_addr >= address && read_addr < fin_addr);
+#if _NDS_JTAG_SCANS_OPTIMIZE_
+		struct riscv_batch *batch = riscv_batch_alloc(target, nds_jtag_max_scans,
+				info->dmi_busy_delay + info->ac_busy_delay);
+#else
 		struct riscv_batch *batch = riscv_batch_alloc(target, 32,
 				info->dmi_busy_delay + info->ac_busy_delay);
+#endif
 
 		size_t reads = 0;
 		for (riscv_addr_t addr = read_addr; addr < fin_addr; addr += size) {
@@ -3027,6 +3443,14 @@ static int read_memory_progbuf_one(struct target *target, target_addr_t address,
 static int read_memory_progbuf(struct target *target, target_addr_t address,
 		uint32_t size, uint32_t count, uint8_t *buffer)
 {
+#if _NDS_MEM_Q_ACCESS_
+	if ((nds_dmi_quick_access) && (!riscv_is_halted(target))) {
+		if (riscv_debug_buffer_size(target) >= 7) {
+			return ndsv5_read_memory_quick_access(target, address, size, count, buffer);
+		}
+	}
+#endif
+
 	RISCV013_INFO(info);
 
 	if (riscv_xlen(target) < size * 8) {
@@ -3090,7 +3514,13 @@ static int read_memory_progbuf(struct target *target, target_addr_t address,
 
 	if (riscv_enable_virtual && info->progbufsize >= 4 && get_field(mstatus, MSTATUS_MPRV))
 		riscv_program_csrrci(&program, GDB_REGNO_ZERO,  CSR_DCSR_MPRVEN, GDB_REGNO_DCSR);
+#if _NDS_V5_ONLY_
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	if (nds32->nds_const_addr_mode == 0)
+		riscv_program_addi(&program, GDB_REGNO_S0, GDB_REGNO_S0, size);
+#else /* _NDS_V5_ONLY_ */
 	riscv_program_addi(&program, GDB_REGNO_S0, GDB_REGNO_S0, size);
+#endif /* _NDS_V5_ONLY_ */
 
 	if (riscv_program_ebreak(&program) != ERROR_OK)
 		return ERROR_FAIL;
@@ -3140,8 +3570,24 @@ static int read_memory(struct target *target, target_addr_t address,
 		uint32_t size, uint32_t count, uint8_t *buffer)
 {
 	RISCV013_INFO(info);
+
+#if _NDS_V5_ONLY_
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	struct nds32_v5_memory *memory = &(nds32->memory);
+
+	int result = ERROR_FAIL;
+	if (info->progbufsize >= 2 && (memory->access_channel == NDS_MEMORY_ACC_CPU)) {
+		result = read_memory_progbuf(target, address, size, count, buffer);
+		goto read_memory_finish;
+	} else if( (memory->access_channel == NDS_MEMORY_ACC_CPU) && nds_dmi_access_mem ) {
+		result = read_memory_abstract(target, address, size, count, buffer);
+		if(result == ERROR_OK)
+			goto read_memory_finish;
+	}
+#else /* _NDS_V5_ONLY_ */
 	if (info->progbufsize >= 2 && !riscv_prefer_sba)
 		return read_memory_progbuf(target, address, size, count, buffer);
+#endif /* _NDS_V5_ONLY_ */
 
 	if ((get_field(info->sbcs, DMI_SBCS_SBACCESS8) && size == 1) ||
 			(get_field(info->sbcs, DMI_SBCS_SBACCESS16) && size == 2) ||
@@ -3151,13 +3597,40 @@ static int read_memory(struct target *target, target_addr_t address,
 		if (get_field(info->sbcs, DMI_SBCS_SBVERSION) == 0)
 			return read_memory_bus_v0(target, address, size, count, buffer);
 		else if (get_field(info->sbcs, DMI_SBCS_SBVERSION) == 1)
+#if _NDS_V5_ONLY_
+			if (nds_jtag_scans_optimize > 0) {
+				result = read_memory_bus_v1_opt(target, address, size, count, buffer);
+				goto read_memory_finish;
+			} else {
+				result = read_memory_bus_v1(target, address, size, count, buffer);
+				goto read_memory_finish;
+			}
+#else /* _NDS_V5_ONLY_ */
 			return read_memory_bus_v1(target, address, size, count, buffer);
+#endif /* _NDS_V5_ONLY_ */
 	}
 
+#if _NDS_V5_ONLY_
+	if (info->progbufsize >= 2) {
+		result = read_memory_progbuf(target, address, size, count, buffer);
+		goto read_memory_finish;
+	}
+#else /* _NDS_V5_ONLY_ */
 	if (info->progbufsize >= 2)
 		return read_memory_progbuf(target, address, size, count, buffer);
+#endif /* _NDS_V5_ONLY_ */
 
 	return read_memory_abstract(target, address, size, count, buffer);
+
+#if _NDS_V5_ONLY_
+read_memory_finish:
+	if (result == ERROR_OK) {
+		uint32_t *p_word_data = (uint32_t *)buffer;
+		NDS_INFO("reading %d words of %d bytes from 0x%" TARGET_PRIxADDR " = 0x%08x", count,
+				size, address, *p_word_data);
+	}
+	return result;
+#endif /* _NDS_V5_ONLY_ */
 }
 
 static int write_memory_bus_v0(struct target *target, target_addr_t address,
@@ -3424,7 +3897,13 @@ static int write_memory_progbuf(struct target *target, target_addr_t address,
 
 	if (riscv_enable_virtual && info->progbufsize >= 4 && get_field(mstatus, MSTATUS_MPRV))
 		riscv_program_csrrci(&program, GDB_REGNO_ZERO,  CSR_DCSR_MPRVEN, GDB_REGNO_DCSR);
+#if _NDS_V5_ONLY_
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	if (nds32->nds_const_addr_mode == 0)
+		riscv_program_addi(&program, GDB_REGNO_S0, GDB_REGNO_S0, size);
+#else /* _NDS_V5_ONLY_ */
 	riscv_program_addi(&program, GDB_REGNO_S0, GDB_REGNO_S0, size);
+#endif /* _NDS_V5_ONLY_ */
 
 	result = riscv_program_ebreak(&program);
 	if (result != ERROR_OK)
@@ -3439,10 +3918,17 @@ static int write_memory_progbuf(struct target *target, target_addr_t address,
 		LOG_DEBUG("transferring burst starting at address 0x%016" PRIx64,
 				cur_addr);
 
+#if _NDS_JTAG_SCANS_OPTIMIZE_
+		struct riscv_batch *batch = riscv_batch_alloc(
+				target,
+				nds_jtag_max_scans,
+				info->dmi_busy_delay + info->ac_busy_delay);
+#else /* _NDS_JTAG_SCANS_OPTIMIZE_ */
 		struct riscv_batch *batch = riscv_batch_alloc(
 				target,
 				32,
 				info->dmi_busy_delay + info->ac_busy_delay);
+#endif /* _NDS_JTAG_SCANS_OPTIMIZE_ */
 
 		/* To write another word, we put it in S1 and execute the program. */
 		unsigned start = (cur_addr - address) / size;
@@ -3560,6 +4046,22 @@ static int write_memory(struct target *target, target_addr_t address,
 		uint32_t size, uint32_t count, const uint8_t *buffer)
 {
 	RISCV013_INFO(info);
+
+#if _NDS_V5_ONLY_
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	struct nds32_v5_memory *memory = &(nds32->memory);
+
+	uint32_t *p_word_data = (uint32_t *)buffer;
+	NDS_INFO("writing %d words of %d bytes to 0x%08lx = 0x%08x", count, size, (long)address, *p_word_data);
+
+	if (info->progbufsize >= 2 && (memory->access_channel == NDS_MEMORY_ACC_CPU))
+		return write_memory_progbuf(target, address, size, count, buffer);
+	else if( (memory->access_channel == NDS_MEMORY_ACC_CPU) && nds_dmi_access_mem ) {
+		if(write_memory_abstract(target, address, size, count, buffer) == ERROR_OK)
+			return ERROR_OK;
+	}
+#endif
+
 	if (info->progbufsize >= 2 && !riscv_prefer_sba)
 		return write_memory_progbuf(target, address, size, count, buffer);
 
@@ -3571,6 +4073,11 @@ static int write_memory(struct target *target, target_addr_t address,
 		if (get_field(info->sbcs, DMI_SBCS_SBVERSION) == 0)
 			return write_memory_bus_v0(target, address, size, count, buffer);
 		else if (get_field(info->sbcs, DMI_SBCS_SBVERSION) == 1)
+#if _NDS_V5_ONLY_
+			if (nds_jtag_scans_optimize > 0) {
+				return write_memory_bus_v1_opt(target, address, size, count, buffer);
+			}
+#endif /* _NDS_V5_ONLY_ */
 			return write_memory_bus_v1(target, address, size, count, buffer);
 	}
 
@@ -3610,10 +4117,22 @@ struct target_type riscv013_target = {
 static int riscv013_get_register(struct target *target,
 		riscv_reg_t *value, int hid, int rid)
 {
+#if _NDS_V5_ONLY_
+	LOG_DEBUG("[%d] reading register %s on [%s] hart %d", target->coreid, gdb_regno_name(rid), 
+			target->tap->dotted_name, hid);
+#else /* _NDS_V5_ONLY_ */
 	LOG_DEBUG("[%d] reading register %s on hart %d", target->coreid,
 			gdb_regno_name(rid), hid);
+#endif /* _NDS_V5_ONLY_ */
 
 	riscv_set_current_hartid(target, hid);
+#if _NDS_V5_ONLY_
+	if (!riscv_hart_enabled(target, hid)) {
+		*value = -1;
+		LOG_DEBUG("hart %d is unavailable, do nothing", hid);
+		return ERROR_OK;
+	}
+#endif /* _NDS_V5_ONLY_ */
 
 	int result = ERROR_OK;
 	if (rid == GDB_REGNO_PC) {
@@ -3636,10 +4155,21 @@ static int riscv013_get_register(struct target *target,
 
 static int riscv013_set_register(struct target *target, int hid, int rid, uint64_t value)
 {
+#if _NDS_V5_ONLY_
+	LOG_DEBUG("[%d] writing 0x%" PRIx64 " to register %s on [%s] hart %d", target->coreid, value,
+			gdb_regno_name(rid), target->tap->dotted_name, hid);
+#else /* _NDS_V5_ONLY_ */
 	LOG_DEBUG("[%d] writing 0x%" PRIx64 " to register %s on hart %d",
 			target->coreid, value, gdb_regno_name(rid), hid);
+#endif /* _NDS_V5_ONLY_ */
 
 	riscv_set_current_hartid(target, hid);
+#if _NDS_V5_ONLY_
+	if (!riscv_hart_enabled(target, hid)) {
+		LOG_DEBUG("hart %d is unavailable, do nothing", hid);
+		return ERROR_OK;
+	}
+#endif /* _NDS_V5_ONLY_ */
 
 	if (rid <= GDB_REGNO_XPR31) {
 		return register_write_direct(target, rid, value);
@@ -3678,6 +4208,12 @@ static int riscv013_select_current_hart(struct target *target)
 	/* TODO: can't we just "dmcontrol = DMI_DMACTIVE"? */
 	if (dmi_read(target, &dmcontrol, DMI_DMCONTROL) != ERROR_OK)
 		return ERROR_FAIL;
+#if _NDS_V5_ONLY_
+	if( !get_field(dmcontrol, DMI_DMCONTROL_DMACTIVE) ) {
+		NDS32_LOG("<-- TARGET WARNING! DMACTIVE has been pulse to low, turn-on DM again. -->");
+		dmcontrol = set_field(dmcontrol, DMI_DMCONTROL_DMACTIVE, 1);
+	}
+#endif /* _NDS_V5_ONLY_ */
 	dmcontrol = set_hartsel(dmcontrol, r->current_hartid);
 	int result = dmi_write(target, DMI_DMCONTROL, dmcontrol);
 	dm->current_hartid = r->current_hartid;
@@ -3750,7 +4286,11 @@ static int riscv013_halt_go(struct target *target)
 	}
 
 	RISCV_INFO(r);
+#if _NDS_V5_ONLY_
+	LOG_DEBUG("halting [%s] hart %d", target->tap->dotted_name, r->current_hartid);
+#else
 	LOG_DEBUG("halting hart %d", r->current_hartid);
+#endif /* _NDS_V5_ONLY_ */
 
 	/* Issue the halt command, and then wait for the current hart to halt. */
 	uint32_t dmcontrol = DMI_DMCONTROL_DMACTIVE | DMI_DMCONTROL_HALTREQ;
@@ -3769,14 +4309,31 @@ static int riscv013_halt_go(struct target *target)
 		if (dmi_read(target, &dmcontrol, DMI_DMCONTROL) != ERROR_OK)
 			return ERROR_FAIL;
 
+#if _NDS_V5_ONLY_
+		NDS32_LOG("<-- Unable to halt [%s] hart %d -->", target->tap->dotted_name, r->current_hartid);
+		NDS32_LOG("  dmcontrol=0x%08x", dmcontrol);
+		NDS32_LOG("  dmstatus =0x%08x", dmstatus);
+		if (riscv_rtos_enabled(target)) {
+			target->rtos->hart_unavailable[riscv_current_hartid(target)] = 0xff;
+			LOG_DEBUG("  hart_unavailable[%d] = 0x%x", riscv_current_hartid(target), target->rtos->hart_unavailable[riscv_current_hartid(target)]);
+		}
+#else /* _NDS_V5_ONLY_ */
 		LOG_ERROR("unable to halt hart %d", r->current_hartid);
 		LOG_ERROR("  dmcontrol=0x%08x", dmcontrol);
 		LOG_ERROR("  dmstatus =0x%08x", dmstatus);
+#endif /* _NDS_V5_ONLY_ */
 		return ERROR_FAIL;
 	}
 
 	dmcontrol = set_field(dmcontrol, DMI_DMCONTROL_HALTREQ, 0);
 	dmi_write(target, DMI_DMCONTROL, dmcontrol);
+
+#if _NDS_V5_ONLY_
+	if (riscv_rtos_enabled(target)) {
+		target->rtos->hart_unavailable[riscv_current_hartid(target)] = 0x0;
+		LOG_DEBUG("  hart_unavailable[%d] = 0x%x", riscv_current_hartid(target), target->rtos->hart_unavailable[riscv_current_hartid(target)]);
+	}
+#endif
 
 	if (use_hasel) {
 		target_list_t *entry;
@@ -3826,9 +4383,54 @@ static int riscv013_on_halt(struct target *target)
 
 static bool riscv013_is_halted(struct target *target)
 {
+#if _NDS_V5_ONLY_
+	if (riscv_rtos_enabled(target)) {
+		target->rtos->hart_unavailable[riscv_current_hartid(target)] = 0x0;
+	}
+#endif /* _NDS_V5_ONLY_ */
+
 	uint32_t dmstatus;
 	if (dmstatus_read(target, &dmstatus, true) != ERROR_OK)
 		return false;
+#if _NDS_V5_ONLY_
+	if (get_field(dmstatus, DMI_DMSTATUS_ANYUNAVAIL)) {
+		LOG_ERROR("[%s] hart %d is unavailiable", target->tap->dotted_name, riscv_current_hartid(target));
+		if (riscv_rtos_enabled(target)) {
+			target->rtos->hart_unavailable[riscv_current_hartid(target)] = 0xff;
+			LOG_DEBUG("  hart_unavailable[%d] = 0x%x", riscv_current_hartid(target), target->rtos->hart_unavailable[riscv_current_hartid(target)]);
+		}
+		return get_field(dmstatus, DMI_DMSTATUS_ALLHALTED);
+	}
+	if (get_field(dmstatus, DMI_DMSTATUS_ANYNONEXISTENT)) {
+		LOG_ERROR("[%s] hart %d doesn't exist", target->tap->dotted_name, riscv_current_hartid(target));
+		if (riscv_rtos_enabled(target)) {
+			target->rtos->hart_unavailable[riscv_current_hartid(target)] = 0xff;
+			LOG_DEBUG("  hart_unavailable[%d] = 0x%x", riscv_current_hartid(target), target->rtos->hart_unavailable[riscv_current_hartid(target)]);
+		}
+		return get_field(dmstatus, DMI_DMSTATUS_ALLHALTED);
+	}
+
+	if ((target->state != TARGET_HALTED) &&
+	    (nds_no_crst_detect == 0) &&
+	    (get_field(dmstatus, DMI_DMSTATUS_ANYHAVERESET) == 1) ) {
+		LOG_DEBUG(NDS32_ERRMSG_TARGET_RESET);
+
+		uint32_t dmcontrol;
+		dmi_read(target, &dmcontrol, DMI_DMCONTROL);
+		dmcontrol = set_field(dmcontrol, DMI_DMCONTROL_ACKHAVERESET, 1);
+
+		int retry = 0;
+		do {
+			dmi_write(target, DMI_DMCONTROL, dmcontrol);
+			dmi_read(target, &dmstatus, DMI_DMSTATUS);
+			alive_sleep(10);
+		} while( get_field(dmstatus, DMI_DMSTATUS_ANYHAVERESET) && (retry++ < MAX_RETRY) );
+
+		if(retry >= MAX_RETRY) {
+			NDS32_LOG_ERROR("<-- TARGET WARNING! Unable to clear havereset on [%s] hart %d. -->", target->tap->dotted_name, riscv_current_hartid(target));
+		}
+	}
+#else /* _NDS_V5_ONLY_ */
 	if (get_field(dmstatus, DMI_DMSTATUS_ANYUNAVAIL))
 		LOG_ERROR("Hart %d is unavailable.", riscv_current_hartid(target));
 	if (get_field(dmstatus, DMI_DMSTATUS_ANYNONEXISTENT))
@@ -3849,6 +4451,8 @@ static bool riscv013_is_halted(struct target *target)
 			dmcontrol |= DMI_DMCONTROL_HALTREQ;
 		dmi_write(target, DMI_DMCONTROL, dmcontrol);
 	}
+#endif /* _NDS_V5_ONLY_ */
+
 	return get_field(dmstatus, DMI_DMSTATUS_ALLHALTED);
 }
 
@@ -3876,6 +4480,10 @@ static enum riscv_halt_reason riscv013_halt_reason(struct target *target)
 		return RISCV_HALT_INTERRUPT;
 	}
 
+#if _NDS_DISABLE_ABORT_
+	NDS32_LOG("Unknown DCSR cause field: %x", (int)get_field(dcsr, CSR_DCSR_CAUSE));
+	NDS32_LOG("  dcsr=0x%016lx", (long)dcsr);
+#endif
 	LOG_ERROR("Unknown DCSR cause field: %x", (int)get_field(dcsr, CSR_DCSR_CAUSE));
 	LOG_ERROR("  dcsr=0x%016lx", (long)dcsr);
 	return RISCV_HALT_UNKNOWN;
@@ -3883,6 +4491,21 @@ static enum riscv_halt_reason riscv013_halt_reason(struct target *target)
 
 int riscv013_write_debug_buffer(struct target *target, unsigned index, riscv_insn_t data)
 {
+#if _NDS_JTAG_SCANS_OPTIMIZE_EXE_PBUF
+	if (nds_jtag_scans_optimize > 0) {
+		RISCV013_INFO(info);
+		if (write_debug_buffer_batch == NULL) {
+			write_debug_buffer_batch = riscv_batch_alloc(target, nds_jtag_max_scans, info->dmi_busy_delay + info->ac_busy_delay);
+		}
+
+		if (index >= info->progbufsize)
+			riscv_batch_add_dmi_write(write_debug_buffer_batch, DMI_DATA0 + index - info->progbufsize, data);
+		else
+			riscv_batch_add_dmi_write(write_debug_buffer_batch, DMI_PROGBUF0 + index, data);
+		return ERROR_OK;
+	}
+#endif /* _NDS_JTAG_SCANS_OPTIMIZE_EXE_PBUF */
+
 	dm013_info_t *dm = get_dm(target);
 	if (dm->progbuf_cache[index] != data) {
 		if (dmi_write(target, DMI_PROGBUF0 + index, data) != ERROR_OK)
@@ -3896,6 +4519,18 @@ int riscv013_write_debug_buffer(struct target *target, unsigned index, riscv_ins
 
 riscv_insn_t riscv013_read_debug_buffer(struct target *target, unsigned index)
 {
+#if _NDS_JTAG_SCANS_OPTIMIZE_R_PBUF
+	RISCV013_INFO(info);
+	if (index >= info->progbufsize) {
+		LOG_DEBUG("error index=0x%x", index);
+		return 0;
+	}else {
+		uint64_t return_val = backup_debug_buffer[riscv_current_hartid(target)][index];
+		LOG_DEBUG("%s, return_val=0x%lx", __func__, (long unsigned int)return_val);
+		return return_val;
+	}
+#endif /* _NDS_JTAG_SCANS_OPTIMIZE_R_PBUF */
+
 	uint32_t value;
 	dmi_read(target, &value, DMI_PROGBUF0 + index);
 	return value;
@@ -3904,6 +4539,16 @@ riscv_insn_t riscv013_read_debug_buffer(struct target *target, unsigned index)
 int riscv013_execute_debug_buffer(struct target *target)
 {
 	uint32_t run_program = 0;
+
+#if _NDS_MEM_Q_ACCESS_
+	nds_dmi_quick_access_ena = 0;
+	if ((nds_dmi_quick_access) && (!riscv_is_halted(target))) {
+		run_program = set_field(run_program, AC_ACCESS_REGISTER_CMDTYPE, 1);
+		nds_dmi_quick_access_ena = 1;
+		LOG_DEBUG("Quick Access command, nds_dmi_quick_access_ena=%d", nds_dmi_quick_access_ena);
+	}
+#endif
+
 	run_program = set_field(run_program, AC_ACCESS_REGISTER_AARSIZE, 2);
 	run_program = set_field(run_program, AC_ACCESS_REGISTER_POSTEXEC, 1);
 	run_program = set_field(run_program, AC_ACCESS_REGISTER_TRANSFER, 0);
@@ -4317,6 +4962,23 @@ static int riscv013_on_step_or_resume(struct target *target, bool step)
 	dcsr = set_field(dcsr, CSR_DCSR_EBREAKM, riscv_ebreakm);
 	dcsr = set_field(dcsr, CSR_DCSR_EBREAKS, riscv_ebreaks);
 	dcsr = set_field(dcsr, CSR_DCSR_EBREAKU, riscv_ebreaku);
+
+#if _NDS_V5_ONLY_
+	extern bool v5_stepie;
+	if(v5_stepie == true)
+		dcsr = set_field(dcsr, CSR_DCSR_STEPIE, 1);
+	else
+		dcsr = set_field(dcsr, CSR_DCSR_STEPIE, 0);
+
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	if((nds32->attached == false) && (nds32->target_burn_attached == false)) {
+		dcsr = set_field(dcsr, CSR_DCSR_EBREAKM, 0);
+		dcsr = set_field(dcsr, CSR_DCSR_EBREAKS, 0);
+		dcsr = set_field(dcsr, CSR_DCSR_EBREAKU, 0);
+		dcsr = set_field(dcsr, CSR_DCSR_STEPIE , 0);
+	}
+#endif /* _NDS_V5_ONLY_ */
+
 	return riscv_set_register(target, GDB_REGNO_DCSR, dcsr);
 }
 
@@ -4324,7 +4986,11 @@ static int riscv013_step_or_resume_current_hart(struct target *target,
 		bool step, bool use_hasel)
 {
 	RISCV_INFO(r);
+#if _NDS_V5_ONLY_
+	LOG_DEBUG("resuming [%s] hart %d (for step?=%d)", target->tap->dotted_name, r->current_hartid, step);
+#else /* _NDS_V5_ONLY_ */
 	LOG_DEBUG("resuming hart %d (for step?=%d)", r->current_hartid, step);
+#endif /* _NDS_V5_ONLY_ */
 	if (!riscv_is_halted(target)) {
 		LOG_ERROR("Hart %d is not halted!", r->current_hartid);
 		return ERROR_FAIL;
@@ -4351,6 +5017,10 @@ static int riscv013_step_or_resume_current_hart(struct target *target,
 			continue;
 
 		dmi_write(target, DMI_DMCONTROL, dmcontrol);
+#if _NDS_V5_ONLY_
+		/* e-15336, when resuming, clear issued_halt */
+		target->halt_issued = false;
+#endif /* _NDS_V5_ONLY_ */
 		return ERROR_OK;
 	}
 
@@ -4366,6 +5036,10 @@ static int riscv013_step_or_resume_current_hart(struct target *target,
 		riscv_halt(target);
 		return ERROR_OK;
 	}
+
+#if _NDS_DISABLE_ABORT_
+	NDS32_LOG("resuming [%s] hart %d (for step?=%d) fail", target->tap->dotted_name, r->current_hartid, step);
+#endif
 
 	return ERROR_FAIL;
 }
@@ -4875,18 +5549,14 @@ int riscv013_test_compliance(struct target *target)
 /********************************************************************/
 /* ndsv5-013 local Var.                                             */
 /********************************************************************/
-extern uint32_t nds_jtag_max_scans;	/* declear in ndsv5_cmd.c */
-
-static uint64_t ndsv5_backup_mstatus;
 static struct riscv_batch *ndsv5_access_memory_pack_batch;
 static size_t index_access_mem_batch_ABSTRACTCS;
-static bool reset_halt;
 /********************************************************************/
 
 int ndsv5_set_csr_reg_quick_access(struct target *target, uint32_t reg_num, uint64_t reg_value)
 {
-	uint32_t ndsv5_dmi_quick_access_bak = ndsv5_dmi_quick_access;
-	ndsv5_dmi_quick_access = 1;
+	uint32_t nds_dmi_quick_access_bak = nds_dmi_quick_access;
+	nds_dmi_quick_access = 1;
 	riscv_select_current_hart(target);
 
 	struct riscv_program program;
@@ -4913,10 +5583,10 @@ ndsv5_set_csr_reg_quick_access_retry:
 		riscv_program_insert(&program, lw(GDB_REGNO_S0, GDB_REGNO_ZERO, 200));  /* data2 */
 
 	int result = riscv_program_exec(&program, target);
-	ndsv5_dmi_quick_access = ndsv5_dmi_quick_access_bak;
+	nds_dmi_quick_access = nds_dmi_quick_access_bak;
 	if (result != ERROR_OK) {
 		/* quick_access mode, if target state from freerun to halt */
-		if (ndsv5_dmi_quick_access_ena) {
+		if (nds_dmi_quick_access_ena) {
 			if (((ndsv5_dmi_abstractcs & DMI_ABSTRACTCS_CMDERR) >> DMI_ABSTRACTCS_CMDERR_OFFSET) ==
 			    CMDERR_HALT_RESUME) {
 				LOG_ERROR("quick_access fail, set_csr_reg_quick_access_retry");
@@ -4930,8 +5600,8 @@ ndsv5_set_csr_reg_quick_access_retry:
 
 int ndsv5_get_csr_reg_quick_access(struct target *target, uint32_t reg_num, uint64_t *preg_value)
 {
-	uint32_t ndsv5_dmi_quick_access_bak = ndsv5_dmi_quick_access;
-	ndsv5_dmi_quick_access = 1;
+	uint32_t nds_dmi_quick_access_bak = nds_dmi_quick_access;
+	nds_dmi_quick_access = 1;
 	riscv_select_current_hart(target);
 
 	struct riscv_program program;
@@ -4955,10 +5625,10 @@ ndsv5_get_csr_reg_quick_access_retry:
 	}
 
 	int result = riscv_program_exec(&program, target);
-	ndsv5_dmi_quick_access = ndsv5_dmi_quick_access_bak;
+	nds_dmi_quick_access = nds_dmi_quick_access_bak;
 	if (result != ERROR_OK) {
 		/* quick_access mode, if target state from freerun to halt */
-		if (ndsv5_dmi_quick_access_ena) {
+		if (nds_dmi_quick_access_ena) {
 			if (((ndsv5_dmi_abstractcs & DMI_ABSTRACTCS_CMDERR) >> DMI_ABSTRACTCS_CMDERR_OFFSET) ==
 			    CMDERR_HALT_RESUME) {
 				LOG_ERROR("quick_access fail, get_csr_reg_quick_access_retry");
@@ -5606,6 +6276,720 @@ int ndsv5_set_vector_register(struct target *target, enum gdb_regno r, char *pRe
 
 	return ERROR_OK;
 }
+
+void ndsv5_decode_csr(char *text, unsigned address, unsigned data)
+{
+	static const struct {
+		unsigned address;
+		uint64_t mask;
+		const char *name;
+	} description[] = {
+		{ GDB_REGNO_MSTATUS, MSTATUS_UIE, "uie" },
+		{ GDB_REGNO_DCSR, DCSR_XDEBUGVER, "xdebugver" },
+		{ GDB_REGNO_DCSR, DCSR_NDRESET, "ndreset" },
+		{ GDB_REGNO_DCSR, DCSR_FULLRESET, "fullreset" },
+		{ GDB_REGNO_DCSR, DCSR_EBREAKM, "ebreakm" },
+		{ GDB_REGNO_DCSR, DCSR_EBREAKH, "ebreakh" },
+		{ GDB_REGNO_DCSR, DCSR_EBREAKS, "ebreaks" },
+		{ GDB_REGNO_DCSR, DCSR_EBREAKU, "ebreaku" },
+		{ GDB_REGNO_DCSR, CSR_DCSR_STEPIE, "stepie" },
+		{ GDB_REGNO_DCSR, DCSR_STOPCYCLE, "stopcycle" },
+		{ GDB_REGNO_DCSR, DCSR_STOPTIME, "stoptime" },
+		{ GDB_REGNO_DCSR, DCSR_CAUSE, "cause" },
+		{ GDB_REGNO_DCSR, DCSR_DEBUGINT, "debugint" },
+		{ GDB_REGNO_DCSR, DCSR_HALT, "halt" },
+		{ GDB_REGNO_DCSR, DCSR_STEP, "step" },
+		{ GDB_REGNO_DCSR, DCSR_PRV, "prv" },
+	};
+
+	text[0] = 0;
+	for (unsigned i = 0; i < DIM(description); i++) {
+		if (description[i].address == address) {
+			uint64_t mask = description[i].mask;
+			unsigned value = get_field(data, mask);
+			if (value) {
+				if (i > 0)
+					*(text++) = ' ';
+				if (mask & (mask >> 1)) {
+					/* If the field is more than 1 bit wide. */
+					sprintf(text, "%s=0x%x", description[i].name, value);
+				} else {
+					strcpy(text, description[i].name);
+				}
+				text += strlen(text);
+			}
+		}
+	}
+}
+
+int read_memory_bus_v1_opt(struct target *target, target_addr_t address,
+		uint32_t size, uint32_t count, uint8_t *buffer)
+{
+	LOG_DEBUG("start, count=0x%x, size=0x%x", count, size);
+	target_addr_t next_address, end_address, cur_address;
+	uint32_t value, if_last, read_cnt, i, batch_index;
+	int64_t dmi_out;
+	size_t *pindex_read = malloc(sizeof(size_t) * nds_jtag_max_scans);
+	RISCV013_INFO(info);
+
+read_memory_bus_v1_opt_retry:
+	LOG_DEBUG("info->dmi_busy_delay=0x%x, info->ac_busy_delay=0x%x", info->dmi_busy_delay, info->ac_busy_delay);
+	next_address = address;
+	end_address = address + count * size;
+
+	while (next_address < end_address) {
+		uint32_t sbcs = set_field(0, DMI_SBCS_SBREADONADDR, 1);
+		sbcs |= sb_sbaccess(size);
+		sbcs = set_field(sbcs, DMI_SBCS_SBAUTOINCREMENT, 1);
+		sbcs = set_field(sbcs, DMI_SBCS_SBREADONDATA, count > 1);
+		dmi_write(target, DMI_SBCS, sbcs);
+
+		/* This address write will trigger the first read. */
+		sb_write_address(target, next_address);
+
+		if (info->bus_master_read_delay) {
+			jtag_add_runtest(info->bus_master_read_delay, TAP_IDLE);
+			if (jtag_execute_queue() != ERROR_OK) {
+				LOG_ERROR("Failed to scan idle sequence");
+				return ERROR_FAIL;
+			}
+		}
+		if (busmode_batch != NULL) {
+			riscv_batch_free(busmode_batch);
+			busmode_batch = NULL;
+		}
+		busmode_batch = riscv_batch_alloc(target, nds_jtag_max_scans, info->dmi_busy_delay + info->ac_busy_delay);
+		//LOG_DEBUG("nds_jtag_max_scans=0x%x", nds_jtag_max_scans);
+
+		if_last = 0;
+		read_cnt = 0;
+		batch_index = 0;
+		cur_address = next_address;
+		for (i = (next_address - address) / size; i < count; i++) {
+			if (busmode_batch->used_scans > (busmode_batch->allocated_scans - 8)) {
+				if_last = 1;
+			} else if (i == (count-1)) {
+				if_last = 1;
+			}
+
+			if (if_last) {
+				sbcs = set_field(sbcs, DMI_SBCS_SBREADONDATA, 0);
+				//dmi_write(target, DMI_SBCS, sbcs);
+				riscv_batch_add_dmi_write(busmode_batch, DMI_SBCS, sbcs);
+			}
+			if (size > 12) {
+				pindex_read[batch_index++] = riscv_batch_add_dmi_read(busmode_batch, DMI_SBDATA3);
+			}
+			if (size > 8) {
+				pindex_read[batch_index++] = riscv_batch_add_dmi_read(busmode_batch, DMI_SBDATA2);
+			}
+			if (size > 4) {
+				pindex_read[batch_index++] = riscv_batch_add_dmi_read(busmode_batch, DMI_SBDATA1);
+			}
+			pindex_read[batch_index++] = riscv_batch_add_dmi_read(busmode_batch, DMI_SBDATA0);
+			read_cnt ++;
+			next_address += size;
+			if (if_last) {
+				break;
+			}
+		}
+
+		if (riscv_batch_run(busmode_batch) != ERROR_OK) {
+			LOG_DEBUG("riscv_batch_run FAIL, busmode_batch->idle_count=0x%x", (unsigned int)busmode_batch->idle_count);
+			increase_dmi_busy_delay(target);
+			goto read_memory_bus_v1_opt_retry;
+		} else {
+			LOG_DEBUG("riscv_batch_run OK");
+		}
+
+		batch_index = 0;
+		for (i=0; i<read_cnt; i++) {
+			if (size > 12) {
+				dmi_out = riscv_batch_get_dmi_read(busmode_batch, pindex_read[batch_index++]);
+				value = get_field(dmi_out, DTM_DMI_DATA);
+				write_to_buf(buffer + i * size + 12, value, 4);
+				log_memory_access(cur_address + i * size + 12, value, 4, true);
+			}
+			if (size > 8) {
+				dmi_out = riscv_batch_get_dmi_read(busmode_batch, pindex_read[batch_index++]);
+				value = get_field(dmi_out, DTM_DMI_DATA);
+				write_to_buf(buffer + i * size + 8, value, 4);
+				log_memory_access(cur_address + i * size + 8, value, 4, true);
+			}
+			if (size > 4) {
+				dmi_out = riscv_batch_get_dmi_read(busmode_batch, pindex_read[batch_index++]);
+				value = get_field(dmi_out, DTM_DMI_DATA);
+				write_to_buf(buffer + i * size + 4, value, 4);
+				log_memory_access(cur_address + i * size + 4, value, 4, true);
+			}
+			dmi_out = riscv_batch_get_dmi_read(busmode_batch, pindex_read[batch_index++]);
+			value = get_field(dmi_out, DTM_DMI_DATA);
+			write_to_buf(buffer + i * size, value, MIN(size, 4));
+			log_memory_access(cur_address + i * size, value, 4, true);
+		}
+
+		if (read_sbcs_nonbusy(target, &sbcs) != ERROR_OK)
+			return ERROR_FAIL;
+
+		if (get_field(sbcs, DMI_SBCS_SBBUSYERROR)) {
+			/* We read while the target was busy. Slow down and try again. */
+			LOG_DEBUG("DMI_SBCS_SBBUSYERROR");
+			dmi_write(target, DMI_SBCS, DMI_SBCS_SBBUSYERROR);
+			increase_dmi_busy_delay(target);
+			goto read_memory_bus_v1_opt_retry;
+		}
+		if (get_field(sbcs, DMI_SBCS_SBERROR)) {
+			/* Some error indicating the bus access failed, but not because of
+			 * something we did wrong. */
+			unsigned sb_error = get_field(sbcs, DMI_SBCS_SBERROR);
+			NDS32_LOG("<-- DMI_SBCS_SBERROR = 0x%x, address = 0x%lx -->", sb_error, (long unsigned int)address);
+			dmi_write(target, DMI_SBCS, DMI_SBCS_SBERROR);
+			return ERROR_FAIL;
+			//increase_dmi_busy_delay(target);
+			//goto read_memory_bus_v1_opt_retry;
+		}
+	}
+	return ERROR_OK;
+}
+
+#if _NDS_MEM_Q_ACCESS_
+int ndsv5_read_memory_quick_access(struct target *target, target_addr_t address,
+		uint32_t size, uint32_t count, uint8_t *buffer)
+{
+	riscv_select_current_hart(target);
+
+	target_addr_t read_addr = address;
+	LOG_DEBUG("reading start: %d words of %d bytes from 0x%" TARGET_PRIxADDR, count, size, address);
+	struct riscv_program program;
+ndsv5_read_memory_quick_access_retry:
+	riscv_program_init(&program, target);
+
+	riscv_program_fence(&program);
+	if (riscv_xlen(target) == 64) {
+		riscv_program_insert(&program, sd(GDB_REGNO_S0, GDB_REGNO_ZERO, 200));  // data2
+		riscv_program_insert(&program, ld(GDB_REGNO_S0, GDB_REGNO_ZERO, 192));  // data0
+	} else {
+		riscv_program_insert(&program, sw(GDB_REGNO_S0, GDB_REGNO_ZERO, 200));  // data2
+		riscv_program_insert(&program, lw(GDB_REGNO_S0, GDB_REGNO_ZERO, 192));  // data0
+	}
+
+	switch (size) {
+		case 1:
+			riscv_program_lbr(&program, GDB_REGNO_S0, GDB_REGNO_S0, 0);
+			break;
+		case 2:
+			riscv_program_lhr(&program, GDB_REGNO_S0, GDB_REGNO_S0, 0);
+			break;
+		case 4:
+			riscv_program_lwr(&program, GDB_REGNO_S0, GDB_REGNO_S0, 0);
+			break;
+		case 8:
+			riscv_program_ldr(&program, GDB_REGNO_S0, GDB_REGNO_S0, 0);
+			break;
+		default:
+			LOG_ERROR("Unsupported size: %d", size);
+			return ERROR_FAIL;
+	}
+	if (riscv_xlen(target) == 64) {
+		riscv_program_insert(&program, sd(GDB_REGNO_S0, GDB_REGNO_ZERO, 192));  // data0
+		riscv_program_insert(&program, ld(GDB_REGNO_S0, GDB_REGNO_ZERO, 200));  // data2
+	} else {
+		riscv_program_insert(&program, sw(GDB_REGNO_S0, GDB_REGNO_ZERO, 192));  // data0
+		riscv_program_insert(&program, lw(GDB_REGNO_S0, GDB_REGNO_ZERO, 200));  // data2
+	}
+	dmi_write(target, DMI_DATA0, read_addr);
+	dmi_write(target, DMI_DATA1, read_addr >> 32);
+
+	if (riscv_program_exec(&program, target) != ERROR_OK) {
+		/* quick_access mode, if target state from freerun to halt */
+		if (nds_dmi_quick_access_ena) {
+			if ( ((nds_dmi_abstractcs & DMI_ABSTRACTCS_CMDERR) >> DMI_ABSTRACTCS_CMDERR_OFFSET) == CMDERR_HALT_RESUME) {
+				LOG_ERROR("quick_access fail, read_memory_retry");
+				goto ndsv5_read_memory_quick_access_retry;
+			}
+		}
+	}
+	uint32_t value;
+	dmi_read(target, &value, DMI_DATA0);
+	LOG_DEBUG("M[0x%" TARGET_PRIxADDR "] reads 0x%08lx", address, (long)value);
+	uint32_t value_h = 0;
+	if (size == 8) {
+		dmi_read(target, &value_h, DMI_DATA1);
+		LOG_DEBUG("M[0x%" TARGET_PRIxADDR "] reads 0x%08lx", address+4, (long)value_h);
+	}
+	switch (size) {
+	case 1:
+		buffer[0] = value;
+		break;
+	case 2:
+		buffer[0] = value;
+		buffer[1] = value >> 8;
+		break;
+	case 8:
+		buffer[4] = value_h;
+		buffer[5] = value_h >> 8;
+		buffer[6] = value_h >> 16;
+		buffer[7] = value_h >> 24;
+	case 4:
+		buffer[0] = value;
+		buffer[1] = value >> 8;
+		buffer[2] = value >> 16;
+		buffer[3] = value >> 24;
+		break;
+	default:
+		LOG_ERROR("unsupported access size: %d", size);
+		return ERROR_FAIL;
+	}
+	return ERROR_OK;
+}
+
+int ndsv5_probe_pc_quick_access(struct target *target, uint64_t *pc_value)
+{
+	return ndsv5_get_csr_reg_quick_access(target, GDB_REGNO_DPC, pc_value);
+}
+#endif /* _NDS_MEM_Q_ACCESS_ */
+
+int write_memory_bus_v1_opt(struct target *target, target_addr_t address,
+		uint32_t size, uint32_t count, const uint8_t *buffer)
+{
+	LOG_DEBUG("start, count=0x%x, size=0x%x", count, size);
+	target_addr_t next_address, end_address;
+	RISCV013_INFO(info);
+	uint32_t sbcs = sb_sbaccess(size);
+	sbcs = set_field(sbcs, DMI_SBCS_SBAUTOINCREMENT, 1);
+	dmi_write(target, DMI_SBCS, sbcs);
+
+write_memory_bus_v1_opt_retry:
+	LOG_DEBUG("info->dmi_busy_delay=0x%x, info->ac_busy_delay=0x%x", info->dmi_busy_delay, info->ac_busy_delay);
+	next_address = address;
+	end_address = address + count * size;
+
+	sb_write_address(target, next_address);
+	while (next_address < end_address) {
+		if (busmode_batch != NULL) {
+			riscv_batch_free(busmode_batch);
+			busmode_batch = NULL;
+		}
+		busmode_batch = riscv_batch_alloc(target, nds_jtag_max_scans, info->dmi_busy_delay + info->ac_busy_delay);
+		//LOG_DEBUG("nds_jtag_max_scans=0x%x", nds_jtag_max_scans);
+
+		for (uint32_t i = (next_address - address) / size; i < count; i++) {
+			// if (riscv_batch_full(busmode_batch))
+			// check allocated_scans full
+			if (busmode_batch->used_scans > (busmode_batch->allocated_scans - 6))
+					break;
+
+			const uint8_t *p = buffer + i * size;
+			if (size > 12)
+				riscv_batch_add_dmi_write(busmode_batch, DMI_SBDATA3,
+						((uint32_t) p[12]) |
+						(((uint32_t) p[13]) << 8) |
+						(((uint32_t) p[14]) << 16) |
+						(((uint32_t) p[15]) << 24));
+			if (size > 8)
+				riscv_batch_add_dmi_write(busmode_batch, DMI_SBDATA2,
+						((uint32_t) p[8]) |
+						(((uint32_t) p[9]) << 8) |
+						(((uint32_t) p[10]) << 16) |
+						(((uint32_t) p[11]) << 24));
+			if (size > 4)
+				riscv_batch_add_dmi_write(busmode_batch, DMI_SBDATA1,
+						((uint32_t) p[4]) |
+						(((uint32_t) p[5]) << 8) |
+						(((uint32_t) p[6]) << 16) |
+						(((uint32_t) p[7]) << 24));
+			uint32_t value = p[0];
+			if (size > 2) {
+				value |= ((uint32_t) p[2]) << 16;
+				value |= ((uint32_t) p[3]) << 24;
+			}
+			if (size > 1)
+				value |= ((uint32_t) p[1]) << 8;
+			riscv_batch_add_dmi_write(busmode_batch, DMI_SBDATA0, value);
+			log_memory_access(address + i * size, value, size, false);
+			next_address += size;
+			//LOG_DEBUG("next_address=0x%x", (unsigned int)next_address);
+		}
+
+		if (riscv_batch_run(busmode_batch) != ERROR_OK) {
+			LOG_DEBUG("riscv_batch_run FAIL, busmode_batch->idle_count=0x%x", (unsigned int)busmode_batch->idle_count);
+			increase_dmi_busy_delay(target);
+			goto write_memory_bus_v1_opt_retry;
+		} else {
+			LOG_DEBUG("riscv_batch_run OK");
+		}
+
+		if (read_sbcs_nonbusy(target, &sbcs) != ERROR_OK)
+			return ERROR_FAIL;
+
+		if (get_field(sbcs, DMI_SBCS_SBBUSYERROR)) {
+			/* We wrote while the target was busy. Slow down and try again. */
+			LOG_DEBUG("DMI_SBCS_SBBUSYERROR");
+			dmi_write(target, DMI_SBCS, DMI_SBCS_SBBUSYERROR);
+			increase_dmi_busy_delay(target);
+			goto write_memory_bus_v1_opt_retry;
+		}
+		if (get_field(sbcs, DMI_SBCS_SBERROR)) {
+			/* Some error indicating the bus access failed, but not because of
+			 * something we did wrong. */
+			unsigned sb_error = get_field(sbcs, DMI_SBCS_SBERROR);
+			NDS32_LOG("<-- DMI_SBCS_SBERROR = 0x%x, address = 0x%lx -->", sb_error, (long unsigned int)address);
+			dmi_write(target, DMI_SBCS, DMI_SBCS_SBERROR);
+			return ERROR_FAIL;
+			//increase_dmi_busy_delay(target);
+			//goto write_memory_bus_v1_opt_retry;
+		}
+	}
+	return ERROR_OK;
+}
+
+extern INSN_CODE_T_V5* (*gen_get_value_code) (char* name, unsigned index);
+extern INSN_CODE_T_V5* (*gen_set_value_code) (char* name, unsigned index);
+
+int nds_ace_enable(struct target *target)
+{
+	struct riscv_program program;
+	riscv_program_init(&program, target);
+
+	// Assembly code used to enable ACE
+	//  7d0022f3          	csrr	t0,mmisc_ctl
+	//  0012c293          	xori	t0,t0,1
+	//  0102e293            ori	t0,t0,16
+	//  7d029073          	csrw	mmisc_ctl,t0
+	riscv_program_insert(&program, 0x7d0022f3);
+	riscv_program_insert(&program, 0x0012c293);
+	riscv_program_insert(&program, 0x0102e293);
+	riscv_program_insert(&program, 0x7d029073);
+
+	// run the program
+	int exec_out = riscv_program_exec(&program, target);
+
+	if (exec_out != ERROR_OK) {
+		LOG_ERROR("Unable to execute the program to enable ACR's CSR");
+		return exec_out;
+	} else {    
+		return ERROR_OK;
+	}
+};
+
+int nds_ace_get_reg(struct reg *reg)
+{
+	struct target *target = (struct target *) reg->arch_info;
+	bool is_rv64 = (64 == riscv_xlen(target)) ? true : false;
+	uint32_t reg_bytes = is_rv64 ? 8ul : 4ul;
+
+	if (isAceCsrEnable == false) {
+		nds_ace_enable(target);
+		isAceCsrEnable = true;
+	}
+
+	// Backup temp register (x5, x6, x7)
+	// x5: high part
+	// x6: low part
+	// x7: ACM's address
+	riscv_reg_t s0, s1, s2;
+	riscv_get_register(target, &s0, GDB_REGNO_T0);
+	riscv_get_register(target, &s1, GDB_REGNO_T1);
+	riscv_get_register(target, &s2, GDB_REGNO_T2);
+
+	// Get type_name and register index
+	char* type_name = (char*) reg->reg_data_type->id;
+	// Format : "%s_%d", type_name, idx
+	char* reg_name = (char*) reg->name;
+	unsigned int reg_idx = atoi(strrchr(reg_name, '_') + 1);
+
+	LOG_DEBUG("type_name = %s, reg_name = %s, reg_idx = %d, size = %d",
+			type_name, reg_name, reg_idx, reg->size);
+
+	// Generate code to read value from ACR/ACM
+	INSN_CODE_T_V5* insn_code = gen_get_value_code(type_name, reg_idx);
+
+	// Update the value
+	// [NOTE] The pointer of value is updated in following code.
+	//        If assigning value to reg->value after these updates,
+	//        reg->value would not be the initial address of *value.
+	//        So, incorrect value is assigned to reg->value. To avoid
+	//        this, we assign *value to reg->value initially.
+	char* value = reg->value;
+
+	bool init_acm_addr = false;
+	// Execute the code generated by gen_get_value_code() iteratively
+	for (unsigned i = 0; i < insn_code->num; i++) {
+		// Initialize
+		struct riscv_program program;
+		riscv_program_init(&program, target);
+
+		// For ACM utility instruction, write memory address to GDB_REGNO_XPR0 + 7
+		if (init_acm_addr == false &&
+				((insn_code->code + i)->version == acm_io1 ||
+				 (insn_code->code + i)->version == acm_io2)) {
+			riscv_program_li(&program, GDB_REGNO_T2, reg_idx);
+			init_acm_addr = true;
+			if (is_rv64) {
+				LOG_DEBUG("acm_addr = 0x%016" PRIx64 " feed into $t2", (uint64_t) reg_idx);
+			} else {
+				LOG_DEBUG("acm_addr= 0x%08" PRIx32 " feed into $t2", (uint32_t) reg_idx);
+			}
+		}
+
+		// insert utility instruction to program buffer
+		unsigned insn = (insn_code->code + i)->insn;
+		riscv_program_insert(&program, insn);
+		LOG_DEBUG("read utility instruction (offset: %d) = 0x%08" PRIx32, i, insn);
+		LOG_DEBUG("read utility instruction version %d", (insn_code->code + i)->version);
+
+		// determine the number of GPRs used to read/write data from/to ACR/ACM
+		bool isTwoGPR = false;
+		if ((insn_code->code + i)->version == acr_io2 ||
+				(insn_code->code + i)->version == acm_io2) {
+			isTwoGPR = true;
+		}
+
+		// execute the code stored in program buffer
+		int exec_out = riscv_program_exec(&program, target);
+		if (exec_out != ERROR_OK) {
+			LOG_ERROR("Unable to execute ACE utility program");
+
+			// Restore temp register
+			riscv_set_register(target, GDB_REGNO_T0, s0);
+			riscv_set_register(target, GDB_REGNO_T1, s1);
+			riscv_set_register(target, GDB_REGNO_T2, s2);
+			return exec_out;
+		}
+
+		// read value from program buffer
+		if (isTwoGPR == false) {
+			riscv_reg_t reg_value;
+			riscv_get_register(target, &reg_value, GDB_REGNO_T0);
+			memcpy(value, &reg_value, reg_bytes);
+			value += reg_bytes;
+			if (is_rv64) {
+				LOG_DEBUG("reg_value = 0x%016" PRIx64 " read from program buffer", (uint64_t) reg_value);
+			} else {
+				LOG_DEBUG("reg_value = 0x%08" PRIx32 " read from program buffer", (uint32_t) reg_value);
+			}
+		} else {
+			riscv_reg_t high = 0, low = 0;
+			riscv_get_register(target, &high, GDB_REGNO_T0);
+			riscv_get_register(target, &low,  GDB_REGNO_T1);     
+			if (is_rv64) {
+				LOG_DEBUG("reg_value (high) = 0x%016" PRIx64 " read from program buffer", (uint64_t) high);
+				LOG_DEBUG("reg_value (low)  = 0x%016" PRIx64 " read from program buffer", (uint64_t) low);
+			} else {
+				LOG_DEBUG("reg_value (high) = 0x%08" PRIx32 " read from program buffer", (uint32_t) high);
+				LOG_DEBUG("reg_value (low)  = 0x%08" PRIx32 " read from program buffer", (uint32_t) low);
+			}
+			memcpy(value, &low, reg_bytes);
+			value += reg_bytes;
+			memcpy(value, &high, reg_bytes);
+			value += reg_bytes;
+		}
+	}
+
+	// Restore temp register
+	riscv_set_register(target, GDB_REGNO_T0, s0);
+	riscv_set_register(target, GDB_REGNO_T1, s1);
+	riscv_set_register(target, GDB_REGNO_T2, s2);
+
+	return ERROR_OK;
+}
+
+int nds_ace_set_reg(struct reg *reg, unsigned char *val) 
+{  
+	int exec_out;
+	struct target *target = (struct target *) reg->arch_info;
+	bool is_rv64 = (64 == riscv_xlen(target)) ? true : false;
+	uint32_t reg_bytes = is_rv64 ? 8ul : 4ul;
+
+	if (isAceCsrEnable == false) {
+		nds_ace_enable(target);
+		isAceCsrEnable = true;
+	}
+
+	// Backup temp register (x5, x6, x7, x28)
+	// x5: high part
+	// x6: low part
+	// x7: ACM's address
+	// x28(t3): temp reg to write to xlen(64) gpr
+	riscv_reg_t s0, s1, s2, t3;
+	riscv_get_register(target, &s0, GDB_REGNO_T0);
+	riscv_get_register(target, &s1, GDB_REGNO_T1);
+	riscv_get_register(target, &s2, GDB_REGNO_T2);
+	if (is_rv64) {
+		riscv_get_register(target, &t3, GDB_REGNO_T3);
+	}
+
+	// Get acr_name and register index
+	char* type_name = (char*) reg->reg_data_type->id;
+	// Format : "%s_%d", type_name, idx
+	char* reg_name = (char*) reg->name;
+	unsigned int reg_idx = atoi(strrchr(reg_name, '_') + 1);
+
+	LOG_DEBUG("type_name = %s, reg_name = %s, reg_idx = %d, size = %d",
+			type_name, reg_name, reg_idx, reg->size);
+
+	/* Allocate buffer which is the multiple of register size */
+	unsigned int ByteSize = (!reg->size%8) ? reg->size/8 : (reg->size/8) + 1;
+	unsigned int rounds = (ByteSize % reg_bytes) ? 
+												ByteSize / reg_bytes + 1 : ByteSize / reg_bytes;
+	char* buffer = (char*) alloca (rounds * reg_bytes);
+	memset(buffer, 0, rounds * reg_bytes);
+	memcpy(buffer, val, ByteSize);
+	char* value = buffer;	/* this pointer will be increased when extracting value partially */
+
+	// Generate code to write value to ACR/ACM
+	INSN_CODE_T_V5* insn_code = gen_set_value_code(type_name, reg_idx);
+
+	bool init_acm_addr = false;
+	// Execute the code generated by gen_get_value_code() iteratively
+	for (unsigned i = 0; i < insn_code->num; i++) {
+		// Initialize
+		struct riscv_program program;
+		riscv_program_init(&program, target);
+
+		LOG_DEBUG("write utility instruction version %d", (insn_code->code + i)->version);
+		// determine the number of GPRs used to read/write data from/to ACR/ACM
+		bool isTwoGPR = false;
+		if ((insn_code->code + i)->version == acr_io2 ||
+				(insn_code->code + i)->version == acm_io2) {
+			isTwoGPR = true;
+		}
+
+		// For ACM utility instruction, write memory address to GDB_REGNO_XPR0 + 7
+		if (init_acm_addr == false &&
+				((insn_code->code + i)->version == acm_io1 ||
+				 (insn_code->code + i)->version == acm_io2)) {
+			riscv_program_li(&program, GDB_REGNO_T2, reg_idx);	/* 2 entry */
+			init_acm_addr = true;
+			if (is_rv64) {
+				// 7 insn entry + ebreak entry fills up program buffer
+				exec_out = riscv_program_exec(&program, target);
+				if (exec_out != ERROR_OK) { 
+					LOG_ERROR("Unable to execute program");
+					goto error;
+				}
+				riscv_program_init(&program, target);
+				LOG_DEBUG("acm_addr = 0x%016" PRIx64 " feed into $t2", (uint64_t) reg_idx);
+			} else {
+				LOG_DEBUG("acm_addr = 0x%08" PRIx32 " feed into $t2", (uint32_t) reg_idx);
+			}
+		}
+
+		// write given value string to S0/1
+		if (isTwoGPR == false) {
+			// Extract part of value from given value string
+			riscv_reg_t reg_value = 0;
+			memcpy(&reg_value, value, reg_bytes);
+			value += reg_bytes;
+			//riscv_program_write_ram(&program, output + 4, 0);
+			if (is_rv64) {
+				riscv_program_li64(&program, GDB_REGNO_T0, GDB_REGNO_T3, reg_value);	/* 7 entry */ 
+
+				// 7 insn entry + ebreak entry fills up program buffer
+				exec_out = riscv_program_exec(&program, target);
+				if (exec_out != ERROR_OK) { 
+					LOG_ERROR("Unable to execute program");
+					goto error;
+				}
+				riscv_program_init(&program, target);
+				LOG_DEBUG("reg_value = 0x%016" PRIx64 " feed into $t0", (uint64_t) reg_value);
+			} else {
+				riscv_program_li(&program, GDB_REGNO_T0, reg_value);	/* 2 entry */
+				LOG_DEBUG("reg_value = 0x%08" PRIx32 " feed into $t0", (uint32_t) reg_value);
+			}
+		} else {
+			// Extract part of value from given value string
+			// [NOTE] the order of val is from low bit order
+			//        e.g., for value of 0x111222333444555666777888999
+			//        the traversing order is from 999 --> 888 --> ...
+			riscv_reg_t high = 0, low = 0;
+			memcpy(&low, value, reg_bytes);
+			value += reg_bytes;
+			memcpy(&high, value, reg_bytes);
+			value += reg_bytes;
+
+			if (is_rv64) {
+				riscv_program_li64(&program, GDB_REGNO_T0, GDB_REGNO_T3, high);	/* 7 entry */
+				// 7 insn entry + ebreak entry fills up program buffer
+				exec_out = riscv_program_exec(&program, target);
+				if (exec_out != ERROR_OK) { 
+					LOG_ERROR("Unable to execute program");
+					goto error;
+				}
+				riscv_program_init(&program, target);
+
+				riscv_program_li64(&program, GDB_REGNO_T1, GDB_REGNO_T3, low);	/* 7 entry */
+				// 7 insn entry + ebreak entry fills up program buffer
+				exec_out = riscv_program_exec(&program, target);
+				if (exec_out != ERROR_OK) { 
+					LOG_ERROR("Unable to execute program");
+					goto error;
+				}
+				riscv_program_init(&program, target);
+
+				LOG_DEBUG("reg_value = 0x%016" PRIx64 " feed into $t0", (uint64_t) high);
+				LOG_DEBUG("reg_value = 0x%016" PRIx64 " feed into $t1", (uint64_t) low);
+			} else {
+				riscv_program_li(&program, GDB_REGNO_T0, high);	/* 2 entry */
+				riscv_program_li(&program, GDB_REGNO_T1, low);	/* 2 entry */
+				LOG_DEBUG("reg_value = 0x%08" PRIx32 " feed into $t0", (uint32_t) high);
+				LOG_DEBUG("reg_value = 0x%08" PRIx32 " feed into $t1", (uint32_t) low);
+			}
+		}
+
+		//riscv_program_fence(&program);
+		unsigned insn = (insn_code->code + i)->insn;
+		riscv_program_insert(&program, insn);
+		LOG_DEBUG("write utility instruction (offset:%d) = %x", i, insn);
+
+		// execute the code stored in program buffer
+		exec_out = riscv_program_exec(&program, target);
+		if (exec_out != ERROR_OK) { 
+			LOG_ERROR("Unable to execute program");
+			goto error;
+		}
+
+		riscv_reg_t high_s0, low_s1;
+		riscv_get_register(target, &high_s0, GDB_REGNO_T0);
+		riscv_get_register(target, &low_s1,  GDB_REGNO_T1);
+		if (is_rv64) {
+			LOG_DEBUG("(confirm)reg_value = 0x%016" PRIx64 " feed into $t0", (uint64_t) high_s0);
+			LOG_DEBUG("(confirm)reg_value = 0x%016" PRIx64 " feed into $t1", (uint64_t) low_s1);
+		} else {
+			LOG_DEBUG("(confirm)reg_value = 0x%08" PRIx32 " feed into $t0", (uint32_t) high_s0);
+			LOG_DEBUG("(confirm)reg_value = 0x%08" PRIx32 " feed into $t1", (uint32_t) low_s1);
+		}
+	}
+
+	memcpy(reg->value, val, ByteSize);
+
+	// Restore temp register
+	riscv_set_register(target, GDB_REGNO_T0, s0);
+	riscv_set_register(target, GDB_REGNO_T1, s1);
+	riscv_set_register(target, GDB_REGNO_T2, s2);
+	if (is_rv64) {
+		riscv_set_register(target, GDB_REGNO_T3, t3);
+	}
+
+	return ERROR_OK;
+
+error:
+	// Restore temp register
+	riscv_set_register(target, GDB_REGNO_T0, s0);
+	riscv_set_register(target, GDB_REGNO_T1, s1);
+	riscv_set_register(target, GDB_REGNO_T2, s2);
+	if (is_rv64) {
+		riscv_set_register(target, GDB_REGNO_T3, t3);
+	}
+	return exec_out;
+}
+
+struct reg_arch_type nds_ace_reg_access_type = {
+	.get = nds_ace_get_reg,
+	.set = nds_ace_set_reg
+};
+
+
 
 #endif /* _NDS_V5_ONLY_ */
 /********************************************************************/

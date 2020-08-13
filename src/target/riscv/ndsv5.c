@@ -46,14 +46,6 @@ uint32_t ndsv5_dmi_busy_retry_times = 100;
 
 
 
-/********************************************************************/
-/* ndsv5.c local Var. */
-/********************************************************************/
-static uint64_t ndsv5_backup_mstatus;
-/********************************************************************/
-
-
-
 int ndsv5_step(
 		struct target *target,
 		int current,
@@ -187,7 +179,7 @@ int ndsv5_handle_triggered(struct target *target)
 
 int ndsv5_poll(struct target *target)
 {
-	if (ndsv5_skip_dmi == 1)
+	if (nds_skip_dmi == 1)
 		return ERROR_OK;
 
 	ndsv5_triggered_hart = -1;
@@ -369,7 +361,7 @@ int ndsv5_get_physical_address(struct target *target, target_addr_t addr, target
 	uint64_t value_misa = 0;
 
 	if (ndsv5_reg_misa_value == 0) {
-		if ((ndsv5_dmi_quick_access) && (!riscv_is_halted(target))) {
+		if ((nds_dmi_quick_access) && (!riscv_is_halted(target))) {
 			/* use quick mode to read CSR while target_not_halted */
 			if (riscv_debug_buffer_size(target) < 6)
 				goto ndsv5_get_physical_address_OK;
@@ -390,7 +382,7 @@ int ndsv5_get_physical_address(struct target *target, target_addr_t addr, target
 	uint64_t base, satp;
 	uint32_t levels, ptidxbits, ptesize, vm;
 
-	if ((ndsv5_dmi_quick_access) && (!riscv_is_halted(target)))
+	if ((nds_dmi_quick_access) && (!riscv_is_halted(target)))
 		ndsv5_get_csr_reg_quick_access(target, GDB_REGNO_CSR0 + CSR_SATP, &satp);
 	else
 		riscv_get_register(target, &satp, GDB_REGNO_CSR0 + CSR_SATP);
@@ -523,7 +515,7 @@ int ndsv5_virtual_to_physical(struct target *target, target_addr_t address, targ
 		return ERROR_OK;
 	}
 	ndsv5_use_mprv_mode = 0;
-	if ((ndsv5_dmi_quick_access) && (!riscv_is_halted(target))) {
+	if ((nds_dmi_quick_access) && (!riscv_is_halted(target))) {
 		if (riscv_debug_buffer_size(target) < 6) {
 			*physical = address;
 			return ERROR_OK;
@@ -544,7 +536,7 @@ int ndsv5_virtual_to_physical(struct target *target, target_addr_t address, targ
 	/* else if (memory->access_channel == NDS_MEMORY_ACC_CPU) */
 	/* Enable mprven */
 	dcsr |= 0x10;
-	if ((ndsv5_dmi_quick_access) && (!riscv_is_halted(target))) {
+	if ((nds_dmi_quick_access) && (!riscv_is_halted(target))) {
 		ndsv5_get_csr_reg_quick_access(target, GDB_REGNO_MSTATUS, &mstatus);
 		ndsv5_set_csr_reg_quick_access(target, GDB_REGNO_DCSR, dcsr);
 		ndsv5_get_csr_reg_quick_access(target, GDB_REGNO_DCSR, &dcsr);
@@ -567,7 +559,7 @@ int ndsv5_virtual_to_physical(struct target *target, target_addr_t address, targ
 	mstatus |= MSTATUS_SUM;		/* Set SUM = 1 */
 	mstatus |= MSTATUS_MXR;		/* Set MXR = 1 */
 
-	if ((ndsv5_dmi_quick_access) && (!riscv_is_halted(target)))
+	if ((nds_dmi_quick_access) && (!riscv_is_halted(target)))
 		ndsv5_set_csr_reg_quick_access(target, GDB_REGNO_MSTATUS, mstatus);
 	else
 		riscv_set_register(target, GDB_REGNO_MSTATUS, mstatus);
@@ -580,7 +572,7 @@ void bus_mode_on(struct target *target, uint64_t *reg_value_backup)
 {
 	uint64_t old_mcache_ctl = 0;
 	uint64_t new_mcache_ctl = 0;
-	if ((ndsv5_dmi_quick_access) && (!riscv_is_halted(target))) {
+	if ((nds_dmi_quick_access) && (!riscv_is_halted(target))) {
 		if (riscv_debug_buffer_size(target) < 6)
 				return;
 		ndsv5_get_csr_reg_quick_access(target, CSR_MCACHE_CTL + GDB_REGNO_CSR0, &old_mcache_ctl);
@@ -603,7 +595,7 @@ void bus_mode_on(struct target *target, uint64_t *reg_value_backup)
 
 void bus_mode_off(struct target *target, uint64_t reg_value)
 {
-	if ((ndsv5_dmi_quick_access) && (!riscv_is_halted(target))) {
+	if ((nds_dmi_quick_access) && (!riscv_is_halted(target))) {
 		if (riscv_debug_buffer_size(target) < 6)
 				return;
 		ndsv5_set_csr_reg_quick_access(target, CSR_MCACHE_CTL + GDB_REGNO_CSR0, reg_value);
@@ -1867,5 +1859,210 @@ int riscv_program_vslide1down_vx(struct riscv_program *p, enum gdb_regno rd, enu
 	opcode = 0x3e006057;
 	opcode |= (((rd - GDB_REGNO_V0) << 7) | (rs1 << 15) | ((vs2 - GDB_REGNO_V0) << 20));
 	return riscv_program_insert(p, opcode);
+}
+
+int ndsv5_openocd_poll_one_hart(struct target *target, int hartid)
+{
+	LOG_DEBUG("polling hart : %d", hartid);
+	int triggered_hart = hartid;
+	if (riscv_poll_hart(target, triggered_hart) == 0)
+		return ERROR_OK;
+
+	LOG_DEBUG("  hart %d halted", triggered_hart);
+
+	target->state = TARGET_HALTED;
+	switch (riscv_halt_reason(target, triggered_hart)) {
+	case RISCV_HALT_BREAKPOINT:
+		target->debug_reason = DBG_REASON_BREAKPOINT;
+		break;
+	case RISCV_HALT_TRIGGER:
+		target->debug_reason = DBG_REASON_WATCHPOINT;
+		break;
+	case RISCV_HALT_INTERRUPT:
+		target->debug_reason = DBG_REASON_DBGRQ;
+		break;
+	case RISCV_HALT_SINGLESTEP:
+		target->debug_reason = DBG_REASON_SINGLESTEP;
+		break;
+	case RISCV_HALT_UNKNOWN:
+		target->debug_reason = DBG_REASON_UNDEFINED;
+		break;
+	case RISCV_HALT_ERROR:
+		return ERROR_FAIL;
+	}
+
+	target->state = TARGET_HALTED;
+	ndsv5_triggered_hart = triggered_hart;
+
+#if (!_NDS_SUPPORT_WITHOUT_ANNOUNCING_)
+	target_call_event_callbacks(target, TARGET_EVENT_HALTED);
+#endif
+	return ERROR_OK;
+}
+
+int ndsv5_openocd_halt_one_hart(struct target *target, int hartid)
+{
+	LOG_DEBUG("halting hart : %d", hartid);
+
+	///WARNING: hartid not use~~
+	RISCV_INFO(r);
+	int out = r-> halt_go(target);
+	if (out != ERROR_OK) {
+		LOG_ERROR("Unable to halt hart : %d", hartid);
+		return out;
+	}
+
+	register_cache_invalidate(target->reg_cache);
+	target->state = TARGET_HALTED;
+	target->debug_reason = DBG_REASON_DBGRQ;
+
+#if (!_NDS_SUPPORT_WITHOUT_ANNOUNCING_)
+	target_call_event_callbacks(target, TARGET_EVENT_HALTED);
+#endif
+	return out;
+}
+
+int ndsv5_openocd_resume_one_hart(
+		struct target *target,
+		int current,
+		target_addr_t address,
+		int handle_breakpoints,
+		int debug_execution,
+		int hartid
+) {
+	LOG_DEBUG("resuming hart : %d", hartid);
+
+	if (!current)
+		riscv_set_register(target, GDB_REGNO_PC, address);
+
+	RISCV_INFO(r);
+
+	/// WARNING: hartid no use~~
+	int out = r->resume_go(target);
+	riscv_invalidate_register_cache(target);
+	if (out != ERROR_OK) {
+		LOG_ERROR("unable to resume hart : %d", hartid);
+		return out;
+	}
+
+	register_cache_invalidate(target->reg_cache);
+	target->state = TARGET_RUNNING;
+	target_call_event_callbacks(target, TARGET_EVENT_RESUMED);
+	return out;
+}
+
+static int ndsv5_idlm_status_update(struct target *target)
+{
+	uint64_t value_micm_cfg=0, value_mdcm_cfg=0, reg_mmsc_cfg_value=0;
+	uint64_t value_milmb=0, value_mdlmb=0;
+
+	if (ndsv5_check_idlm_capability_before == 0) {
+		if ((nds_dmi_quick_access) && (!riscv_is_halted(target))) {
+			// use quick mode to read CSR while target_not_halted
+			if (riscv_debug_buffer_size(target) < 6)
+				return ERROR_OK;
+			ndsv5_get_csr_reg_quick_access(target, CSR_MICM_CFG + GDB_REGNO_CSR0, &value_micm_cfg);
+			ndsv5_get_csr_reg_quick_access(target, CSR_MDCM_CFG + GDB_REGNO_CSR0, &value_mdcm_cfg);
+			ndsv5_get_csr_reg_quick_access(target, CSR_MMSC_CFG + GDB_REGNO_CSR0, &reg_mmsc_cfg_value);
+		} else {
+			struct reg *reg_micm_cfg = ndsv5_get_reg_by_CSR(target, CSR_MICM_CFG);
+			if (reg_micm_cfg != NULL)
+				value_micm_cfg = ndsv5_get_register_value(reg_micm_cfg);
+			struct reg *reg_mdcm_cfg = ndsv5_get_reg_by_CSR(target, CSR_MDCM_CFG);
+			if (reg_mdcm_cfg != NULL)
+				value_mdcm_cfg = ndsv5_get_register_value(reg_mdcm_cfg);
+			struct reg *reg_mmsc_cfg = ndsv5_get_reg_by_CSR(target, CSR_MMSC_CFG);
+			if (reg_mmsc_cfg != NULL)
+				reg_mmsc_cfg_value = ndsv5_get_register_value(reg_mmsc_cfg);
+		}
+		if ((value_micm_cfg & 0x7000) == 0)
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MILMB].exist = false;
+		else
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MILMB].exist = true;
+		if ((value_mdcm_cfg & 0x7000) == 0)
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MDLMB].exist = false;
+		else
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MDLMB].exist = true;
+
+		NDS_INFO("value_micm_cfg: 0x%" PRIx64 " value_mdcm_cfg: 0x%" PRIx64, value_micm_cfg, value_mdcm_cfg);
+		NDS_INFO("reg_mmsc_cfg_value: 0x%" PRIx64, reg_mmsc_cfg_value);
+		if ((reg_mmsc_cfg_value & 0x4000) == 0) {
+			NDS_INFO("local memory slave port is not supported");
+			ndsv5_local_memory_slave_port = 0;
+		} else {
+			ndsv5_local_memory_slave_port = 1;
+		}
+		ndsv5_check_idlm_capability_before = 1;
+	}
+	// checking idlm enable while target_is_halted
+	if (target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MILMB].exist == true) {
+		if ((nds_dmi_quick_access) && (!riscv_is_halted(target))) {
+			if (riscv_debug_buffer_size(target) < 6)
+				return ERROR_OK;
+			ndsv5_get_csr_reg_quick_access(target, CSR_MILMB + GDB_REGNO_CSR0, &value_milmb);
+		} else {
+			struct reg *reg_milmb = ndsv5_get_reg_by_CSR(target, CSR_MILMB);
+			if (reg_milmb != NULL)
+				value_milmb = ndsv5_get_register_value(reg_milmb);
+		}
+		if (value_milmb & 0x1) {
+			ndsv5_ilm_bpa = value_milmb & ~0x3ff;
+			ndsv5_ilm_ena = 1;
+		} else {
+			ndsv5_ilm_ena = 0;
+		}
+	}
+	if (target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MDLMB].exist == true) {
+		if ((nds_dmi_quick_access) && (!riscv_is_halted(target))) {
+			if (riscv_debug_buffer_size(target) < 6)
+				return ERROR_OK;
+			ndsv5_get_csr_reg_quick_access(target, CSR_MDLMB + GDB_REGNO_CSR0, &value_mdlmb);
+		} else {
+			struct reg *reg_mdlmb = ndsv5_get_reg_by_CSR(target, CSR_MDLMB);
+			if (reg_mdlmb != NULL)
+				value_mdlmb = ndsv5_get_register_value(reg_mdlmb);
+		}
+		if (value_mdlmb & 0x1) {
+			ndsv5_dlm_bpa = value_mdlmb & ~0x3ff;
+			ndsv5_dlm_ena = 1;
+		} else {
+			ndsv5_dlm_ena = 0;
+		}
+	}
+	return ERROR_OK;
+}
+
+int ndsv5_lm_slvp_support(struct target *target, target_addr_t address, uint32_t csr_id_lmb)
+{
+	uint64_t checking_bpa=0, checking_lmsz=0;
+
+	LOG_DEBUG("ndsv5_check_idlm_capability_before: %d", ndsv5_check_idlm_capability_before);
+	if (ndsv5_check_idlm_capability_before) {
+		if (ndsv5_local_memory_slave_port == 0) {
+			//LOG_ERROR("<-- local memory slave port is not supported -->");
+			return ERROR_FAIL;
+		}
+		if ((csr_id_lmb == CSR_MILMB) && (ndsv5_ilm_lmsz == 0))
+			return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
+		if ((csr_id_lmb == CSR_MDLMB) && (ndsv5_dlm_lmsz == 0))
+			return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
+	}
+
+	ndsv5_idlm_status_update(target);
+	if (csr_id_lmb == CSR_MILMB) {
+		if (ndsv5_ilm_ena == 0)
+			return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
+		checking_bpa = ndsv5_ilm_bpa;
+		checking_lmsz = ndsv5_ilm_lmsz;
+	} else { // csr_id_lmb == CSR_MDLMB
+		if (ndsv5_dlm_ena == 0)
+			return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
+		checking_bpa = ndsv5_dlm_bpa;
+		checking_lmsz = ndsv5_dlm_lmsz;
+	}
+	if ((address >= checking_bpa) && (address < (checking_bpa + checking_lmsz))) {
+		return ERROR_OK;
+	}
+	return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
 }
 
