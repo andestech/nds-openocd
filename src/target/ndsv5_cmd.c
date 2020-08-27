@@ -666,7 +666,7 @@ __COMMAND_HANDLER(handle_ndsv5_ace_command)
 				get_ace_file_name_for_gdb_v5(nds32->aceconf, CMD_ARGV[0], &ace_file_name);
 
 			NDS_INFO("Return of get_ace_file_name_for_gdb_v5() = %d", ret);
-			if (ret != -1) {
+			if (ret == 0) {
 				if (ace_file_name != NULL) {
 					command_print(CMD, "%s", ace_file_name);
 					free(ace_file_name);
