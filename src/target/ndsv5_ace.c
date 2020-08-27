@@ -240,10 +240,10 @@ int32_t get_ace_file_name_for_gdb_v5(const char *aceconf,
 
 			FILE *fd = fopen(soname, "w");
 			if (fd == NULL) {
-				ret = -1;
+				ret = -2;
 			} else {
 				if (fwrite(str, sizeof(char), *ace_lib_for_gdb_len_v5, fd) != *ace_lib_for_gdb_len_v5)
-					ret = -1;
+					ret = -3;
 				else
 					*name = soname;
 
@@ -252,7 +252,7 @@ int32_t get_ace_file_name_for_gdb_v5(const char *aceconf,
 		}
 	} else {
 		*name = NULL;
-		return -1;
+		return -4;
 	}
 
 	return ret;
