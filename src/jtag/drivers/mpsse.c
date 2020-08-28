@@ -600,6 +600,176 @@ void mpsse_clock_data_in(struct mpsse_ctx *ctx, uint8_t *in, unsigned in_offset,
 	mpsse_clock_data(ctx, 0, 0, in, in_offset, length, mode);
 }
 
+#ifdef _NDS_V5_ONLY_
+/* two wire mode */
+extern uint8_t two_wire_mode;
+
+static void cjtag_data_out(const uint8_t *out, unsigned out_offset, uint8_t *cjtag_out,
+	unsigned bit_count) {
+	int bit = 0;
+	int b = 0;
+	int ib = 0;
+	uint8_t *ptr = out+out_offset;
+	uint8_t out_byte;
+	int out_bit_count = bit_count / 3;
+	int idx_wb = 0;
+
+	if (out_bit_count != 0) {
+		out_byte = *ptr++;
+	}
+
+	while (bit < out_bit_count) {
+		/* fill data */
+		while (bit < out_bit_count && b < 8) {
+			uint8_t target_bit = out_byte & 0x1;
+			out_byte = out_byte >> 1;
+			cjtag_out[idx_wb] = cjtag_out[idx_wb] | (target_bit << b);
+
+			b += 3;
+			bit += 1;
+			ib += 1;
+		}
+
+		/* for out value */
+		if (ib >= 8) {
+			ib = 0;
+			out_byte = *ptr++;
+		}
+
+		/* for write_buffer */
+		if (b >= 8) {
+			idx_wb += 1;
+			b = b - 8;
+		}
+	}
+
+	/* for TMS=1 */
+	if (b==0) {
+		cjtag_out[idx_wb-1] = cjtag_out[idx_wb-1] | 0x40;
+	} else if (b==1) {
+		cjtag_out[idx_wb-1] = cjtag_out[idx_wb-1] | 0x80;
+	} else {
+		cjtag_out[idx_wb] = cjtag_out[idx_wb] | (0x1 << (b-2));
+	}
+}
+
+void cjtag_data_in(uint8_t *out_read_buffer, uint8_t *cjtag_in, unsigned bit_count) {
+	unsigned bit = 1;
+	int b = 2;
+	int ib = 0;
+	uint8_t *ptr = cjtag_in;
+	uint8_t in_byte;
+	int in_bit_count = bit_count / 3;
+	int in_bytes = DIV_ROUND_UP(in_bit_count, 8);
+	uint8_t read_buffer[in_bytes];
+	for(int i=0; i<in_bytes; i++)
+		read_buffer[i] = 0;
+	int idx_rb = 0;
+
+	if (bit_count != 0) {
+		in_byte = *ptr++;
+	}
+
+	while (bit < bit_count) {
+		/* fill data */
+		while (bit < bit_count && b < 8) {
+			uint8_t target_bit = (in_byte >> b) & 0x1;
+			read_buffer[idx_rb] = read_buffer[idx_rb] | (target_bit << ib);
+
+			b += 3;
+			bit += 3;
+			ib += 1;
+		}
+
+		/* for read fuffer */
+		if (ib >= 8) {
+			idx_rb += 1;
+			ib = 0;
+		}
+
+		/* for a round */
+		if (b >= 8) {
+			b = b - 8;
+			in_byte = *ptr++;
+		}
+	}
+
+	memcpy(out_read_buffer, read_buffer, in_bytes);
+	return;
+}
+
+static void mpsse_clock_data_two(struct mpsse_ctx *ctx, const uint8_t *out, unsigned out_offset, uint8_t *in,
+	unsigned in_offset, unsigned length, uint8_t mode) {
+	/* TODO: On H chips, use command 0x8E/0x8F if in and out are both 0 */
+	if (out || (!out && !in))
+		mode |= 0x10;
+	if (in)
+		mode |= 0x20;
+
+	/* 3 times cost than 4 wire-adapter */
+	int cjtag_out_bits = length * 3;
+	int cjtag_out_bytes = DIV_ROUND_UP(length * 3, 8);
+	/* no matter length is divied by 8 exactly or not, to ensure it's in a legal
+	 * range, add 1 */
+	uint8_t cjtag_out[cjtag_out_bytes+1];
+	unsigned cjtag_out_offset = 0;
+	for(int i=0; i<cjtag_out_bytes+1; i++) {
+		cjtag_out[i] = 0;
+	}
+	/* get cjtag_out */
+	if (out) {
+		cjtag_data_out(out, out_offset, cjtag_out, cjtag_out_bits);
+	}
+
+	while (cjtag_out_bits > 0) {
+		/* Guarantee buffer space enough for a minimum size transfer */
+		if (buffer_write_space(ctx) + (cjtag_out_bits < 8) < (out || (!out && !in) ? 4 : 3)
+				|| (in && buffer_read_space(ctx) < 1))
+			ctx->retval = mpsse_flush(ctx);
+
+		if (cjtag_out_bits < 8) {
+			/* Transfer remaining bits in bit mode */
+	 		buffer_write_byte(ctx, 0x02 | mode);
+	 		buffer_write_byte(ctx, cjtag_out_bits - 1);
+
+			if (out)
+				cjtag_out_offset += buffer_write(ctx, cjtag_out, cjtag_out_offset, cjtag_out_bits);
+			if (in)
+				in_offset += buffer_add_read(ctx, in, in_offset, cjtag_out_bits, 8 - cjtag_out_bits);
+
+			if (!out && !in)
+				buffer_write_byte(ctx, 0x00);
+			cjtag_out_bits = 0;
+		} else {
+			/* Byte transfer */
+			unsigned this_bytes = cjtag_out_bits / 8;
+			/* MPSSE command limit */
+			if (this_bytes > 65536)
+				this_bytes = 65536;
+			/* Buffer space limit. We already made sure there's space for the minimum
+			 * transfer. */
+			if ((out || (!out && !in)) && this_bytes + 3 > buffer_write_space(ctx))
+				this_bytes = buffer_write_space(ctx) - 3;
+			if (in && this_bytes > buffer_read_space(ctx))
+				this_bytes = buffer_read_space(ctx);
+
+			buffer_write_byte(ctx, mode);
+			buffer_write_byte(ctx, (this_bytes - 1) & 0xff);
+			buffer_write_byte(ctx, (this_bytes - 1) >> 8);
+			if (out)
+				cjtag_out_offset += buffer_write(ctx, cjtag_out, cjtag_out_offset, this_bytes * 8);
+			if (in)
+				in_offset += buffer_add_read(ctx, in, in_offset, this_bytes * 8, 0);
+		
+			if (!out && !in)
+				for (unsigned n = 0; n < this_bytes; n++)
+					buffer_write_byte(ctx, 0x00);
+			cjtag_out_bits -= this_bytes * 8;
+		}
+	}
+}
+#endif
+
 void mpsse_clock_data(struct mpsse_ctx *ctx, const uint8_t *out, unsigned out_offset, uint8_t *in,
 	unsigned in_offset, unsigned length, uint8_t mode)
 {
@@ -610,6 +780,13 @@ void mpsse_clock_data(struct mpsse_ctx *ctx, const uint8_t *out, unsigned out_of
 		LOG_DEBUG_IO("Ignoring command due to previous error");
 		return;
 	}
+
+#ifdef _NDS_V5_ONLY_
+	if (two_wire_mode==1) {
+		mpsse_clock_data_two(ctx, out, out_offset, in, in_offset, length, mode);
+		return;
+	}
+#endif
 
 	/* TODO: On H chips, use command 0x8E/0x8F if in and out are both 0 */
 	if (out || (!out && !in))

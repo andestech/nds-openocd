@@ -58,6 +58,10 @@ static const Jim_Nvp nvp_jtag_tap_event[] = {
 	{ .name = NULL, .value = -1 }
 };
 
+#if _NDS_V5_ONLY_
+extern uint8_t two_wire_mode;
+#endif
+
 struct jtag_tap *jtag_tap_by_jim_obj(Jim_Interp *interp, Jim_Obj *o)
 {
 	const char *cp = Jim_GetString(o, NULL);
@@ -189,13 +193,49 @@ static int Jim_Command_drscan(Jim_Interp *interp, int argc, Jim_Obj *const *args
 		field_count++;
 	}
 
+#ifdef _NDS_V5_ONLY_
+	struct scan_field *compressed_fields;
+	uint8_t *compressed_out;
+	uint8_t compressed_out_offset = 0;
+	if (two_wire_mode) {
+		compressed_fields = malloc(sizeof(struct scan_field));
+		int bits = 0;
+		int total_bits = 0;
+		for (i = 2, field_count = 0; i < argc; i += 2, field_count += 1) {
+			total_bits += fields[field_count].num_bits;
+		}
+		compressed_out = malloc(sizeof(uint8_t) * DIV_ROUND_UP(total_bits, 8));
+		for (i = 2, field_count = 0; i < argc; i += 2, field_count += 1) {
+			bit_copy(compressed_out, compressed_out_offset, fields[field_count].out_value, 0, fields[field_count].num_bits);
+			compressed_out_offset += fields[field_count].num_bits;
+		}
+		compressed_fields[0].out_value = compressed_out;
+		compressed_fields[0].in_value = compressed_out;
+		compressed_fields[0].num_bits = total_bits;
+		jtag_add_dr_scan(tap, 1, compressed_fields, endstate);
+	} else {
+		jtag_add_dr_scan(tap, num_fields, fields, endstate);
+	}
+#else
 	jtag_add_dr_scan(tap, num_fields, fields, endstate);
+#endif
 
 	retval = jtag_execute_queue();
 	if (retval != ERROR_OK) {
 		Jim_SetResultString(interp, "drscan: jtag execute failed", -1);
 		return JIM_ERR;
 	}
+
+#ifdef _NDS_V5_ONLY_
+	if (two_wire_mode) {
+		for (i = 2, field_count = 0, compressed_out_offset = 0; i < argc; i += 2, field_count += 1) {
+			bit_copy(fields[field_count].in_value, 0, compressed_out, compressed_out_offset, fields[field_count].num_bits);
+			compressed_out_offset += fields[field_count].num_bits;
+		}
+		free(compressed_out);
+		free(compressed_fields);
+	}
+#endif
 
 	field_count = 0;
 	Jim_Obj *list = Jim_NewListObj(interp, NULL, 0);

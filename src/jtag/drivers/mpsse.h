@@ -75,4 +75,9 @@ int mpsse_set_frequency(struct mpsse_ctx *ctx, int frequency);
 int mpsse_flush(struct mpsse_ctx *ctx);
 void mpsse_purge(struct mpsse_ctx *ctx);
 
+#ifdef _NDS_V5_ONLY_
+/* two wire mode */
+void cjtag_data_in(uint8_t *out_read_buffer, uint8_t *cjtag_in, unsigned bit_count);
+#endif
+
 #endif /* OPENOCD_JTAG_DRIVERS_MPSSE_H */

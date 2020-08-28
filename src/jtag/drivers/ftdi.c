@@ -102,6 +102,9 @@
 #if _NDS_V5_ONLY_
 #include "../../target/nds32_log.h"
 extern char *ftdi_device_address;
+
+/* declare global config variable for two wire mode */
+uint8_t two_wire_mode = 0;
 #endif
 
 static char *ftdi_device_desc;
@@ -554,35 +557,59 @@ static void ftdi_execute_scan(struct jtag_command *cmd)
 			field->num_bits);
 
 		if (i == cmd->cmd.scan->num_fields - 1 && tap_get_state() != tap_get_end_state()) {
-			/* Last field, and we're leaving IRSHIFT/DRSHIFT. Clock last bit during tap
-			 * movement. This last field can't have length zero, it was checked above. */
-			DO_CLOCK_DATA(mpsse_ctx,
-				field->out_value,
-				0,
-				field->in_value,
-				0,
-				field->num_bits - 1,
-				ftdi_jtag_mode);
-			uint8_t last_bit = 0;
-			if (field->out_value)
-				bit_copy(&last_bit, 0, field->out_value, field->num_bits - 1, 1);
-			uint8_t tms_bits = 0x01;
-			DO_CLOCK_TMS_CS(mpsse_ctx,
-					&tms_bits,
+#ifdef _NDS_V5_ONLY_
+			if (two_wire_mode) {
+				DO_CLOCK_DATA(mpsse_ctx,
+					field->out_value,
 					0,
 					field->in_value,
+					0,
+					field->num_bits,
+					ftdi_jtag_mode);
+				tap_set_state(tap_state_transition(tap_get_state(), 1));
+				/* No last bit in 2-wire mode */
+				uint8_t tms_bits = 0x00;
+				DO_CLOCK_TMS_CS_OUT(mpsse_ctx,
+						&tms_bits,
+						0,
+						1,
+						0,
+						ftdi_jtag_mode);
+				tap_set_state(tap_state_transition(tap_get_state(), 0));
+			} else {
+#endif
+				/* Last field, and we're leaving IRSHIFT/DRSHIFT. Clock last bit during tap
+				 * movement. This last field can't have length zero, it was checked above. */
+				DO_CLOCK_DATA(mpsse_ctx,
+					field->out_value,
+					0,
+					field->in_value,
+					0,
 					field->num_bits - 1,
-					1,
-					last_bit,
 					ftdi_jtag_mode);
-			tap_set_state(tap_state_transition(tap_get_state(), 1));
-			DO_CLOCK_TMS_CS_OUT(mpsse_ctx,
-					&tms_bits,
-					1,
-					1,
-					last_bit,
-					ftdi_jtag_mode);
-			tap_set_state(tap_state_transition(tap_get_state(), 0));
+				uint8_t last_bit = 0;
+				if (field->out_value)
+					bit_copy(&last_bit, 0, field->out_value, field->num_bits - 1, 1);
+				uint8_t tms_bits = 0x01;
+				DO_CLOCK_TMS_CS(mpsse_ctx,
+						&tms_bits,
+						0,
+						field->in_value,
+						field->num_bits - 1,
+						1,
+						last_bit,
+						ftdi_jtag_mode);
+				tap_set_state(tap_state_transition(tap_get_state(), 1));
+				DO_CLOCK_TMS_CS_OUT(mpsse_ctx,
+						&tms_bits,
+						1,
+						1,
+						last_bit,
+						ftdi_jtag_mode);
+				tap_set_state(tap_state_transition(tap_get_state(), 0));
+#ifdef _NDS_V5_ONLY_
+			} /* end for "if else (two_wire_mode)" */
+#endif
 		} else
 			DO_CLOCK_DATA(mpsse_ctx,
 				field->out_value,
@@ -724,15 +751,61 @@ static int ftdi_execute_queue(void)
 	if (led)
 		ftdi_set_signal(led, '1');
 
-	for (struct jtag_command *cmd = jtag_command_queue; cmd; cmd = cmd->next) {
-		/* fill the write buffer with the desired command */
-		ftdi_execute_command(cmd);
-	}
+#ifdef _NDS_V5_ONLY_
+	int jtag_command_queue_length = 0;
+	for (struct jtag_command *cmd = jtag_command_queue; cmd; cmd = cmd->next, jtag_command_queue_length += 1) { }
+	uint8_t ***cjtag_cmds = malloc(sizeof(uint8_t**) * jtag_command_queue_length);
+	if (two_wire_mode) {
+		int j = 0;
+		for (struct jtag_command *cmd = jtag_command_queue; cmd; cmd = cmd->next, j += 1) {
+			/* fill the write buffer with the desired command */
+			if(cmd->type==JTAG_SCAN) {
+				struct scan_field *field = cmd->cmd.scan->fields;
+				cjtag_cmds[j] = malloc(sizeof(uint8_t*) * cmd->cmd.scan->num_fields);
+				for (int i = 0; i < cmd->cmd.scan->num_fields; i++, field++) {
+					if (field->in_value) {
+						cjtag_cmds[j][i] = field->in_value;
+						field->in_value = malloc(sizeof(uint8_t) * DIV_ROUND_UP(field->num_bits*3, 8));
+					}
+				}
+			}
+			ftdi_execute_command(cmd);
+		}
+	} else {
+#endif
+		for (struct jtag_command *cmd = jtag_command_queue; cmd; cmd = cmd->next) {
+			/* fill the write buffer with the desired command */
+			ftdi_execute_command(cmd);
+		}
+#ifdef _NDS_V5_ONLY_
+	} /* end for "if else (two_wire_mode)" */
+#endif
 
 	if (led)
 		ftdi_set_signal(led, '0');
 
 	int retval = mpsse_flush(mpsse_ctx);
+
+#ifdef _NDS_V5_ONLY_
+	if (two_wire_mode) {
+		int j = 0;
+		for (struct jtag_command *cmd = jtag_command_queue; cmd; cmd = cmd->next, j += 1) {
+			if(cmd->type==JTAG_SCAN) {
+				struct scan_field *field = cmd->cmd.scan->fields;
+				for (int i = 0; i < cmd->cmd.scan->num_fields; i++, field++) {
+					if (field->in_value) {
+						cjtag_data_in(cjtag_cmds[j][i], field->in_value, field->num_bits * 3);
+						free(field->in_value);
+						field->in_value = cjtag_cmds[j][i];
+					}
+				}
+				free(cjtag_cmds[j]);
+			}
+		}
+	}
+	free(cjtag_cmds);
+#endif
+
 	if (retval != ERROR_OK)
 		LOG_ERROR("error while flushing MPSSE queue: %d", retval);
 
@@ -1361,7 +1434,13 @@ COMMAND_HANDLER(ftdi_handle_oscan1_mode_command)
 #endif
 
 #if _NDS_V5_ONLY_
-static int ftdi_handle_write_pins_command(Jim_Interp *interp, int argc, Jim_Obj * const *argv)
+COMMAND_HANDLER(ftdi_handle_two_wire_mode)
+{
+	two_wire_mode = 1;
+	return ERROR_OK;
+}
+
+static int ftdi_handle_write_pins_command(Jim_Interp *interp, int argc, Jim_Obj *const *argv)
 {
 	const char *tmp_str;
 	char Nibble;
@@ -1547,6 +1626,13 @@ static const struct command_registration ftdi_command_handlers[] = {
 	},
 #endif
 #if _NDS_V5_ONLY_
+	{
+		.name = "ftdi_two_wire_mode",
+		.handler = &ftdi_handle_two_wire_mode,
+		.mode = COMMAND_ANY,
+		.help = "enable two fire mode",
+		.usage = "NULL"
+	},
 	{
 		.name = "write_pins",
 		.jim_handler = &ftdi_handle_write_pins_command,
