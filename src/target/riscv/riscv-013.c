@@ -2688,27 +2688,28 @@ read_memory_bus_v1_opt_retry:
 
 		batch_index = 0;
 		for (i=0; i<read_cnt; i++) {
+			riscv_addr_t offset = cur_address - address;
 			if (size > 12) {
 				dmi_out = riscv_batch_get_dmi_read(busmode_batch, pindex_read[batch_index++]);
 				value = get_field(dmi_out, DTM_DMI_DATA);
-				write_to_buf(buffer + i * size + 12, value, 4);
+				write_to_buf(buffer + offset + i * size + 12, value, 4);
 				log_memory_access(cur_address + i * size + 12, value, 4, true);
 			}
 			if (size > 8) {
 				dmi_out = riscv_batch_get_dmi_read(busmode_batch, pindex_read[batch_index++]);
 				value = get_field(dmi_out, DTM_DMI_DATA);
-				write_to_buf(buffer + i * size + 8, value, 4);
+				write_to_buf(buffer + offset + i * size + 8, value, 4);
 				log_memory_access(cur_address + i * size + 8, value, 4, true);
 			}
 			if (size > 4) {
 				dmi_out = riscv_batch_get_dmi_read(busmode_batch, pindex_read[batch_index++]);
 				value = get_field(dmi_out, DTM_DMI_DATA);
-				write_to_buf(buffer + i * size + 4, value, 4);
+				write_to_buf(buffer + offset + i * size + 4, value, 4);
 				log_memory_access(cur_address + i * size + 4, value, 4, true);
 			}
 			dmi_out = riscv_batch_get_dmi_read(busmode_batch, pindex_read[batch_index++]);
 			value = get_field(dmi_out, DTM_DMI_DATA);
-			write_to_buf(buffer + i * size, value, MIN(size, 4));
+			write_to_buf(buffer + offset + i * size, value, MIN(size, 4));
 			log_memory_access(cur_address + i * size, value, 4, true);
 		}
 
