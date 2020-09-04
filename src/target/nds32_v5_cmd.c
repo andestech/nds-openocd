@@ -2126,6 +2126,7 @@ static int ndsv5_init_option_reg(struct target *target)
 {
 	uint64_t reg_misa_value = 0, reg_mmsc_cfg_value = 0, reg_mmsc_cfg2_value = 0;
 	uint64_t reg_micm_cfg_value = 0, reg_mdcm_cfg_value = 0;
+	uint64_t reg_marchid_value = 0, reg_mimpid_value = 0;
 	struct reg *p_cur_reg;
 	char *reg_name;
 	uint32_t i;
@@ -2222,6 +2223,23 @@ static int ndsv5_init_option_reg(struct target *target)
 		target->reg_cache->reg_list[REG_CSR0 + CSR_UDCAUSE].exist = false;
 	}
 
+	/* ax45/nx45 and version < 0x100, the bitmap supports BF16,
+	 * but accessing mclk_ctl will trigger an exception, set CSR_MCLK_CTL false */
+	reg_name = ndsv5_get_CSR_name(target, CSR_MARCHID);
+	p_cur_reg = register_get_by_name(target->reg_cache, reg_name, 1);
+	p_cur_reg->type->get(p_cur_reg);
+	reg_marchid_value = buf_get_u64(p_cur_reg->value, 0, p_cur_reg->size);
+
+	reg_name = ndsv5_get_CSR_name(target, CSR_MIMPID);
+	p_cur_reg = register_get_by_name(target->reg_cache, reg_name, 1);
+	p_cur_reg->type->get(p_cur_reg);
+	reg_mimpid_value = buf_get_u64(p_cur_reg->value, 0, p_cur_reg->size);
+
+	if (((reg_marchid_value & 0xff) == 0x45) && (reg_mimpid_value < 0x100)) {
+		NDS_INFO("disable CSR_MCLK_CTL register");
+		target->reg_cache->reg_list[REG_CSR0 + CSR_MCLK_CTL].exist = false;
+	}
+
 	reg_name = ndsv5_get_CSR_name(target, CSR_MMSC_CFG);
 	p_cur_reg = register_get_by_name(target->reg_cache, reg_name, 1);
 	p_cur_reg->type->get(p_cur_reg);
@@ -2264,7 +2282,7 @@ static int ndsv5_init_option_reg(struct target *target)
 				target->reg_cache->reg_list[REG_CSR0 + CSR_MCLK_CTL].exist = false;
 			}
 			/* misa.V[21] == 1 && if RV32 mmsc_cfg2.veccfg == 1 */
-			if ((reg_misa_value & 0x200000) == 0 || ((reg_mmsc_cfg2_value & 0x10) == 0)) {
+			if (((reg_misa_value & 0x200000) == 0) || ((reg_mmsc_cfg2_value & 0x10) == 0)) {
 				NDS_INFO("disable CSR_MVEC_CFG register");
 				target->reg_cache->reg_list[REG_CSR0 + CSR_MVEC_CFG].exist = false;
 			}
@@ -2280,12 +2298,12 @@ static int ndsv5_init_option_reg(struct target *target)
 			target->reg_cache->reg_list[REG_CSR0 + CSR_MSTATUS_CRASHSAVE].exist = false;
 		}
 		/* misa.V[21] == 1 | if RV64 mmsc_cfg.BF16CVT == 1 */
-		if ((reg_misa_value & 0x200000) == 0 && ((reg_mmsc_cfg_value & 0x100000000) == 0)) {
+		if (((reg_misa_value & 0x200000) == 0) && ((reg_mmsc_cfg_value & 0x100000000) == 0)) {
 			NDS_INFO("disable CSR_MCLK_CTL register");
 			target->reg_cache->reg_list[REG_CSR0 + CSR_MCLK_CTL].exist = false;
 		}
 		/* misa.V[21] == 1 && if RV64 mmsc_cfg.veccfg == 1 */
-		if ((reg_misa_value & 0x200000) == 0 || ((reg_mmsc_cfg_value & 0x1000000000) == 0)) {
+		if (((reg_misa_value & 0x200000) == 0) || ((reg_mmsc_cfg_value & 0x1000000000) == 0)) {
 			NDS_INFO("disable CSR_MVEC_CFG register");
 			target->reg_cache->reg_list[REG_CSR0 + CSR_MVEC_CFG].exist = false;
 		}
