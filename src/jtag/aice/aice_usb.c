@@ -520,12 +520,12 @@ int do_diagnosis_check_core(struct target *target)
     }
 
 
-    if( msc_cfg_value&0x800 ) 
-        printf("NDS_ADDR_WIDTH_24 (16MB)");
-    else
-        printf("NDS_ADDR_WIDTH_32 (4GB)");
-    de   = mmu_cfg_value&0x4000000  >> 26;
-    drde = mmu_cfg_value&0x80000000 >> 31;
+	if (msc_cfg_value&0x800)
+		printf("NDS_ADDR_WIDTH_24 (16MB)");
+	else
+		printf("NDS_ADDR_WIDTH_32 (4GB)");
+	de   = (mmu_cfg_value&0x4000000)  >> 26;
+	drde = (mmu_cfg_value&0x80000000) >> 31;
 
     if( de )
         printf(" (big endian)");
