@@ -2110,9 +2110,8 @@ static int assert_reset(struct target *target)
 
 #if _NDS_V5_ONLY_
 	if (target->reset_halt) {
-		// single core no execute haltonreset: bitmap built before 2019/5 : setresethaltreq no work(hardware issue)
-		if (target->rtos)
-			ndsv5_haltonreset(target, 1);
+		/* single core no execute haltonreset: bitmap built before 2019/5 : setresethaltreq no work(hardware issue) */
+		ndsv5_haltonreset(target, 1);
 	} else
 		ndsv5_haltonreset(target, 0);
 #endif
@@ -2295,10 +2294,9 @@ static int deassert_reset(struct target *target)
 	}
 
 	// Restore halt-on-reset
-	if(nds_halt_on_reset == 1) {
-		// single core no execute haltonreset: bitmap built before 2019/5 : setresethaltreq no work(hardware issue)
-		if (target->rtos)
-			ndsv5_haltonreset(target, 1);
+	if (nds_halt_on_reset == 1 && target->rtos) {
+		/* single core no execute haltonreset: bitmap built before 2019/5 : setresethaltreq no work(hardware issue) */
+		ndsv5_haltonreset(target, 1);
 	} else
 		ndsv5_haltonreset(target, 0);
 	info->dmi_busy_delay = dmi_busy_delay;
@@ -2322,6 +2320,11 @@ static int deassert_reset(struct target *target)
 	}
 	LOG_DEBUG("exit reset\n");
 	//printf("exit reset\n");
+
+	uint64_t dpc;
+	riscv_get_register(target, &dpc, GDB_REGNO_PC);
+	NDS_INFO("[%s] hart[%d] halt at 0x%" PRIx64, target->tap->dotted_name, riscv_current_hartid(target),
+			dpc);
 
 	return ERROR_OK;
 #else
