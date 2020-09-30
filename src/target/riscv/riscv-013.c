@@ -2837,6 +2837,48 @@ static int deassert_reset(struct target *target)
 	return ERROR_OK;
 }
 
+#if _NDS_V5_ONLY_
+static int execute_fence_i(struct target *target)
+{
+	LOG_DEBUG("EXECUTE FENCE.I");
+	{
+		struct riscv_program program;
+		riscv_program_init(&program, target);
+		riscv_program_fence_i(&program);
+		int result = riscv_program_exec(&program, target);
+		if (result != ERROR_OK)
+			LOG_ERROR("Unable to execute pre-fence.i");
+	}
+
+
+	/* SYNC TODO
+	int old_hartid = riscv_current_hartid(target);
+	for (int i = 0; i < riscv_count_harts(target); ++i) {
+		if (!riscv_hart_enabled(target, i))
+			continue;
+
+		if (i == old_hartid)
+			continue;
+
+		riscv_set_current_hartid(target, i);
+
+		struct riscv_program program;
+		riscv_program_init(&program, target);
+		riscv_program_fence_i(&program);
+		int result = riscv_program_exec(&program, target);
+		if (result != ERROR_OK)
+			LOG_ERROR("Unable to execute fence.i on hart %d", i);
+	}
+
+	riscv_set_current_hartid(target, old_hartid);
+	LOG_DEBUG("EXECUTE FENCE.I(DONE)");
+	*/
+
+	return ERROR_OK;
+}
+#endif /* _NDS_V5_ONLY_ */
+
+
 static int execute_fence(struct target *target)
 {
 	/* FIXME: For non-coherent systems we need to flush the caches right
@@ -2844,7 +2886,10 @@ static int execute_fence(struct target *target)
 	{
 		struct riscv_program program;
 		riscv_program_init(&program, target);
+#if _NDS_V5_ONLY_
+#else
 		riscv_program_fence_i(&program);
+#endif /* _NDS_V5_ONLY_ */
 		riscv_program_fence(&program);
 		int result = riscv_program_exec(&program, target);
 		if (result != ERROR_OK)
@@ -5430,7 +5475,11 @@ int riscv013_dmi_write_u64_bits(struct target *target)
 static int maybe_execute_fence_i(struct target *target)
 {
 	if (has_sufficient_progbuf(target, 3))
+#if _NDS_V5_ONLY_
+		return execute_fence_i(target);
+#else
 		return execute_fence(target);
+#endif
 	return ERROR_OK;
 }
 
