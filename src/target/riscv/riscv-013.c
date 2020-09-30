@@ -2719,6 +2719,48 @@ static void write_to_buf(uint8_t *buffer, uint64_t value, unsigned size)
 	}
 }
 
+#if _NDS_V5_ONLY_
+static int execute_fence_i(struct target *target)
+{
+	LOG_DEBUG("EXECUTE FENCE.I");
+	int old_hartid = riscv_current_hartid(target);
+
+	{
+		struct riscv_program program;
+		riscv_program_init(&program, target);
+		riscv_program_fence_i(&program);
+		int result = riscv_program_exec(&program, target);
+		if (result != ERROR_OK)
+			LOG_ERROR("Unable to execute pre-fence.i");
+	}
+
+
+	for (int i = 0; i < riscv_count_harts(target); ++i) {
+		if (!riscv_hart_enabled(target, i))
+			continue;
+
+		if (i == old_hartid)
+			/* Fence already executed for this hart */
+			continue;
+
+		riscv_set_current_hartid(target, i);
+
+		struct riscv_program program;
+		riscv_program_init(&program, target);
+		riscv_program_fence_i(&program);
+		int result = riscv_program_exec(&program, target);
+		if (result != ERROR_OK)
+			LOG_ERROR("Unable to execute fence.i on hart %d", i);
+	}
+
+	riscv_set_current_hartid(target, old_hartid);
+	LOG_DEBUG("EXECUTE FENCE.I(DONE)");
+
+	return ERROR_OK;
+}
+#endif /* _NDS_V5_ONLY_ */
+
+
 static int execute_fence(struct target *target)
 {
 	LOG_ERROR("EXECUTE FENCE!");
@@ -2730,7 +2772,10 @@ static int execute_fence(struct target *target)
 	{
 		struct riscv_program program;
 		riscv_program_init(&program, target);
+#if _NDS_V5_ONLY_
+#else
 		riscv_program_fence_i(&program);
+#endif /* _NDS_V5_ONLY_ */
 		riscv_program_fence(&program);
 		int result = riscv_program_exec(&program, target);
 		if (result != ERROR_OK)
@@ -2749,7 +2794,10 @@ static int execute_fence(struct target *target)
 
 		struct riscv_program program;
 		riscv_program_init(&program, target);
+#if _NDS_V5_ONLY_
+#else
 		riscv_program_fence_i(&program);
+#endif /* _NDS_V5_ONLY_ */
 		riscv_program_fence(&program);
 		int result = riscv_program_exec(&program, target);
 		if (result != ERROR_OK)
@@ -5021,8 +5069,13 @@ static int maybe_execute_fence_i(struct target *target)
 {
 	RISCV013_INFO(info);
 	RISCV_INFO(r);
+#if _NDS_V5_ONLY_
+	if (info->progbufsize + r->impebreak >= 2)
+		return execute_fence_i(target);
+#else
 	if (info->progbufsize + r->impebreak >= 3)
 		return execute_fence(target);
+#endif /* _NDS_V5_ONLY_ */
 	return ERROR_OK;
 }
 
