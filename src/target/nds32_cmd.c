@@ -2211,6 +2211,20 @@ COMMAND_HANDLER(handle_nds32_diagnosis_command)
 	return ERROR_OK;
 }
 
+extern const char *burner_port;
+COMMAND_HANDLER(handle_nds32_burn_port_command)
+{
+	LOG_DEBUG("%s", __func__);
+	if (CMD_ARGC > 0) {
+		burner_port = strdup(CMD_ARGV[0]);
+		LOG_DEBUG("nds burn_port %s", burner_port);
+	}
+	else
+		LOG_ERROR("expected more argument to nds burn_port <burner_port>");
+
+	return ERROR_OK;
+}
+
 extern uint32_t DIMBR_D4;
 COMMAND_HANDLER(handle_nds32_edm_dimb)
 {
@@ -2879,6 +2893,13 @@ const struct command_registration nds32_exec_command_handlers[] = {
 		.mode = COMMAND_ANY,
 		.usage = "diagnosis memory",
 		.help = "diagnosis",
+	},
+	{
+		.name = "burn_port",
+		.handler = handle_nds32_burn_port_command,
+		.mode = COMMAND_ANY,
+		.usage = "burn_port [burner_port]",
+		.help = "set burner port",
 	},
 	{
 		.name = "edm_dimb",

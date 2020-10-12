@@ -88,7 +88,7 @@ unsigned int aice_efreq_value = 0;
 /* AICE operations */
 const char *target_cfg_name_str;
 #define FILENAME_INPUT     "target/nds32.cfg.tpl"
-#define FILENAME_OUTPUT    "target/nds32v3_0.cfg"
+//#define FILENAME_OUTPUT    "target/nds32v3_0.cfg" (comment out this line, because modified config files must add ICEman log folder(-f $workspacepath))
 #define NDS32_CPUTAPID     0x1000063d
 #define LINE_BUFFER_SIZE   2048
 #define NDS32_UPDATE_TARGET_ARCH  "    target create $_TARGETNAME nds32_v3 -endian little " \
