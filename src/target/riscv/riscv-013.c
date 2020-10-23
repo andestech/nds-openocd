@@ -1615,6 +1615,15 @@ static int register_read_direct(struct target *target, uint64_t *value, uint32_t
 				riscv_program_insert(&program, fmv_x_w(S0, number - GDB_REGNO_FPR0));
 			}
 		} else if (number >= GDB_REGNO_CSR0 && number <= GDB_REGNO_CSR4095) {
+#if _NDS_V5_ONLY_
+			if (register_read_direct(target, &mstatus, GDB_REGNO_MSTATUS) != ERROR_OK)
+				return ERROR_FAIL;
+			if ((mstatus & MSTATUS_VS) == 0) {
+				if (register_write_direct(target, GDB_REGNO_MSTATUS,
+					set_field(mstatus, MSTATUS_VS, 1)) != ERROR_OK)
+					return ERROR_FAIL;
+			}
+#endif
 			riscv_program_csrr(&program, S0, number);
 		} else {
 			LOG_ERROR("Unsupported register: %s", gdb_regno_name(number));
@@ -6246,6 +6255,16 @@ int ndsv5_get_vector_VLMAX(struct target *target)
 	uint64_t reg_vtype = 0, reg_vl = 0, reg_vtype_tmp = 0, reg_vl_tmp = 0;
 	int result;
 	unsigned xlen = riscv_xlen(target);
+
+	uint64_t mmsc_cfg;
+	if(register_read_direct(target, &mmsc_cfg, GDB_REGNO_CSR0 + CSR_MMSC_CFG) != ERROR_OK) {
+		LOG_ERROR("read mmsc_cfg error");
+	}
+	if ((mmsc_cfg & 0x1000000000)>>36) {
+		MSTATUS_VS = 0x00000600;
+	} else {
+		MSTATUS_VS = 0x01800000;
+	}
 
 	uint64_t mstatus;
 	if (register_read_direct(target, &mstatus, GDB_REGNO_MSTATUS) != ERROR_OK)

@@ -275,7 +275,12 @@ static int riscv_gdb_v_packet(struct connection *connection, const char *packet,
 #if _NDS32_ONLY_
 		target->gdb_running_type = 'c';
 		LOG_DEBUG("target->gdb_running_type = c");
-#endif /* _NDS32_ONLY_ */
+
+		/* for solving demo code:demo-smp-V5 cannot start profiling issue */
+		target_call_event_callbacks(target, TARGET_EVENT_GDB_START);
+		target_resume(target, 1, 0, 0, 0);
+		gdb_set_frontend_state_running(connection);
+#else
 		target_call_event_callbacks(target, TARGET_EVENT_GDB_START);
 		target_call_event_callbacks(target, TARGET_EVENT_RESUME_START);
 		riscv_set_all_rtos_harts(target);
@@ -284,6 +289,7 @@ static int riscv_gdb_v_packet(struct connection *connection, const char *packet,
 		gdb_set_frontend_state_running(connection);
 		target_call_event_callbacks(target, TARGET_EVENT_RESUMED);
 		target_call_event_callbacks(target, TARGET_EVENT_RESUME_END);
+#endif /* _NDS32_ONLY_ */
 		return JIM_OK;
 
 	} else if (strncmp(packet_stttrr, "vCont", 5) == 0) {

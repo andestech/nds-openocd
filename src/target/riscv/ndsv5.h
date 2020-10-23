@@ -122,6 +122,7 @@ uint32_t ndsv5_ilm_ena, ndsv5_dlm_ena;
 uint32_t ndsv5_local_memory_slave_port;
 uint32_t ndsv5_check_idlm_capability_before;
 uint64_t ndsv5_backup_mstatus;
+uint64_t MSTATUS_VS;
 /********************************************************************/
 
 

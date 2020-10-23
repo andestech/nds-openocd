@@ -1985,6 +1985,13 @@ static int ndsv5_init_option_reg(struct target *target)
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MHPMCOUNTER3H + i].exist = false;
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_PMPCFG1].exist = false;
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_PMPCFG3].exist = false;
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_PMPCFG5].exist = false;
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_PMPCFG7].exist = false;
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_PMPCFG9].exist = false;
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_PMPCFG11].exist = false;
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_PMPCFG13].exist = false;
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_PMPCFG15].exist = false;
+
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_PMACFG1].exist = false;
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_PMACFG3].exist = false;
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MMSC_CFG2].exist = false;
@@ -2209,30 +2216,33 @@ static int ndsv5_init_option_reg(struct target *target)
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MECC_CODE].exist = false;
 	}
 
-	/* check pmpcfg0-3 exist */
+	/* check pmpcfg0-15 exist */
 	int retval;
-	for (i = (GDB_REGNO_CSR0 + CSR_PMPCFG0); i <= (GDB_REGNO_CSR0 + CSR_PMPCFG3); i++) {
-		/* rv64 has no CSR_PMPCFG1&3 */
-		if (riscv_xlen(target) == 64)
-			if ((i == (GDB_REGNO_CSR0 + CSR_PMPCFG1)) || (i == (GDB_REGNO_CSR0 + CSR_PMPCFG3)))
+	for (i = (GDB_REGNO_CSR0 + CSR_PMPCFG0); i <= (GDB_REGNO_CSR0 + CSR_PMPCFG15); i++) {
+		/* 64bit skip CSR_PMPCFG1~15(odd) */
+		if (riscv_xlen(target) == 64) {
+			if (target->reg_cache->reg_list[i].exist == false) {
+				NDS_INFO("%s register does not exist", target->reg_cache->reg_list[i].name);
 				continue;
+			}
+		}
 
 		reg_name = ndsv5_get_CSR_name(target, (i - GDB_REGNO_CSR0));
 		p_cur_reg = register_get_by_name(target->reg_cache, reg_name, 1);
 		retval = p_cur_reg->type->get(p_cur_reg);
 		if (retval != ERROR_OK) {
-			NDS_INFO("disable CSR_PMPCFG registers");
+			NDS_INFO("disable %s register", target->reg_cache->reg_list[i].name);
 			target->reg_cache->reg_list[i].exist = false;
 		}
 	}
 
-	/* check pmpaddr0-15 exist */
-	for (i = (GDB_REGNO_CSR0 + CSR_PMPADDR0); i <= (GDB_REGNO_CSR0 + CSR_PMPADDR15); i++) {
+	/* check pmpaddr0-63 exist */
+	for (i = (GDB_REGNO_CSR0 + CSR_PMPADDR0); i <= (GDB_REGNO_CSR0 + CSR_PMPADDR63); i++) {
 		reg_name = ndsv5_get_CSR_name(target, (i - GDB_REGNO_CSR0));
 		p_cur_reg = register_get_by_name(target->reg_cache, reg_name, 1);
 		retval = p_cur_reg->type->get(p_cur_reg);
 		if (retval != ERROR_OK) {
-			NDS_INFO("disable CSR_PMPADDR registers");
+			NDS_INFO("disable %s register", target->reg_cache->reg_list[i].name);
 			target->reg_cache->reg_list[i].exist = false;
 		}
 	}
@@ -2465,6 +2475,9 @@ static int ndsv5_init_option_reg(struct target *target)
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_VTYPE].exist = false;
 		for (i = GDB_REGNO_V0; i <= GDB_REGNO_V31; i++)
 			target->reg_cache->reg_list[i].exist = false;
+	}
+	if ((reg_mmsc_cfg_value&0x1000000000)>>36 != 1) {
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_VLENB].exist = false;
 	}
 
 	nds32->execute_register_init = true;
