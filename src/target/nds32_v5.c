@@ -831,7 +831,7 @@ int ndsv5_dump_cache(struct target *target, unsigned int cache_type, const char*
 				for (way = 0; way < ways; way++) {
 					ndsv5_set_register_value(reg_mcctlcommand, read_tag_cmd);
 					tag = ndsv5_get_register_value(reg_mcctldata);
-					LOG_DEBUG("tag: %lld", tag);
+					LOG_DEBUG("idx_auto tag: %llx", tag);
 
 					mesi = tag & 0x7;
 					ce[idx][way].inval = (mesi == 0);
@@ -848,20 +848,20 @@ int ndsv5_dump_cache(struct target *target, unsigned int cache_type, const char*
 				for (way = 0; way < ways; way++) {
 					ndsv5_set_register_value(reg_mcctlcommand, read_tag_cmd);
 					tag = ndsv5_get_register_value(reg_mcctldata);
-					LOG_DEBUG("tag: %lld", tag);
+					LOG_DEBUG("idx_auto tag: %llx", tag);
 
-					ce[idx][way].valid = (uint8_t)((tag & (1 << (xlen - 1))) >> (xlen - 1));
-					ce[idx][way].lock = (uint8_t)((tag & (1 << (xlen - 2))) >> (xlen - 2));
-					ce[idx][way].dirty = (uint8_t)((tag & (1 << (xlen - 3))) >> (xlen - 3));
+					ce[idx][way].valid = (uint8_t)((tag & (1ULL << (xlen - 1))) >> (xlen - 1));
+					ce[idx][way].lock = (uint8_t)((tag & (1ULL << (xlen - 2))) >> (xlen - 2));
+					ce[idx][way].dirty = (uint8_t)((tag & (1ULL << (xlen - 3))) >> (xlen - 3));
 					ce[idx][way].pa = (tag & maskTAG) << shift_bit;
 				}
 			}
 		}
 		/* READ DATA COMMAND */
-		for (i = 0; i < word_num; i++) {
-			ndsv5_set_register_value(reg_mcctlbeginaddr, (i * word_size));
-			for (idx = 0; idx < sets; idx++) {
-				for (way = 0; way < ways; way++) {
+		ndsv5_set_register_value(reg_mcctlbeginaddr, 0);
+		for (idx = 0; idx < sets; idx++) {
+			for (way = 0; way < ways; way++) {
+				for (i = 0; i < word_num; i++) {
 					ndsv5_set_register_value(reg_mcctlcommand, read_data_cmd);
 					ce[idx][way].cacheline[i] = ndsv5_get_register_value(reg_mcctldata);
 				}
@@ -876,6 +876,7 @@ int ndsv5_dump_cache(struct target *target, unsigned int cache_type, const char*
 				ndsv5_set_register_value(reg_mcctlbeginaddr, ra);
 				ndsv5_set_register_value(reg_mcctlcommand, read_tag_cmd);
 				tag = ndsv5_get_register_value(reg_mcctldata);
+				LOG_DEBUG("tag: %llx", tag);
 
 				if (new_tagformat) {
 					mesi = tag & 0x7;
@@ -887,9 +888,9 @@ int ndsv5_dump_cache(struct target *target, unsigned int cache_type, const char*
 					ce[idx][way].lock = (uint8_t)(tag & 0x8) >> 3;
 					ce[idx][way].pa = (tag >> 4) << shift_bit ;
 				} else {
-					ce[idx][way].valid = (uint8_t)((tag & (1 << (xlen - 1))) >> (xlen - 1));
-					ce[idx][way].lock = (uint8_t)((tag & (1 << (xlen - 2))) >> (xlen - 2));
-					ce[idx][way].dirty = (uint8_t)((tag & (1 << (xlen - 3))) >> (xlen - 3));
+					ce[idx][way].valid = (uint8_t)((tag & (1ULL << (xlen - 1))) >> (xlen - 1));
+					ce[idx][way].lock = (uint8_t)((tag & (1ULL << (xlen - 2))) >> (xlen - 2));
+					ce[idx][way].dirty = (uint8_t)((tag & (1ULL << (xlen - 3))) >> (xlen - 3));
 					ce[idx][way].pa = (tag & maskTAG) << shift_bit;
 				}
 
@@ -1022,9 +1023,9 @@ int ndsv5_dump_cache_va(struct target *target, unsigned int cache_type, uint64_t
 	LOG_DEBUG( "physical address:0x%llx", pa);
 	//if dcache use pa to index; if icache use va to index
 	if( cache_type == DCACHE ) {
-		idx = (pa & (((1 << set_bits) - 1) << line_bits));
+		idx = (pa & (((1ULL << set_bits) - 1) << line_bits));
 	} else {
-		idx = (va & (((1 << set_bits) - 1) << line_bits));
+		idx = (va & (((1ULL << set_bits) - 1) << line_bits));
 	}
 
 	LOG_DEBUG("Way:%lld, Set:%lld, Line Size:%lld", ways, sets, line_size);
@@ -1062,7 +1063,7 @@ int ndsv5_dump_cache_va(struct target *target, unsigned int cache_type, uint64_t
 		ndsv5_set_register_value(reg_mcctlbeginaddr, ra);
 		ndsv5_set_register_value(reg_mcctlcommand, read_tag_cmd);
 		tag = ndsv5_get_register_value(reg_mcctldata);
-		LOG_DEBUG( "tag: %lld", tag);
+		LOG_DEBUG("tag: %llx", tag);
 		if (new_tagformat) {
 			mesi = tag & 0x7;
 			ces[way].inval = (mesi == 0);
@@ -1073,9 +1074,9 @@ int ndsv5_dump_cache_va(struct target *target, unsigned int cache_type, uint64_t
 			ces[way].lock = (uint8_t)(tag & 0x8) >> 3;
 			ces[way].pa = (tag >> 4) << shift_bit ;
 		} else {
-			ces[way].valid = (uint8_t)((tag & (1 << (xlen - 1))) >> (xlen - 1));
-			ces[way].lock = (uint8_t)((tag & (1 << (xlen - 2))) >> (xlen - 2));
-			ces[way].dirty = (uint8_t)((tag & (1 << (xlen - 3))) >> (xlen - 3));
+			ces[way].valid = (uint8_t)((tag & (1ULL << (xlen - 1))) >> (xlen - 1));
+			ces[way].lock = (uint8_t)((tag & (1ULL << (xlen - 2))) >> (xlen - 2));
+			ces[way].dirty = (uint8_t)((tag & (1ULL << (xlen - 3))) >> (xlen - 3));
 			ces[way].pa = (tag & maskTAG) << shift_bit;
 		}
 		for( i = 0; i < word_num; i++ ) {
