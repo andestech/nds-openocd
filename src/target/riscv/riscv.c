@@ -2089,6 +2089,10 @@ static int riscv_get_gdb_reg_list_internal(struct target *target,
 	LOG_DEBUG("[%s] {%d} reg_class=%d, read=%d",
 			target_name(target), r->current_hartid, reg_class, read);
 
+#if _NDS_V5_ONLY_
+	int hartid = riscv_current_hartid(target);
+#endif /* _NDS_V5_ONLY_ */
+
 	if (!target->reg_cache) {
 		LOG_ERROR("Target not initialized. Return ERROR_FAIL.");
 		return ERROR_FAIL;
@@ -2096,10 +2100,6 @@ static int riscv_get_gdb_reg_list_internal(struct target *target,
 
 	if (riscv_select_current_hart(target) != ERROR_OK)
 		return ERROR_FAIL;
-
-#if _NDS_V5_ONLY_
-	unsigned int acr_reg_count_v5_cnt = 0;
-#endif /* _NDS_V5_ONLY_ */
 
 	switch (reg_class) {
 		case REG_CLASS_GENERAL:
@@ -2113,14 +2113,7 @@ static int riscv_get_gdb_reg_list_internal(struct target *target,
 #endif /* _NDS_V5_ONLY_ */
 			break;
 		case REG_CLASS_ALL:
-#if _NDS_V5_ONLY_
-			/* TODO: Should be GDB_REGNO_COUNT or target->reg_cache->num_regs ?! */
-			if (global_acr_reg_count_v5 != 0)
-				acr_reg_count_v5_cnt = *global_acr_reg_count_v5;
-			*reg_list_size = target->reg_cache->num_regs + acr_reg_count_v5_cnt;
-#else /* _NDS_V5_ONLY_ */
 			*reg_list_size = target->reg_cache->num_regs;
-#endif /* _NDS_V5_ONLY_ */
 			break;
 		default:
 			LOG_ERROR("Unsupported reg_class: %d", reg_class);
@@ -4026,12 +4019,7 @@ void riscv_invalidate_register_cache(struct target *target)
 	LOG_DEBUG("[%d]", target->coreid);
 	register_cache_invalidate(target->reg_cache);
 #if _NDS_V5_ONLY_
-	unsigned int acr_reg_count_v5_cnt = 0;
-	if (global_acr_reg_count_v5 != 0)
-		acr_reg_count_v5_cnt = *global_acr_reg_count_v5;
-
-	/* TODO: Should be GDB_REGNO_COUNT or target->reg_cache->num_regs ?! */
-	for (size_t i = 0; i < target->reg_cache->num_regs + acr_reg_count_v5_cnt; ++i) {
+	for (size_t i = 0; i < target->reg_cache->num_regs; ++i) {
 		struct reg *reg = &target->reg_cache->reg_list[i];
 		reg->valid = false;
 	}
