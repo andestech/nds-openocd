@@ -865,8 +865,9 @@ int ndsv5_dump_cache(struct target *target, unsigned int cache_type, const char*
 					ndsv5_set_register_value(reg_mcctlcommand, read_data_cmd);
 					ce[idx][way].cacheline[i] = ndsv5_get_register_value(reg_mcctldata);
 				}
+				now_cache += word_num;
+				NDS32_LOG_R("Dump Progressing...%lld%%", ((now_cache*100)/total_cache));
 			}
-			NDS32_LOG_R("Dump Progressing...%lld%%", ((sets*ways*(i+1)*100)/total_cache));
 		}
 	} else {
 		for (idx = 0; idx < sets; idx++) {
