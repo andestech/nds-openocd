@@ -522,8 +522,10 @@ static void riscv_free_registers(struct target *target)
 			if (target->reg_cache->reg_list[0].arch_info)
 				free(target->reg_cache->reg_list[0].arch_info);
 			/* Free the ones we allocated separately. */
-			for (unsigned i = GDB_REGNO_COUNT; i < target->reg_cache->num_regs; i++)
+			for (unsigned i = GDB_REGNO_COUNT; i < target->reg_cache->num_regs; i++) {
+				printf("free #%d 0x%x", i, target->reg_cache->reg_list[i].arch_info);
 				free(target->reg_cache->reg_list[i].arch_info);
+			}
 			free(target->reg_cache->reg_list);
 		}
 		free(target->reg_cache);
@@ -3826,6 +3828,12 @@ static int register_get(struct reg *reg)
 			(reg->number >= GDB_REGNO_V0 && reg->number <= GDB_REGNO_V31) ||
 			reg->number == GDB_REGNO_PC)
 		reg->valid = true;
+
+#if _NDS_V5_ONLY_
+	/* Presume all reg to invalid, force to read reg anytime */
+	reg->valid = false;
+#endif /* _NDS_V5_ONLY_ */
+
 	char *str = buf_to_str(reg->value, reg->size, 16);
 	LOG_DEBUG("[%d]{%d} read 0x%s from %s (valid=%d)", target->coreid,
 			riscv_current_hartid(target), str, reg->name, reg->valid);
@@ -3852,7 +3860,6 @@ static int register_set(struct reg *reg, uint8_t *buf)
 			(reg->number >= GDB_REGNO_V0 && reg->number <= GDB_REGNO_V31) ||
 			reg->number == GDB_REGNO_PC)
 		reg->valid = true;
-
 
 #if _NDS_V5_ONLY_
 	/* Presume all reg to invalid, force to read reg anytime */
