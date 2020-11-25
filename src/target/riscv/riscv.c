@@ -4550,6 +4550,12 @@ static int register_get(struct reg *reg)
 		buf_set_u64(reg->value, 0, reg->size, value);
 	}
 	reg->valid = gdb_regno_cacheable(reg->number, false);
+
+#if _NDS_V5_ONLY_
+	/* Presume all reg to invalid, force to read reg anytime */
+	reg->valid = false;
+#endif
+
 	char *str = buf_to_hex_str(reg->value, reg->size);
 	LOG_DEBUG("[%s] read 0x%s from %s (valid=%d)", target_name(target),
 			str, reg->name, reg->valid);
@@ -4586,7 +4592,6 @@ static int register_set(struct reg *reg, uint8_t *buf)
 		if (riscv_enumerate_triggers(target) != ERROR_OK)
 			return ERROR_FAIL;
 	}
-
 
 #if _NDS_V5_ONLY_
 	/* Presume all reg to invalid, force to read reg anytime */
