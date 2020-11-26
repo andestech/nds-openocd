@@ -2089,9 +2089,11 @@ static int riscv_get_gdb_reg_list_internal(struct target *target,
 	LOG_DEBUG("[%s] {%d} reg_class=%d, read=%d",
 			target_name(target), r->current_hartid, reg_class, read);
 
+/* SYNC TODO
 #if _NDS_V5_ONLY_
 	int hartid = riscv_current_hartid(target);
-#endif /* _NDS_V5_ONLY_ */
+#endif
+*/
 
 	if (!target->reg_cache) {
 		LOG_ERROR("Target not initialized. Return ERROR_FAIL.");

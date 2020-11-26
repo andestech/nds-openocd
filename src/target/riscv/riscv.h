@@ -15,6 +15,7 @@ struct riscv_program;
 #if _NDS_V5_ONLY_
 #include "target/breakpoints.h"	/* FIXED compiler warning */
 #include "target/target.h"	/* FIXED compiler warning */
+#define _NDS_DISABLE_ABORT_ 1   /* FIXED compiler warning */
 #endif /* _NDS_V5_ONLY_ */
 
 
