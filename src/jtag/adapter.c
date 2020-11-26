@@ -543,6 +543,7 @@ static const struct command_registration interface_command_handlers[] = {
 		.handler = handle_retry_times_command,
 		.mode = COMMAND_ANY,
 		.help = "Set retry times during JTAG initial",
+		.usage = "[times]",
 	},
 #endif
 	COMMAND_REGISTRATION_DONE
