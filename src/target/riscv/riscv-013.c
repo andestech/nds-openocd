@@ -6770,9 +6770,8 @@ int nds_ace_enable(struct target *target)
 	if (exec_out != ERROR_OK) {
 		LOG_ERROR("Unable to execute the program to enable ACR's CSR");
 		return exec_out;
-	} else {
+	} else
 		return ERROR_OK;
-	}
 };
 
 int nds_ace_get_reg(struct reg *reg)
