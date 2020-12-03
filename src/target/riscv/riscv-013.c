@@ -2763,7 +2763,11 @@ static int execute_fence_i(struct target *target)
 
 static int execute_fence(struct target *target)
 {
+#if _NDS_V5_ONLY_
+	LOG_DEBUG("EXECUTE FENCE!");
+#else
 	LOG_ERROR("EXECUTE FENCE!");
+#endif /* _NDS_V5_ONLY_ */
 
 	int old_hartid = riscv_current_hartid(target);
 
@@ -2806,7 +2810,11 @@ static int execute_fence(struct target *target)
 
 	riscv_set_current_hartid(target, old_hartid);
 
+#if _NDS_V5_ONLY_
+	LOG_DEBUG("EXECUTE FENCE(DONE)!");
+#else
 	LOG_ERROR("EXECUTE FENCE(DONE)!");
+#endif /* _NDS_V5_ONLY_ */
 
 	return ERROR_OK;
 }
@@ -6831,9 +6839,8 @@ int nds_ace_enable(struct target *target)
 	if (exec_out != ERROR_OK) {
 		LOG_ERROR("Unable to execute the program to enable ACR's CSR");
 		return exec_out;
-	} else {    
+	} else
 		return ERROR_OK;
-	}
 };
 
 int nds_ace_get_reg(struct reg *reg)
@@ -7028,7 +7035,7 @@ int nds_ace_set_reg(struct reg *reg, unsigned char *val)
 			if (is_rv64) {
 				// 7 insn entry + ebreak entry fills up program buffer
 				exec_out = riscv_program_exec(&program, target);
-				if (exec_out != ERROR_OK) { 
+				if (exec_out != ERROR_OK) {
 					LOG_ERROR("Unable to execute program");
 					goto error;
 				}
