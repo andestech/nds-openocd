@@ -160,6 +160,7 @@ static int ndsv5_init_arch_info(struct target *target, struct nds32_v5 *new_nds3
 	target->fileio_info = malloc(sizeof(struct gdb_fileio_info));
 	target->fileio_info->identifier = NULL;
 	new_nds32->memory.access_channel = NDS_MEMORY_ACC_CPU;
+	new_nds32->nds_do_fencei = false;
 
 	if (gpnds32_v5) {
 		for (pnds32_v5 = gpnds32_v5; pnds32_v5; pnds32_v5 = pnds32_v5->next) {
