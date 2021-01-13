@@ -3943,6 +3943,9 @@ sifive_write_memory_retry:
 					riscv_set_register(target, GDB_REGNO_S1, s1);
 					return result;
 				}
+
+				/* Do fence.i when resume */
+				nds32->nds_do_fencei = true;
 #else
 				if (result != ERROR_OK)
 					return result;
@@ -3969,13 +3972,13 @@ sifive_write_memory_retry:
 				if (ndsv5_write_memory_retry_cnt < nds_dmi_busy_retry_times) {
 					ndsv5_write_memory_retry_cnt ++;
 					goto sifive_write_memory_retry;
+				} else {
+					riscv_set_register(target, GDB_REGNO_S0, s0);
+					riscv_set_register(target, GDB_REGNO_S1, s1);
+					LOG_ERROR("please set dmi_busy_retry_times > %d to increase delay cycles",
+							nds_dmi_busy_retry_times);
+					return ERROR_FAIL;
 				}
-                else {
-				    riscv_set_register(target, GDB_REGNO_S0, s0);
-				    riscv_set_register(target, GDB_REGNO_S1, s1);
-		            LOG_ERROR("please set dmi_busy_retry_times > %d to increase delay cycles", nds_dmi_busy_retry_times);
-                    return ERROR_FAIL;
-                }
 			}
 		}
 #else
@@ -4006,13 +4009,13 @@ sifive_write_memory_retry:
 				if (ndsv5_write_memory_retry_cnt < nds_dmi_busy_retry_times) {
 					ndsv5_write_memory_retry_cnt ++;
 					goto sifive_write_memory_retry;
+				} else {
+					riscv_set_register(target, GDB_REGNO_S0, s0);
+					riscv_set_register(target, GDB_REGNO_S1, s1);
+					LOG_ERROR("please set dmi_busy_retry_times > %d to increase delay cycles",
+							nds_dmi_busy_retry_times);
+					return ERROR_FAIL;
 				}
-                else {
-				    riscv_set_register(target, GDB_REGNO_S0, s0);
-				    riscv_set_register(target, GDB_REGNO_S1, s1);
-		            LOG_ERROR("please set dmi_busy_retry_times > %d to increase delay cycles", nds_dmi_busy_retry_times);
-                    return ERROR_FAIL;
-                }
 #endif
 				if (register_read_direct(target, &cur_addr, GDB_REGNO_S0) != ERROR_OK)
 					return ERROR_FAIL;
@@ -4038,6 +4041,11 @@ sifive_write_memory_retry:
 
 	if (execute_fence(target) != ERROR_OK)
 		return ERROR_FAIL;
+
+#if _NDS_V5_ONLY_
+	/* Do fence.i when resume */
+	nds32->nds_do_fencei = true;
+#endif
 
 	return ERROR_OK;
 }
@@ -4534,8 +4542,19 @@ static int riscv013_on_step_or_resume(struct target *target, bool step)
 	struct riscv_program program;
 	riscv_program_init(&program, target);
 	riscv_program_fence_i(&program);
+
+#if _NDS_V5_ONLY_
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	if (nds32->nds_do_fencei == true) {
+		if (riscv_program_exec(&program, target) != ERROR_OK)
+			LOG_ERROR("Unable to execute fence.i");
+		nds32->nds_do_fencei = false;
+	} else
+		LOG_DEBUG("Skip to execute fence.i");
+#else
 	if (riscv_program_exec(&program, target) != ERROR_OK)
 		LOG_ERROR("Unable to execute fence.i");
+#endif
 
 	/* We want to twiddle some bits in the debug CSR so debugging works. */
 	riscv_reg_t dcsr;
@@ -4556,7 +4575,6 @@ static int riscv013_on_step_or_resume(struct target *target, bool step)
 	}
 
 
-	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
 	if((nds32->attached == false) && (nds32->target_burn_attached == false)) {
 		dcsr = set_field(dcsr, CSR_DCSR_EBREAKM, 0);
 		dcsr = set_field(dcsr, CSR_DCSR_EBREAKS, 0);
@@ -4585,12 +4603,22 @@ static int riscv013_step_or_resume_current_hart(struct target *target, bool step
 	struct riscv_program program;
 	riscv_program_init(&program, target);
 	riscv_program_fence_i(&program);
-	if (riscv_program_exec(&program, target) != ERROR_OK) {
-#if _NDS_DISABLE_ABORT_
-		NDS32_LOG("resuming [%s] hart %d (for step?=%d) fail", target->tap->dotted_name, r->current_hartid, step);
-#endif
+
+#if _NDS_V5_ONLY_
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	if (nds32->nds_do_fencei == true) {
+		if (riscv_program_exec(&program, target) != ERROR_OK) {
+			NDS32_LOG("resuming [%s] hart %d (for step?=%d) fail", target->tap->dotted_name, r->current_hartid, step);
+			nds32->nds_do_fencei = false;
+			return ERROR_FAIL;
+		}
+		nds32->nds_do_fencei = false;
+	} else
+		LOG_DEBUG("Skip to execute fence.i");
+#else
+	if (riscv_program_exec(&program, target) != ERROR_OK)
 		return ERROR_FAIL;
-	}
+#endif
 
 	/* Issue the resume command, and then wait for the current hart to resume. */
 	uint32_t dmcontrol = dmi_read(target, DMI_DMCONTROL);
