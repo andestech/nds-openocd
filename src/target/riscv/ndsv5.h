@@ -326,6 +326,9 @@ struct nds32_v5 {
 	uint32_t nds_vector_length;
 	uint32_t nds_vector_SEW;
 	uint32_t nds_vector_vl;
+
+	/** do fence.i if use CPU mode write memory */
+	bool nds_do_fencei;
 };
 
 extern FILE *nds_script_custom_reset;

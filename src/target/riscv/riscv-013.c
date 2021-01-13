@@ -2738,9 +2738,13 @@ static int execute_fence_i(struct target *target)
 		struct riscv_program program;
 		riscv_program_init(&program, target);
 		riscv_program_fence_i(&program);
-		int result = riscv_program_exec(&program, target);
-		if (result != ERROR_OK)
-			LOG_ERROR("Unable to execute pre-fence.i");
+		struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+		if (nds32->nds_do_fencei == true) {
+			if (riscv_program_exec(&program, target) != ERROR_OK)
+				LOG_ERROR("Unable to execute pre-fence.i");
+			nds32->nds_do_fencei = false;
+		} else
+			LOG_DEBUG("Skip to execute pre-fence.i");
 	}
 
 
@@ -2757,9 +2761,13 @@ static int execute_fence_i(struct target *target)
 		struct riscv_program program;
 		riscv_program_init(&program, target);
 		riscv_program_fence_i(&program);
-		int result = riscv_program_exec(&program, target);
-		if (result != ERROR_OK)
-			LOG_ERROR("Unable to execute fence.i on hart %d", i);
+		struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+		if (nds32->nds_do_fencei == true) {
+			if (riscv_program_exec(&program, target) != ERROR_OK)
+				LOG_ERROR("Unable to execute fence.i on hart %d", i);
+			nds32->nds_do_fencei = false;
+		} else
+			LOG_DEBUG("Skip to execute fence.i");
 	}
 
 	riscv_set_current_hartid(target, old_hartid);
@@ -4182,6 +4190,11 @@ error:
 
 	if (execute_fence(target) != ERROR_OK)
 		return ERROR_FAIL;
+
+#if _NDS_V5_ONLY_
+	/* Do fence.i when resume */
+	nds32->nds_do_fencei = true;
+#endif
 
 	return result;
 }
