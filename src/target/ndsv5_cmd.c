@@ -2226,24 +2226,29 @@ static int ndsv5_init_option_reg(struct target *target)
 				continue;
 			}
 		}
-
-		reg_name = ndsv5_get_CSR_name(target, (i - GDB_REGNO_CSR0));
-		p_cur_reg = register_get_by_name(target->reg_cache, reg_name, 1);
-		retval = p_cur_reg->type->get(p_cur_reg);
-		if (retval != ERROR_OK) {
-			NDS_INFO("disable %s register", target->reg_cache->reg_list[i].name);
-			target->reg_cache->reg_list[i].exist = false;
+		/* if reg_list.exist is false, register_get_by_name function return null */
+		if (target->reg_cache->reg_list[i].exist != false) {
+			reg_name = ndsv5_get_CSR_name(target, (i - GDB_REGNO_CSR0));
+			p_cur_reg = register_get_by_name(target->reg_cache, reg_name, 1);
+			retval = p_cur_reg->type->get(p_cur_reg);
+			if (retval != ERROR_OK) {
+				NDS_INFO("disable %s register", target->reg_cache->reg_list[i].name);
+				target->reg_cache->reg_list[i].exist = false;
+			}
 		}
 	}
 
 	/* check pmpaddr0-63 exist */
 	for (i = (GDB_REGNO_CSR0 + CSR_PMPADDR0); i <= (GDB_REGNO_CSR0 + CSR_PMPADDR63); i++) {
-		reg_name = ndsv5_get_CSR_name(target, (i - GDB_REGNO_CSR0));
-		p_cur_reg = register_get_by_name(target->reg_cache, reg_name, 1);
-		retval = p_cur_reg->type->get(p_cur_reg);
-		if (retval != ERROR_OK) {
-			NDS_INFO("disable %s register", target->reg_cache->reg_list[i].name);
-			target->reg_cache->reg_list[i].exist = false;
+		/* if reg_list.exist is false, register_get_by_name function return null */
+		if (target->reg_cache->reg_list[i].exist != false) {
+			reg_name = ndsv5_get_CSR_name(target, (i - GDB_REGNO_CSR0));
+			p_cur_reg = register_get_by_name(target->reg_cache, reg_name, 1);
+			retval = p_cur_reg->type->get(p_cur_reg);
+			if (retval != ERROR_OK) {
+				NDS_INFO("disable %s register", target->reg_cache->reg_list[i].name);
+				target->reg_cache->reg_list[i].exist = false;
+			}
 		}
 	}
 
