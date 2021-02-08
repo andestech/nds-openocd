@@ -2337,6 +2337,13 @@ int riscv_openocd_poll(struct target *target)
 		 * riscv_halt() will do all that for us. */
 		riscv_halt(target);
 
+#if _NDS_V5_ONLY_
+		/* after riscv_halt function, calling riscv_set_current_hartid function
+		 * restore r->current_hartid */
+		if (riscv_set_current_hartid(target, halted_hart) != ERROR_OK)
+			return ERROR_FAIL;
+#endif /* _NDS_V5_ONLY_ */
+
 	} else if (target->smp) {
 		bool halt_discovered = false;
 		bool newly_halted[128] = {0};
