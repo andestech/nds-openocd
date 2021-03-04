@@ -4397,6 +4397,12 @@ static int select_prepped_harts(struct target *target, bool *use_hasel)
 			total_selected++;
 		}
 		index++;
+
+#if _NDS_V5_ONLY_
+		/* For AMP, we only need selected 1 core */
+		if(!target->smp && total_selected == 1)
+			break;
+#endif /* _NDS_V5_ONLY_ */
 	}
 
 	/* Don't use hasel if we only need to talk to one hart. */
