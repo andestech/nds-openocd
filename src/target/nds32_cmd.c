@@ -1306,12 +1306,12 @@ COMMAND_HANDLER(handle_nds32_read_buffer_command)
 
 	for (i = 0; i < count; i++) {
 		if ((i & 0xF) == 0)
-			command_print_sameline(NULL, "0x%08x: ", (int)(addr + i));
+			command_print_sameline(CMD, "0x%08x: ", (int)(addr + i));
 
 		command_print_sameline(CMD, "%02x ", data[i]);
 
 		if (((i & 0xF) == 0xF) || (i == count - 1))
-			command_print_sameline(NULL, "\n");
+			command_print_sameline(CMD, "\n");
 	}
 
 	free (data);
