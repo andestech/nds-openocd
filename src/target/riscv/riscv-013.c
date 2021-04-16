@@ -2795,6 +2795,13 @@ static int deassert_reset(struct target *target)
 						"dmstatus=0x%x; "
 						"Increase the timeout with riscv set_reset_timeout_sec.",
 						index, riscv_reset_timeout_sec, dmstatus);
+
+#if _NDS_V5_ONLY_
+				/* Release haltreq when failed to halt */
+				control = set_field(control, DM_DMCONTROL_HALTREQ, 0);
+				dmi_write(target, DM_DMCONTROL, control);
+#endif
+
 				return ERROR_FAIL;
 			}
 		}
@@ -4845,6 +4852,11 @@ static int riscv013_halt_go(struct target *target)
 				target->rtos->hart_unavailable[riscv_current_hartid(target)]);
 		}
 		*/
+
+		/* Release haltreq when failed to halt */
+		dmcontrol = set_field(dmcontrol, DM_DMCONTROL_HALTREQ, 0);
+		dmi_write(target, DM_DMCONTROL, dmcontrol);
+
 #else /* _NDS_V5_ONLY_ */
 		LOG_ERROR("[%s] Unable to halt hart %d. dmcontrol=0x%08x, dmstatus=0x%08x",
 				  target_name(target), r->current_hartid, dmcontrol, dmstatus);
@@ -5884,6 +5896,10 @@ int ndsv5_reset_halt_as_examine(struct target *target)
 				"dmstatus=0x%x; "
 				"Increase the timeout with riscv set_reset_timeout_sec.",
 				riscv_reset_timeout_sec, dmstatus);
+
+				/* Release haltreq when failed to halt */
+				control = set_field(control, DM_DMCONTROL_HALTREQ, 0);
+				dmi_write(target, DM_DMCONTROL, control);
 
 				return ERROR_FAIL;
 			}
