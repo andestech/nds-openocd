@@ -58,4 +58,8 @@ unsigned int adapter_get_speed_khz(void);
 /** Retrieves the serial number set with command 'adapter serial' */
 const char *adapter_get_required_serial(void);
 
+#if _NDS_V5_ONLY_
+void adapter_deinitialized(void);
+#endif
+
 #endif /* OPENOCD_JTAG_ADAPTER_H */

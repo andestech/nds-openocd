@@ -49,6 +49,13 @@ bool is_adapter_initialized(void)
 	return adapter_config.adapter_initialized;
 }
 
+#if _NDS_V5_ONLY_
+void adapter_deinitialized(void)
+{
+	adapter_config.adapter_initialized = false;
+}
+#endif
+
 /**
  * Do low-level setup like initializing registers, output signals,
  * and clocking.
