@@ -933,8 +933,15 @@ static int jtag_examine_chain_execute(uint8_t *idcode_buffer, unsigned num_idcod
 	return jtag_execute_queue();
 }
 
+# if _NDS32_ONLY_
+int count_retry_2wire;
+extern struct command_context *global_cmd_ctx;
+#endif
 static bool jtag_examine_chain_check(uint8_t *idcodes, unsigned count)
 {
+# if _NDS32_ONLY_
+	struct command_context *cmd_ctx = global_cmd_ctx;
+#endif
 	uint8_t zero_check = 0x0;
 	uint8_t one_check = 0xff;
 
@@ -973,13 +980,39 @@ static bool jtag_examine_chain_check(uint8_t *idcodes, unsigned count)
 			    (custom_restart_script != NULL) ||
 			    (nds_script_custom_initial != NULL))
 				return false;
-			else
-				exit(-1);
+			else {
+				if (count_retry_2wire > 0)
+					exit(-1);
+				fprintf(stderr, "<-- Use two wire configuration to retry. -->\n");
+				LOG_DEBUG("Use two wire configuration to retry");
+				count_retry_2wire++;
+				if (zero_check == 0x00) {
+					/* zero_check = 0 : aice-micro 2wire mode ,use 2wire config(reference aice_micro_sdp.cfg) and reinit adapter(jtag) */
+					command_run_line(cmd_ctx, "ftdi_two_wire_mode");
+					command_run_line(cmd_ctx, "ftdi_vid_pid 0x0403 0x6010");
+					command_run_line(cmd_ctx, "ftdi_layout_init 0x4d08 0x4f1b");
+				} else {
+					/* zero_check = 1 : aice-mini+ 2wire mode ,use 2wire config(reference aice_sdp.cfg) and reinit adapter(jtag) */
+					command_run_line(cmd_ctx, "ftdi_vid_pid 0x1cfc 0x0001");
+					command_run_line(cmd_ctx, "ftdi_layout_init 0x0888 0x0a1b");
+				}
+				jtag = NULL;
+				if (adapter_init(cmd_ctx) != ERROR_OK)
+					exit(-1);
+				return false;
+			}
 		} else
 			nds_scan_retry_times--;
 #endif
 		return false;
 	}
+
+/* if return true, init count_retry_2wire */
+#if _NDS32_ONLY_
+	if (count_retry_2wire == 1)
+		count_retry_2wire = 0;
+#endif
+
 	return true;
 }
 
@@ -1084,6 +1117,9 @@ static int jtag_examine_chain(void)
 	if (idcode_buffer == NULL)
 		return ERROR_JTAG_INIT_FAILED;
 
+#if _NDS32_ONLY_
+retry_with_2wire_config:
+#endif
 	/* DR scan to collect BYPASS or IDCODE register contents.
 	 * Then make sure the scan data has both ones and zeroes.
 	 */
@@ -1100,6 +1136,12 @@ static int jtag_examine_chain(void)
 #endif
 
 	if (!jtag_examine_chain_check(idcode_buffer, max_taps)) {
+#if _NDS32_ONLY_
+		/* use two wire config to reget idcode */
+		if (count_retry_2wire == 1)
+			goto retry_with_2wire_config;
+		else
+#endif
 		retval = ERROR_JTAG_INIT_FAILED;
 		goto out;
 	}
