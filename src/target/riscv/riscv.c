@@ -261,7 +261,11 @@ int riscv_command_timeout_sec = DEFAULT_COMMAND_TIMEOUT_SEC;
 /* Wall-clock timeout after reset. Settable via RISC-V Target commands.*/
 int riscv_reset_timeout_sec = DEFAULT_RESET_TIMEOUT_SEC;
 
+#if _NDS_V5_ONLY_
+bool riscv_prefer_sba = true;
+#else
 bool riscv_prefer_sba;
+#endif /*_NDS_V5_ONLY_ */
 bool riscv_enable_virt2phys = true;
 bool riscv_ebreakm = true;
 bool riscv_ebreaks = true;
