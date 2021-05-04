@@ -820,6 +820,13 @@ COMMAND_HANDLER(handle_retry_times_command)
 	command_print(CMD, "retry_times: %u", nds_scan_retry_times);
 	return ERROR_OK;
 }
+
+COMMAND_HANDLER(handle_detect_2wire_command)
+{
+	extern unsigned int auto_detect_2wire;
+	auto_detect_2wire = 1;
+	return ERROR_OK;
+}
 #endif
 
 static const struct command_registration adapter_command_handlers[] = {
@@ -926,6 +933,13 @@ static const struct command_registration interface_command_handlers[] = {
 		.mode = COMMAND_ANY,
 		.help = "Set retry times during JTAG initial",
 		.usage = "[times]",
+	},
+	{
+		.name = "detect_2wire",
+		.handler = handle_detect_2wire_command,
+		.mode = COMMAND_ANY,
+		.help = "if JTAG scan chain interrogation failed, use 2wire mode to retry",
+		.usage = "",
 	},
 #endif
 	COMMAND_REGISTRATION_DONE

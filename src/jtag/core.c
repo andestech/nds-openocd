@@ -1103,6 +1103,7 @@ static int jtag_examine_chain_execute(uint8_t *idcode_buffer, unsigned num_idcod
 
 # if _NDS_V5_ONLY_
 int count_retry_2wire;
+unsigned int auto_detect_2wire;
 extern struct command_context *global_cmd_ctx;
 #endif
 static bool jtag_examine_chain_check(uint8_t *idcodes, unsigned count)
@@ -1141,17 +1142,21 @@ static bool jtag_examine_chain_check(uint8_t *idcodes, unsigned count)
 		LOG_ERROR("Check JTAG interface, timings, target power, etc.");
 #if _NDS_V5_ONLY_
 		if (nds_scan_retry_times == 0) {
-			fprintf(stderr, "<-- JTAG scan chain interrogation failed: all %s -->\n",
-					(zero_check == 0x00) ? "zeroes" : "ones");
-			fprintf(stderr, "<-- Check JTAG interface, timings, target power, etc. -->\n");
 			if ((custom_initial_script != NULL) ||
 			    (custom_restart_script != NULL) ||
-			    (nds_script_custom_initial != NULL))
+			    (nds_script_custom_initial != NULL)) {
+				fprintf(stderr, "<-- JTAG scan chain interrogation failed: all %s -->\n",
+						(zero_check == 0x00) ? "zeroes" : "ones");
+				fprintf(stderr, "<-- Check JTAG interface, timings, target power, etc. -->\n");
 				return false;
+			}
 			else {
-				if (count_retry_2wire > 0)
+				if (auto_detect_2wire == 0 || count_retry_2wire > 0) {
+					fprintf(stderr, "<-- JTAG scan chain interrogation failed: all %s -->\n",
+							(zero_check == 0x00) ? "zeroes" : "ones");
+					fprintf(stderr, "<-- Check JTAG interface, timings, target power, etc. -->\n");
 					exit(-1);
-				fprintf(stderr, "<-- Use two wire configuration to retry. -->\n");
+				}
 				LOG_DEBUG("Use two wire configuration to retry");
 				count_retry_2wire++;
 				if (zero_check == 0x00) {
@@ -1167,8 +1172,12 @@ static bool jtag_examine_chain_check(uint8_t *idcodes, unsigned count)
 					command_run_line(cmd_ctx, "ftdi_layout_init 0x0888 0x0a1b");
 				}
 				adapter_deinitialized();
-				if (adapter_init(cmd_ctx) != ERROR_OK)
+				if (adapter_init(cmd_ctx) != ERROR_OK) {
+					fprintf(stderr, "<-- JTAG scan chain interrogation failed: all %s -->\n",
+							(zero_check == 0x00) ? "zeroes" : "ones");
+					fprintf(stderr, "<-- Check JTAG interface, timings, target power, etc. -->\n");
 					exit(-1);
+				}
 				return false;
 			}
 		} else
