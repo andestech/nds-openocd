@@ -3399,7 +3399,6 @@ static int read_memory_abstract(struct target *target, target_addr_t address,
 	RISCV013_INFO(info);
 
 	int result = ERROR_OK;
-	bool use_aampostincrement = info->has_aampostincrement != YNM_NO;
 
 	LOG_DEBUG("reading %d words of %d bytes from 0x%" TARGET_PRIxADDR, count,
 			  size, address);
@@ -3409,8 +3408,19 @@ static int read_memory_abstract(struct target *target, target_addr_t address,
 	/* Convert the size (bytes) to width (bits) */
 	unsigned width = size << 3;
 
+#if _NDS_V5_ONLY_
+	uint32_t command;
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	/* const addr mode set aampostincrement = 0 */
+	if (nds32->nds_const_addr_mode == 0)
+		command = access_memory_command(target, false, width, true, false);
+	else
+		command = access_memory_command(target, false, width, false, false);
+#else
+	bool use_aampostincrement = info->has_aampostincrement != YNM_NO;
 	/* Create the command (physical address, postincrement, read) */
 	uint32_t command = access_memory_command(target, false, width, use_aampostincrement, false);
+#endif
 
 	/* Execute the reads */
 	uint8_t *p = buffer;
@@ -3477,7 +3487,6 @@ static int write_memory_abstract(struct target *target, target_addr_t address,
 {
 	RISCV013_INFO(info);
 	int result = ERROR_OK;
-	bool use_aampostincrement = info->has_aampostincrement != YNM_NO;
 
 	LOG_DEBUG("writing %d words of %d bytes from 0x%" TARGET_PRIxADDR, count,
 			  size, address);
@@ -3485,8 +3494,19 @@ static int write_memory_abstract(struct target *target, target_addr_t address,
 	/* Convert the size (bytes) to width (bits) */
 	unsigned width = size << 3;
 
+#if _NDS_V5_ONLY_
+	uint32_t command;
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	/* const addr mode set aampostincrement = 0 */
+	if (nds32->nds_const_addr_mode == 0)
+		command = access_memory_command(target, false, width, true, true);
+	else
+		command = access_memory_command(target, false, width, false, true);
+#else
+	bool use_aampostincrement = info->has_aampostincrement != YNM_NO;
 	/* Create the command (physical address, postincrement, write) */
 	uint32_t command = access_memory_command(target, false, width, use_aampostincrement, true);
+#endif
 
 	/* Execute the writes */
 	const uint8_t *p = buffer;
