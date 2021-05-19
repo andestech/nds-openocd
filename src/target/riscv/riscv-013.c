@@ -3192,8 +3192,18 @@ static int read_memory_abstract(struct target *target, target_addr_t address,
 		return ERROR_FAIL;
 	}
 
+#if _NDS_V5_ONLY_
+	uint32_t command;
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	/* const addr mode set aampostincrement=0 */
+	if (nds32->nds_const_addr_mode == 0)
+		command = access_memory_command(target, false, width, true, false);
+	else
+		command = access_memory_command(target, false, width, false, false);
+#else
 	/* Create the command (physical address, postincrement, read) */
 	uint32_t command = access_memory_command(target, false, width, true, false);
+#endif
 
 	/* Execute the reads */
 	uint8_t *p = buffer;
@@ -3250,8 +3260,18 @@ static int write_memory_abstract(struct target *target, target_addr_t address,
 		return ERROR_FAIL;
 	}
 
+#if _NDS_V5_ONLY_
+	uint32_t command;
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	/* const addr mode set aampostincrement=0 */
+	if (nds32->nds_const_addr_mode == 0)
+		command = access_memory_command(target, false, width, true, true);
+	else
+		command = access_memory_command(target, false, width, false, true);
+#else
 	/* Create the command (physical address, postincrement, write) */
 	uint32_t command = access_memory_command(target, false, width, true, true);
+#endif
 
 	/* Execute the writes */
 	const uint8_t *p = buffer;
