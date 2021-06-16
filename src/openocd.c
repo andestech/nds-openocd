@@ -59,6 +59,10 @@ static const char openocd_startup_tcl[] = {
 0 /* Terminate with zero */
 };
 
+#if _NDS_V5_ONLY_
+char *OPENOCD_VERSION_STR = OPENOCD_VERSION;
+#endif
+
 /* Give scripts and TELNET a way to find out what version this is */
 static int jim_version_command(Jim_Interp *interp, int argc,
 	Jim_Obj * const *argv)
