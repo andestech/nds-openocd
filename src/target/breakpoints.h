@@ -19,6 +19,8 @@
 #ifndef OPENOCD_TARGET_BREAKPOINTS_H
 #define OPENOCD_TARGET_BREAKPOINTS_H
 
+#include <stdint.h>
+
 struct target;
 
 enum breakpoint_type {
@@ -31,7 +33,7 @@ enum watchpoint_rw {
 };
 
 struct breakpoint {
-	uint32_t address;
+	target_addr_t address;
 	uint32_t asid;
 	int length;
 	enum breakpoint_type type;
@@ -40,10 +42,13 @@ struct breakpoint {
 	struct breakpoint *next;
 	uint32_t unique_id;
 	int linked_BRP;
+#if _NDS32_ONLY_
+	uint8_t *bytecode;
+#endif
 };
 
 struct watchpoint {
-	uint32_t address;
+	target_addr_t address;
 	uint32_t length;
 	uint32_t mask;
 	uint32_t value;
@@ -51,26 +56,43 @@ struct watchpoint {
 	int set;
 	struct watchpoint *next;
 	int unique_id;
+#if _NDS32_ONLY_
+	uint8_t *bytecode;
+#endif
 };
 
 void breakpoint_clear_target(struct target *target);
 int breakpoint_add(struct target *target,
-		uint32_t address, uint32_t length, enum breakpoint_type type);
+		target_addr_t address, uint32_t length, enum breakpoint_type type);
 int context_breakpoint_add(struct target *target,
 		uint32_t asid, uint32_t length, enum breakpoint_type type);
 int hybrid_breakpoint_add(struct target *target,
-		uint32_t address, uint32_t asid, uint32_t length, enum breakpoint_type type);
-void breakpoint_remove(struct target *target, uint32_t address);
+		target_addr_t address, uint32_t asid, uint32_t length, enum breakpoint_type type);
+void breakpoint_remove(struct target *target, target_addr_t address);
 
-struct breakpoint *breakpoint_find(struct target *target, uint32_t address);
+struct breakpoint *breakpoint_find(struct target *target, target_addr_t address);
 
 void watchpoint_clear_target(struct target *target);
 int watchpoint_add(struct target *target,
-		uint32_t address, uint32_t length,
+		target_addr_t address, uint32_t length,
 		enum watchpoint_rw rw, uint32_t value, uint32_t mask);
-void watchpoint_remove(struct target *target, uint32_t address);
+void watchpoint_remove(struct target *target, target_addr_t address);
 
 /* report type and address of just hit watchpoint */
-int watchpoint_hit(struct target *target, enum watchpoint_rw *rw, uint32_t *address);
+int watchpoint_hit(struct target *target, enum watchpoint_rw *rw,
+		target_addr_t *address);
+
+#if _NDS32_ONLY_
+#define BP_WP_LENGTH_MASK    (~0xFF000000)
+#define BP_WP_NON_SIMPLE     0x80000000
+#define BP_WP_TRIGGER_ON     0x40000000
+#define BP_WP_FORCE_VA_ON    0x20000000
+
+#define BP_WP_DATA_COMPARE   0x08000000
+#define BP_WP_USER_WATCH     0x04000000
+#define BP_WP_CONDITIONAL    0x02000000
+
+int nds32_backup_tmp_bytecode_data(char *p_bytecode);
+#endif
 
 #endif /* OPENOCD_TARGET_BREAKPOINTS_H */

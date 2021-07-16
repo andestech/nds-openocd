@@ -13,11 +13,12 @@
  *   GNU General Public License for more details.                          *
  *                                                                         *
  *   You should have received a copy of the GNU General Public License     *
- *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
+ *   along with this program; if not, write to the                         *
+ *   Free Software Foundation, Inc.,                                       *
+ *   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.           *
  ***************************************************************************/
-
-#ifndef OPENOCD_JTAG_AICE_AICE_PIPE_H
-#define OPENOCD_JTAG_AICE_AICE_PIPE_H
+#ifndef _AICE_PIPE_H_
+#define _AICE_PIPE_H_
 
 #include <helper/types.h>
 
@@ -26,6 +27,6 @@
 #define get_u32(buffer) le_to_h_u32((const uint8_t *)buffer)
 #define get_u16(buffer) le_to_h_u16((const uint8_t *)buffer)
 
-extern struct aice_port_api_s aice_pipe;
+extern struct aice_port_api_s aice_pipe_api;
 
-#endif /* OPENOCD_JTAG_AICE_AICE_PIPE_H */
+#endif

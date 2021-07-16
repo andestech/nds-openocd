@@ -38,6 +38,7 @@ static bool jtag_libusb_match(struct libusb_device_descriptor *dev_desc,
 	return false;
 }
 
+#if (_NDS32_ONLY_ == 0)
 /* Returns true if the string descriptor indexed by str_index in device matches string */
 static bool string_descriptor_equal(libusb_device_handle *device, uint8_t str_index,
 									const char *string)
@@ -65,6 +66,7 @@ static bool string_descriptor_equal(libusb_device_handle *device, uint8_t str_in
 			desc_string, string);
 	return matched;
 }
+#endif
 
 int jtag_libusb_open(const uint16_t vids[], const uint16_t pids[],
 		const char *serial,
@@ -95,7 +97,18 @@ int jtag_libusb_open(const uint16_t vids[], const uint16_t pids[],
 				  libusb_error_name(errCode));
 			continue;
 		}
-
+#if _NDS32_ONLY_
+		/* set_configuration must be before claim_interface() (RedHat64) */
+		retval = jtag_libusb_set_configuration(libusb_handle, 0);
+		retval = libusb_claim_interface(libusb_handle, 0);
+		//jtag_libusb_release_interface(libusb_handle, 0);
+		if(retval == 0) {
+			*out = libusb_handle;
+			/** Free the device list **/
+			libusb_free_device_list(devs, 1);
+			return 0;
+		}
+#else
 		/* Device must be open to use libusb_get_string_descriptor_ascii. */
 		if (serial != NULL &&
 				!string_descriptor_equal(libusb_handle, dev_desc.iSerialNumber, serial)) {
@@ -107,6 +120,7 @@ int jtag_libusb_open(const uint16_t vids[], const uint16_t pids[],
 		*out = libusb_handle;
 		retval = 0;
 		break;
+#endif
 	}
 	if (cnt >= 0)
 		libusb_free_device_list(devs, 1);
@@ -187,7 +201,7 @@ int jtag_libusb_set_configuration(jtag_libusb_device_handle *devh,
 int jtag_libusb_choose_interface(struct jtag_libusb_device_handle *devh,
 		unsigned int *usb_read_ep,
 		unsigned int *usb_write_ep,
-		int bclass, int subclass, int protocol)
+		int bclass, int subclass, int protocol, int trans_type)
 {
 	struct jtag_libusb_device *udev = jtag_libusb_get_device(devh);
 	const struct libusb_interface *inter;
@@ -210,6 +224,8 @@ int jtag_libusb_choose_interface(struct jtag_libusb_device_handle *devh,
 				continue;
 
 			epdesc = &interdesc->endpoint[k];
+			if (trans_type > 0 && (epdesc->bmAttributes & 0x3) != trans_type)
+				continue;
 
 			uint8_t epnum = epdesc->bEndpointAddress;
 			bool is_input = epnum & 0x80;
@@ -246,3 +262,109 @@ int jtag_libusb_get_pid(struct jtag_libusb_device *dev, uint16_t *pid)
 
 	return ERROR_FAIL;
 }
+int jtag_libusb_get_ep_max_packet_size(jtag_libusb_device_handle *devh,
+		unsigned int epnum,
+		unsigned int *p_max_packet_size)
+{
+	struct jtag_libusb_device *udev = jtag_libusb_get_device(devh);
+	const struct libusb_interface *inter;
+	const struct libusb_interface_descriptor *interdesc;
+	const struct libusb_endpoint_descriptor *epdesc;
+	struct libusb_config_descriptor *config;
+
+	libusb_get_config_descriptor(udev, 0, &config);
+	for (int i = 0; i < (int)config->bNumInterfaces; i++) {
+		inter = &config->interface[i];
+
+		interdesc = &inter->altsetting[0];
+		for (int k = 0;
+		     k < (int)interdesc->bNumEndpoints; k++) {
+			epdesc = &interdesc->endpoint[k];
+			if (epdesc->bEndpointAddress == epnum) {
+				*p_max_packet_size = epdesc->wMaxPacketSize;
+				return ERROR_OK;
+			}
+		}
+	}
+	return ERROR_FAIL;
+}
+
+#if _NDS32_ONLY_
+int jtag_libusb_get_endpoints(struct jtag_libusb_device *udev,
+		unsigned int *usb_read_ep,
+		unsigned int *usb_write_ep,
+		unsigned int *usb_rx_max_packet,
+		unsigned int *usb_tx_max_packet)
+{
+	const struct libusb_interface *inter;
+	const struct libusb_interface_descriptor *interdesc;
+	const struct libusb_endpoint_descriptor *epdesc;
+	struct libusb_config_descriptor *config;
+
+	libusb_get_config_descriptor(udev, 0, &config);
+	for (int i = 0; i < (int)config->bNumInterfaces; i++) {
+		inter = &config->interface[i];
+
+		for (int j = 0; j < inter->num_altsetting; j++) {
+			interdesc = &inter->altsetting[j];
+			for (int k = 0;
+				k < (int)interdesc->bNumEndpoints; k++) {
+				epdesc = &interdesc->endpoint[k];
+				if (epdesc->bmAttributes != LIBUSB_TRANSFER_TYPE_BULK)
+					continue;
+
+				uint8_t epnum = epdesc->bEndpointAddress;
+				bool is_input = epnum & 0x80;
+
+				if (is_input) {
+					*usb_read_ep = epnum;
+					*usb_rx_max_packet = epdesc->wMaxPacketSize;
+				}
+				else {
+					*usb_write_ep = epnum;
+					*usb_tx_max_packet = epdesc->wMaxPacketSize;
+				}
+			}
+		}
+	}
+	libusb_free_config_descriptor(config);
+
+	return 0;
+}
+
+unsigned char descriptor_string_iManufacturer[128];
+unsigned char descriptor_string_iProduct[128];
+unsigned int descriptor_bcdDevice = 0x0;
+char descriptor_string_unknown[] = {"unknown"};
+
+int jtag_libusb_get_descriptor_string(jtag_libusb_device_handle *dev_handle,
+		struct jtag_libusb_device *dev,
+		char **pdescp_Manufacturer,
+		char **pdescp_Product,
+		unsigned int *pdescp_bcdDevice)
+{
+	int ret1, ret2;
+	char *pStringManufacturer, *pStringProduct;
+
+	struct libusb_device_descriptor dev_desc;
+	libusb_get_device_descriptor(dev, &dev_desc);
+
+	ret1 = libusb_get_string_descriptor_ascii(dev_handle, dev_desc.iManufacturer,
+		&descriptor_string_iManufacturer[0], sizeof(descriptor_string_iManufacturer)-1);
+	ret2 = libusb_get_string_descriptor_ascii(dev_handle, dev_desc.iProduct,
+		&descriptor_string_iProduct[0], sizeof(descriptor_string_iProduct)-1);
+
+	pStringManufacturer = (char *)&descriptor_string_unknown[0];
+	pStringProduct = (char *)&descriptor_string_unknown[0];
+	if (ret1 > 0) {
+		pStringManufacturer = (char *)&descriptor_string_iManufacturer[0];
+	}
+	if (ret2 > 0) {
+		pStringProduct = (char *)&descriptor_string_iProduct[0];
+	}
+	*pdescp_Manufacturer = pStringManufacturer;
+	*pdescp_Product = pStringProduct;
+	*pdescp_bcdDevice = (unsigned int)dev_desc.bcdDevice;
+	return 0;
+}
+#endif

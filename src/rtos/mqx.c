@@ -244,9 +244,9 @@ static int mqx_is_scheduler_running(
 }
 
 /*
- * API function, return 1 if MQX is present
+ * API function, return true if MQX is present
  */
-static int mqx_detect_rtos(
+static bool mqx_detect_rtos(
 	struct target *target
 )
 {
@@ -254,9 +254,9 @@ static int mqx_detect_rtos(
 		(target->rtos->symbols != NULL) &&
 		(target->rtos->symbols[mqx_VAL_mqx_kernel_data].address != 0)
 	) {
-		return 1;
+		return true;
 	}
-	return 0;
+	return false;
 }
 
 /*
@@ -353,7 +353,7 @@ static int mqx_update_threads(
 		uint32_t task_name_addr = 0, task_id = 0, task_errno = 0;
 		uint32_t state_index = 0, state_max = 0;
 		uint32_t extra_info_length = 0;
-		char *state_name = "unknown state";
+		char *state_name = "Unknown";
 
 		/* set current taskpool address */
 		if (ERROR_OK != mqx_get_member(
@@ -435,13 +435,13 @@ static int mqx_update_threads(
 		 * calculate length as:
 		 * state length + address length + errno length + formatter length
 		 */
-		extra_info_length += strlen((void *)state_name) + 8 + 8 + 8;
+		extra_info_length += strlen((void *)state_name) + 7 + 13 + 8 + 15 + 8;
 		rtos->thread_details[i].extra_info_str = malloc(extra_info_length + 1);
 		if (NULL == rtos->thread_details[i].extra_info_str)
 			return ERROR_FAIL;
-		snprintf(
-			rtos->thread_details[i].extra_info_str, extra_info_length, "%s : 0x%"PRIx32 " : %" PRIu32,
-			state_name, task_addr, task_errno
+		snprintf(rtos->thread_details[i].extra_info_str, extra_info_length,
+			 "State: %s, Address: 0x%" PRIx32 ",  Error Code: %" PRIu32,
+			 state_name, task_addr, task_errno
 		);
 		/* set active thread */
 		if (active_td_addr == task_addr)

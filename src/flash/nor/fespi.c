@@ -1,7 +1,7 @@
 /***************************************************************************
  *   Copyright (C) 2010 by Antonio Borneo <borneo.antonio@gmail.com>       *
  *   Modified by Megan Wachs <megan@sifive.com> from the original stmsmi.c *
- *                                                                         * 
+ *                                                                         *
  *   This program is free software; you can redistribute it and/or modify  *
  *   it under the terms of the GNU General Public License as published by  *
  *   the Free Software Foundation; either version 2 of the License, or     *
@@ -18,7 +18,7 @@
 
 /* The Freedom E SPI controller is a SPI bus controller
  * specifically designed for SPI Flash Memories on Freedom E platforms.
- * 
+ *
  * Two working modes are available:
  * - SW mode: the SPI is controlled by SW. Any custom commands can be sent
  *   on the bus. Writes are only possible in this mode.
@@ -42,6 +42,7 @@
 #include <jtag/jtag.h>
 #include <helper/time_support.h>
 #include <target/algorithm.h>
+#include "target/riscv/riscv.h"
 
 /* Register offsets */
 
@@ -121,24 +122,28 @@
 
 
 #define FESPI_READ_REG(a) (_FESPI_READ_REG(a))
-#define _FESPI_READ_REG(a)			\
-{									\
+#define _FESPI_READ_REG(a)					\
+{								\
 	int __a;						\
-	uint32_t __v;					\
-									\
-	__a = target_read_u32(target, ctrl_base + (a), &__v); \
-	if (__a != ERROR_OK)			\
+	uint32_t __v;						\
+								\
+	__a = target_read_u32(target, ctrl_base + (a), &__v);	\
+	if (__a != ERROR_OK) {					\
+		LOG_ERROR("FESPI_READ_REG error");		\
 		return __a;					\
+	}							\
 	__v;							\
 }
 
-#define FESPI_WRITE_REG(a, v)			\
-{									\
+#define FESPI_WRITE_REG(a, v)					\
+{								\
 	int __r;						\
-									\
-	__r = target_write_u32(target, ctrl_base + (a), (v)); \
-	if (__r != ERROR_OK)			\
+								\
+	__r = target_write_u32(target, ctrl_base + (a), (v));	\
+	if (__r != ERROR_OK) {					\
+		LOG_ERROR("FESPI_WRITE_REG error");		\
 		return __r;					\
+	}							\
 }
 
 #define FESPI_DISABLE_HW_MODE()	FESPI_WRITE_REG(FESPI_REG_FCTRL, \
@@ -158,7 +163,7 @@ struct fespi_target {
 	uint32_t ctrl_base;
 };
 
-//TODO !!! What is the right naming convention here?
+/* TODO !!! What is the right naming convention here? */
 static const struct fespi_target target_devices[] = {
 	/* name,   tap_idcode, ctrl_base */
 	{ "Freedom E300 SPI Flash",  0x10e31913 , 0x10014000 },
@@ -182,11 +187,19 @@ FLASH_BANK_COMMAND_HANDLER(fespi_flash_bank_command)
 
 	bank->driver_priv = fespi_info;
 	fespi_info->probed = 0;
+	fespi_info->ctrl_base = 0;
+	if (CMD_ARGC >= 7) {
+		int temp;
+		COMMAND_PARSE_NUMBER(int, CMD_ARGV[6], temp);
+		fespi_info->ctrl_base = (uint32_t) temp;
+		LOG_DEBUG("ASSUMING FESPI device at ctrl_base = 0x%x", fespi_info->ctrl_base);
+	}
 
 	return ERROR_OK;
 }
 
-static int fespi_set_dir (struct flash_bank * bank, bool dir) {
+static int fespi_set_dir(struct flash_bank *bank, bool dir)
+{
 	struct target *target = bank->target;
 	struct fespi_flash_bank *fespi_info = bank->driver_priv;
 	uint32_t ctrl_base = fespi_info->ctrl_base;
@@ -199,7 +212,8 @@ static int fespi_set_dir (struct flash_bank * bank, bool dir) {
 
 }
 
-static int fespi_txwm_wait(struct flash_bank *bank) {
+static int fespi_txwm_wait(struct flash_bank *bank)
+{
 	struct target *target = bank->target;
 	struct fespi_flash_bank *fespi_info = bank->driver_priv;
 	uint32_t ctrl_base = fespi_info->ctrl_base;
@@ -207,9 +221,8 @@ static int fespi_txwm_wait(struct flash_bank *bank) {
 	int64_t start = timeval_ms();
 
 	while (1) {
-		if (FESPI_READ_REG(FESPI_REG_IP) & FESPI_IP_TXWM) {
+		if (FESPI_READ_REG(FESPI_REG_IP) & FESPI_IP_TXWM)
 			break;
-		}
 		int64_t now = timeval_ms();
 		if (now - start > 1000) {
 			LOG_ERROR("ip.txwm didn't get set.");
@@ -221,7 +234,8 @@ static int fespi_txwm_wait(struct flash_bank *bank) {
 
 }
 
-static int fespi_tx(struct flash_bank *bank, uint8_t in){
+static int fespi_tx(struct flash_bank *bank, uint8_t in)
+{
 	struct target *target = bank->target;
 	struct fespi_flash_bank *fespi_info = bank->driver_priv;
 	uint32_t ctrl_base = fespi_info->ctrl_base;
@@ -229,9 +243,8 @@ static int fespi_tx(struct flash_bank *bank, uint8_t in){
 	int64_t start = timeval_ms();
 
 	while (1) {
-		if ((int32_t) FESPI_READ_REG(FESPI_REG_TXFIFO) >= 0) {
+		if ((int32_t) FESPI_READ_REG(FESPI_REG_TXFIFO) >= 0)
 			break;
-		}
 		int64_t now = timeval_ms();
 		if (now - start > 1000) {
 			LOG_ERROR("txfifo stayed negative.");
@@ -264,14 +277,14 @@ static int fespi_rx(struct flash_bank *bank, uint8_t *out)
 		}
 	}
 
-	if (out) {
+	if (out)
 		*out = value & 0xff;
-	}
+
 	return ERROR_OK;
 }
 
-//TODO!!! Why don't we need to call this after writing?
-static int fespi_wip (struct flash_bank * bank, int timeout)
+/* TODO!!! Why don't we need to call this after writing? */
+static int fespi_wip(struct flash_bank *bank, int timeout)
 {
 	struct target *target = bank->target;
 	struct fespi_flash_bank *fespi_info = bank->driver_priv;
@@ -313,16 +326,30 @@ static int fespi_erase_sector(struct flash_bank *bank, int sector)
 	uint32_t ctrl_base = fespi_info->ctrl_base;
 	int retval;
 
-	fespi_tx(bank, SPIFLASH_WRITE_ENABLE);
-	fespi_txwm_wait(bank);
+	retval = fespi_tx(bank, SPIFLASH_WRITE_ENABLE);
+	if (retval != ERROR_OK)
+		return retval;
+	retval = fespi_txwm_wait(bank);
+	if (retval != ERROR_OK)
+		return retval;
 
 	FESPI_WRITE_REG(FESPI_REG_CSMODE, FESPI_CSMODE_HOLD);
-	fespi_tx(bank, fespi_info->dev->erase_cmd);
+	retval = fespi_tx(bank, fespi_info->dev->erase_cmd);
+	if (retval != ERROR_OK)
+		return retval;
 	sector = bank->sectors[sector].offset;
-	fespi_tx(bank, sector >> 16);
-	fespi_tx(bank, sector >> 8);
-	fespi_tx(bank, sector);
-	fespi_txwm_wait(bank);
+	retval = fespi_tx(bank, sector >> 16);
+	if (retval != ERROR_OK)
+		return retval;
+	retval = fespi_tx(bank, sector >> 8);
+	if (retval != ERROR_OK)
+		return retval;
+	retval = fespi_tx(bank, sector);
+	if (retval != ERROR_OK)
+		return retval;
+	retval = fespi_txwm_wait(bank);
+	if (retval != ERROR_OK)
+		return retval;
 	FESPI_WRITE_REG(FESPI_REG_CSMODE, FESPI_CSMODE_AUTO);
 
 	retval = fespi_wip(bank, FESPI_MAX_TIMEOUT);
@@ -364,7 +391,12 @@ static int fespi_erase(struct flash_bank *bank, int first, int last)
 		}
 	}
 
-	fespi_txwm_wait(bank);
+	FESPI_WRITE_REG(FESPI_REG_TXCTRL, FESPI_TXWM(1));
+	retval = fespi_txwm_wait(bank);
+	if (retval != ERROR_OK) {
+		LOG_ERROR("WM Didn't go high before attempting.");
+		return retval;
+	}
 
 	/* Disable Hardware accesses*/
 	FESPI_DISABLE_HW_MODE();
@@ -404,7 +436,7 @@ static int slow_fespi_write_buffer(struct flash_bank *bank,
 	uint32_t ctrl_base = fespi_info->ctrl_base;
 	uint32_t ii;
 
-	//TODO!!! assert that len < page size
+	/* TODO!!! assert that len < page size */
 
 	fespi_tx(bank, SPIFLASH_WRITE_ENABLE);
 	fespi_txwm_wait(bank);
@@ -417,9 +449,8 @@ static int slow_fespi_write_buffer(struct flash_bank *bank,
 	fespi_tx(bank, offset >> 8);
 	fespi_tx(bank, offset);
 
-	for (ii = 0; ii < len; ii++) {
+	for (ii = 0; ii < len; ii++)
 		fespi_tx(bank, buffer[ii]);
-	}
 
 	fespi_txwm_wait(bank);
 
@@ -464,67 +495,67 @@ static int slow_fespi_write_buffer(struct flash_bank *bank,
 		.global _start
 _start:
 command_table:
-        j       main            // 0
-        ebreak                  // 4
-        j       tx              // 8
-        j       txwm_wait       // 12
-        j       write_reg       // 16
+		j       main            // 0
+		ebreak                  // 4
+		j       tx              // 8
+		j       txwm_wait       // 12
+		j       write_reg       // 16
 		j		wip_wait		// 20
-		j		set_dir 		// 24
+		j		set_dir			// 24
 
 // Execute the program.
 main:
-        lbu     t0, 0(a1)
-        addi    a1, a1, 1
-        la      t1, command_table
-        add     t0, t0, t1
-        jr      t0
+		lbu     t0, 0(a1)
+		addi    a1, a1, 1
+		la      t1, command_table
+		add     t0, t0, t1
+		jr      t0
 
 // Read 1 byte the contains the number of bytes to transmit. Then read those
 // bytes from the program and transmit them one by one.
 tx:
-        lbu     t1, 0(a1)       // read number of bytes to transmit
-        addi    a1, a1, 1
+		lbu     t1, 0(a1)       // read number of bytes to transmit
+		addi    a1, a1, 1
 1:      lw      t0, FESPI_REG_TXFIFO(a0)        // wait for FIFO clear
-        bltz    t0, 1b
-        lbu     t0, 0(a1)       // Load byte to write
-        sw      t0, FESPI_REG_TXFIFO(a0)
-        addi    a1, a1, 1
-        addi    t1, t1, -1
-        bgtz    t1, 1b
-        j       main
+		bltz    t0, 1b
+		lbu     t0, 0(a1)       // Load byte to write
+		sw      t0, FESPI_REG_TXFIFO(a0)
+		addi    a1, a1, 1
+		addi    t1, t1, -1
+		bgtz    t1, 1b
+		j       main
 
 // Wait until TXWM is set.
 txwm_wait:
 1:      lw      t0, FESPI_REG_IP(a0)
-        andi    t0, t0, FESPI_IP_TXWM
-        beqz    t0, 1b
-        j       main
+		andi    t0, t0, FESPI_IP_TXWM
+		beqz    t0, 1b
+		j       main
 
 // Read 1 byte that contains the offset of the register to write, and 1 byte
 // that contains the data to write.
 write_reg:
-        lbu     t0, 0(a1)       // read register to write
-        add     t0, t0, a0
-        lbu     t1, 1(a1)       // read value to write
-        addi    a1, a1, 2
-        sw      t1, 0(t0)
-        j       main
+		lbu     t0, 0(a1)       // read register to write
+		add     t0, t0, a0
+		lbu     t1, 1(a1)       // read value to write
+		addi    a1, a1, 2
+		sw      t1, 0(t0)
+		j       main
 
 wip_wait:
 		li		a2, SPIFLASH_READ_STATUS
-        jal		txrx_byte
+		jal		txrx_byte
 		// discard first result
 1:		li		a2, 0
-        jal		txrx_byte
+		jal		txrx_byte
 		andi	t0, a2, SPIFLASH_BSY_BIT
 		bnez	t0, 1b
 		j		main
 
 txrx_byte:	// transmit the byte in a2, receive a bit into a2
 		lw      t0, FESPI_REG_TXFIFO(a0)        // wait for FIFO clear
-        bltz    t0, txrx_byte
-        sw      a2, FESPI_REG_TXFIFO(a0)
+		bltz    t0, txrx_byte
+		sw      a2, FESPI_REG_TXFIFO(a0)
 1:		lw		a2, FESPI_REG_RXFIFO(a0)
 		bltz	a2, 1b
 		ret
@@ -533,8 +564,8 @@ set_dir:
 		lw		t0, FESPI_REG_FMT(a0)
 		li		t1, ~(FESPI_FMT_DIR(0xFFFFFFFF))
 		and		t0, t0, t1
-        lbu     t1, 0(a1)       // read value to OR in
-        addi    a1, a1, 1
+		lbu     t1, 0(a1)       // read value to OR in
+		addi    a1, a1, 1
 		or		t0, t0, t1
 		sw		t0, FESPI_REG_FMT(a0)
 		j		main
@@ -542,24 +573,24 @@ set_dir:
 // ALGO_END
  */
 static const uint8_t algorithm_bin[] = {
-  0x6f, 0x00, 0xc0, 0x01, 0x73, 0x00, 0x10, 0x00, 0x6f, 0x00, 0xc0, 0x02,
-  0x6f, 0x00, 0x00, 0x05, 0x6f, 0x00, 0xc0, 0x05, 0x6f, 0x00, 0x00, 0x07,
-  0x6f, 0x00, 0x00, 0x0a, 0x83, 0xc2, 0x05, 0x00, 0x93, 0x85, 0x15, 0x00,
-  0x17, 0x03, 0x00, 0x00, 0x13, 0x03, 0xc3, 0xfd, 0xb3, 0x82, 0x62, 0x00,
-  0x67, 0x80, 0x02, 0x00, 0x03, 0xc3, 0x05, 0x00, 0x93, 0x85, 0x15, 0x00,
-  0x83, 0x22, 0x85, 0x04, 0xe3, 0xce, 0x02, 0xfe, 0x83, 0xc2, 0x05, 0x00,
-  0x23, 0x24, 0x55, 0x04, 0x93, 0x85, 0x15, 0x00, 0x13, 0x03, 0xf3, 0xff,
-  0xe3, 0x44, 0x60, 0xfe, 0x6f, 0xf0, 0x5f, 0xfc, 0x83, 0x22, 0x45, 0x07,
-  0x93, 0xf2, 0x12, 0x00, 0xe3, 0x8c, 0x02, 0xfe, 0x6f, 0xf0, 0x5f, 0xfb,
-  0x83, 0xc2, 0x05, 0x00, 0xb3, 0x82, 0xa2, 0x00, 0x03, 0xc3, 0x15, 0x00,
-  0x93, 0x85, 0x25, 0x00, 0x23, 0xa0, 0x62, 0x00, 0x6f, 0xf0, 0xdf, 0xf9,
-  0x13, 0x06, 0x50, 0x00, 0xef, 0x00, 0x80, 0x01, 0x13, 0x06, 0x00, 0x00,
-  0xef, 0x00, 0x00, 0x01, 0x93, 0x72, 0x16, 0x00, 0xe3, 0x9a, 0x02, 0xfe,
-  0x6f, 0xf0, 0x1f, 0xf8, 0x83, 0x22, 0x85, 0x04, 0xe3, 0xce, 0x02, 0xfe,
-  0x23, 0x24, 0xc5, 0x04, 0x03, 0x26, 0xc5, 0x04, 0xe3, 0x4e, 0x06, 0xfe,
-  0x67, 0x80, 0x00, 0x00, 0x83, 0x22, 0x05, 0x04, 0x13, 0x03, 0x70, 0xff,
-  0xb3, 0xf2, 0x62, 0x00, 0x03, 0xc3, 0x05, 0x00, 0x93, 0x85, 0x15, 0x00,
-  0xb3, 0xe2, 0x62, 0x00, 0x23, 0x20, 0x55, 0x04, 0x6f, 0xf0, 0x9f, 0xf4
+	 0x6f, 0x00, 0xc0, 0x01, 0x73, 0x00, 0x10, 0x00, 0x6f, 0x00, 0xc0, 0x02,
+	 0x6f, 0x00, 0x00, 0x05, 0x6f, 0x00, 0xc0, 0x05, 0x6f, 0x00, 0x00, 0x07,
+	 0x6f, 0x00, 0x00, 0x0a, 0x83, 0xc2, 0x05, 0x00, 0x93, 0x85, 0x15, 0x00,
+	 0x17, 0x03, 0x00, 0x00, 0x13, 0x03, 0xc3, 0xfd, 0xb3, 0x82, 0x62, 0x00,
+	 0x67, 0x80, 0x02, 0x00, 0x03, 0xc3, 0x05, 0x00, 0x93, 0x85, 0x15, 0x00,
+	 0x83, 0x22, 0x85, 0x04, 0xe3, 0xce, 0x02, 0xfe, 0x83, 0xc2, 0x05, 0x00,
+	 0x23, 0x24, 0x55, 0x04, 0x93, 0x85, 0x15, 0x00, 0x13, 0x03, 0xf3, 0xff,
+	 0xe3, 0x44, 0x60, 0xfe, 0x6f, 0xf0, 0x5f, 0xfc, 0x83, 0x22, 0x45, 0x07,
+	 0x93, 0xf2, 0x12, 0x00, 0xe3, 0x8c, 0x02, 0xfe, 0x6f, 0xf0, 0x5f, 0xfb,
+	 0x83, 0xc2, 0x05, 0x00, 0xb3, 0x82, 0xa2, 0x00, 0x03, 0xc3, 0x15, 0x00,
+	 0x93, 0x85, 0x25, 0x00, 0x23, 0xa0, 0x62, 0x00, 0x6f, 0xf0, 0xdf, 0xf9,
+	 0x13, 0x06, 0x50, 0x00, 0xef, 0x00, 0x80, 0x01, 0x13, 0x06, 0x00, 0x00,
+	 0xef, 0x00, 0x00, 0x01, 0x93, 0x72, 0x16, 0x00, 0xe3, 0x9a, 0x02, 0xfe,
+	 0x6f, 0xf0, 0x1f, 0xf8, 0x83, 0x22, 0x85, 0x04, 0xe3, 0xce, 0x02, 0xfe,
+	 0x23, 0x24, 0xc5, 0x04, 0x03, 0x26, 0xc5, 0x04, 0xe3, 0x4e, 0x06, 0xfe,
+	 0x67, 0x80, 0x00, 0x00, 0x83, 0x22, 0x05, 0x04, 0x13, 0x03, 0x70, 0xff,
+	 0xb3, 0xf2, 0x62, 0x00, 0x03, 0xc3, 0x05, 0x00, 0x93, 0x85, 0x15, 0x00,
+	 0xb3, 0xe2, 0x62, 0x00, 0x23, 0x20, 0x55, 0x04, 0x6f, 0xf0, 0x9f, 0xf4
 };
 #define STEP_EXIT			4
 #define STEP_TX				8
@@ -575,7 +606,7 @@ struct algorithm_steps {
 	uint8_t **steps;
 };
 
-struct algorithm_steps *as_new(unsigned size)
+static struct algorithm_steps *as_new(unsigned size)
 {
 	struct algorithm_steps *as = calloc(1, sizeof(struct algorithm_steps));
 	as->size = size;
@@ -583,7 +614,7 @@ struct algorithm_steps *as_new(unsigned size)
 	return as;
 }
 
-struct algorithm_steps *as_delete(struct algorithm_steps *as)
+static struct algorithm_steps *as_delete(struct algorithm_steps *as)
 {
 	for (unsigned step = 0; step < as->used; step++) {
 		free(as->steps[step]);
@@ -593,7 +624,7 @@ struct algorithm_steps *as_delete(struct algorithm_steps *as)
 	return NULL;
 }
 
-int as_empty(struct algorithm_steps *as)
+static int as_empty(struct algorithm_steps *as)
 {
 	for (unsigned s = 0; s < as->used; s++) {
 		if (as->steps[s][0] != STEP_NOP)
@@ -602,8 +633,8 @@ int as_empty(struct algorithm_steps *as)
 	return 1;
 }
 
-// Return size of compiled program.
-unsigned as_compile(struct algorithm_steps *as, uint8_t *target,
+/* Return size of compiled program. */
+static unsigned as_compile(struct algorithm_steps *as, uint8_t *target,
 		unsigned target_size)
 {
 	unsigned offset = 0;
@@ -661,16 +692,15 @@ unsigned as_compile(struct algorithm_steps *as, uint8_t *target,
 	LOG_DEBUG("%d-byte program:", offset);
 	for (unsigned i = 0; i < offset;) {
 		char buf[80];
-		for (unsigned x = 0; i < offset && x < 16; x++, i++) {
+		for (unsigned x = 0; i < offset && x < 16; x++, i++)
 			sprintf(buf + x*3, "%02x ", target[i]);
-		}
 		LOG_DEBUG("%s", buf);
 	}
 
 	return offset;
 }
 
-void as_add_tx(struct algorithm_steps *as, unsigned count, const uint8_t *data)
+static void as_add_tx(struct algorithm_steps *as, unsigned count, const uint8_t *data)
 {
 	LOG_DEBUG("count=%d", count);
 	while (count > 0) {
@@ -686,14 +716,14 @@ void as_add_tx(struct algorithm_steps *as, unsigned count, const uint8_t *data)
 	}
 }
 
-void as_add_tx1(struct algorithm_steps *as, uint8_t byte)
+static void as_add_tx1(struct algorithm_steps *as, uint8_t byte)
 {
 	uint8_t data[1];
 	data[0] = byte;
 	as_add_tx(as, 1, data);
 }
 
-void as_add_write_reg(struct algorithm_steps *as, uint8_t offset, uint8_t data)
+static void as_add_write_reg(struct algorithm_steps *as, uint8_t offset, uint8_t data)
 {
 	assert(as->used < as->size);
 	as->steps[as->used] = malloc(3);
@@ -703,7 +733,7 @@ void as_add_write_reg(struct algorithm_steps *as, uint8_t offset, uint8_t data)
 	as->used++;
 }
 
-void as_add_txwm_wait(struct algorithm_steps *as)
+static void as_add_txwm_wait(struct algorithm_steps *as)
 {
 	assert(as->used < as->size);
 	as->steps[as->used] = malloc(1);
@@ -711,7 +741,7 @@ void as_add_txwm_wait(struct algorithm_steps *as)
 	as->used++;
 }
 
-void as_add_wip_wait(struct algorithm_steps *as)
+static void as_add_wip_wait(struct algorithm_steps *as)
 {
 	assert(as->used < as->size);
 	as->steps[as->used] = malloc(1);
@@ -719,7 +749,7 @@ void as_add_wip_wait(struct algorithm_steps *as)
 	as->used++;
 }
 
-void as_add_set_dir(struct algorithm_steps *as, bool dir)
+static void as_add_set_dir(struct algorithm_steps *as, bool dir)
 {
 	assert(as->used < as->size);
 	as->steps[as->used] = malloc(2);
@@ -748,7 +778,7 @@ static int steps_add_buffer_write(struct algorithm_steps *as,
 	as_add_txwm_wait(as);
 	as_add_write_reg(as, FESPI_REG_CSMODE, FESPI_CSMODE_AUTO);
 
-	// fespi_wip()
+	/* fespi_wip() */
 	as_add_set_dir(as, FESPI_DIR_RX);
 	as_add_write_reg(as, FESPI_REG_CSMODE, FESPI_CSMODE_HOLD);
 	as_add_wip_wait(as);
@@ -766,20 +796,21 @@ static int steps_execute(struct algorithm_steps *as,
 	struct fespi_flash_bank *fespi_info = bank->driver_priv;
 	uint32_t ctrl_base = fespi_info->ctrl_base;
 	uint8_t *data_buf = malloc(data_wa->size);
+	int xlen = riscv_xlen(target);
 
 	struct reg_param reg_params[2];
-	init_reg_param(&reg_params[0], "x10", 32, PARAM_OUT);
-	init_reg_param(&reg_params[1], "x11", 32, PARAM_OUT);
-	buf_set_u32(reg_params[0].value, 0, 32, ctrl_base);
-	buf_set_u32(reg_params[1].value, 0, 32, data_wa->address);
+	init_reg_param(&reg_params[0], "a0", xlen, PARAM_OUT);
+	init_reg_param(&reg_params[1], "a1", xlen, PARAM_OUT);
+	buf_set_u64(reg_params[0].value, 0, xlen, ctrl_base);
+	buf_set_u64(reg_params[1].value, 0, xlen, data_wa->address);
 	while (!as_empty(as)) {
 		keep_alive();
 		unsigned bytes = as_compile(as, data_buf, data_wa->size);
 		int retval = target_write_buffer(target, data_wa->address, bytes,
 				data_buf);
 		if (retval != ERROR_OK) {
-			LOG_ERROR("Failed to write data to 0x%x: %d", data_wa->address,
-					retval);
+			LOG_ERROR("Failed to write data to 0x%" TARGET_PRIxADDR ": %d",
+					data_wa->address, retval);
 			return retval;
 		}
 
@@ -787,8 +818,8 @@ static int steps_execute(struct algorithm_steps *as,
 				algorithm_wa->address, algorithm_wa->address + 4,
 				10000, NULL);
 		if (retval != ERROR_OK) {
-			LOG_ERROR("Failed to execute algorithm at 0x%x: %d", algorithm_wa->address,
-					retval);
+			LOG_ERROR("Failed to execute algorithm at 0x%" TARGET_PRIxADDR ": %d",
+					algorithm_wa->address, retval);
 			return retval;
 		}
 	}
@@ -842,8 +873,8 @@ static int fespi_write(struct flash_bank *bank, const uint8_t *buffer,
 		retval = target_write_buffer(target, algorithm_wa->address,
 				sizeof(algorithm_bin), algorithm_bin);
 		if (retval != ERROR_OK) {
-			LOG_ERROR("Failed to write code to 0x%x: %d", algorithm_wa->address,
-					retval);
+			LOG_ERROR("Failed to write code to 0x%" TARGET_PRIxADDR ": %d",
+					algorithm_wa->address, retval);
 			target_free_working_area(target, algorithm_wa);
 			algorithm_wa = NULL;
 		}
@@ -884,11 +915,10 @@ static int fespi_write(struct flash_bank *bank, const uint8_t *buffer,
 		cur_count = 4 - (offset & 3);
 		if (cur_count > count)
 			cur_count = count;
-		if (algorithm_wa) {
+		if (algorithm_wa)
 			retval = steps_add_buffer_write(as, buffer, offset, cur_count);
-		} else {
+		else
 			retval = slow_fespi_write_buffer(bank, buffer, offset, cur_count);
-		}
 		if (retval != ERROR_OK)
 			goto err;
 		offset += cur_count;
@@ -905,11 +935,10 @@ static int fespi_write(struct flash_bank *bank, const uint8_t *buffer,
 		else
 			cur_count = count & ~3;
 
-		if (algorithm_wa) {
+		if (algorithm_wa)
 			retval = steps_add_buffer_write(as, buffer, offset, cur_count);
-		} else {
+		else
 			retval = slow_fespi_write_buffer(bank, buffer, offset, cur_count);
-		}
 		if (retval != ERROR_OK)
 			goto err;
 
@@ -921,24 +950,24 @@ static int fespi_write(struct flash_bank *bank, const uint8_t *buffer,
 
 	/* buffer tail */
 	if (count > 0) {
-		if (algorithm_wa) {
+		if (algorithm_wa)
 			retval = steps_add_buffer_write(as, buffer, offset, count);
-		} else {
+		else
 			retval = slow_fespi_write_buffer(bank, buffer, offset, count);
-		}
 		if (retval != ERROR_OK)
 			goto err;
 	}
 
-	if (algorithm_wa) {
+	if (algorithm_wa)
 		retval = steps_execute(as, bank, algorithm_wa, data_wa);
-	}
 
 err:
 	if (algorithm_wa) {
 		target_free_working_area(target, data_wa);
 		target_free_working_area(target, algorithm_wa);
 	}
+
+	as_delete(as);
 
 	/* Switch to HW mode before return to prompt */
 	FESPI_ENABLE_HW_MODE();
@@ -1016,20 +1045,28 @@ static int fespi_probe(struct flash_bank *bank)
 		free(bank->sectors);
 	fespi_info->probed = 0;
 
-	for (target_device = target_devices ; target_device->name ; ++target_device)
-		if (target_device->tap_idcode == target->tap->idcode)
-			break;
-	if (!target_device->name) {
-		LOG_ERROR("Device ID 0x%" PRIx32 " is not known as FESPI capable",
-				target->tap->idcode);
-		return ERROR_FAIL;
+	if (fespi_info->ctrl_base == 0) {
+		for (target_device = target_devices ; target_device->name ; ++target_device)
+			if (target_device->tap_idcode == target->tap->idcode)
+				break;
+
+		if (!target_device->name) {
+			LOG_ERROR("Device ID 0x%" PRIx32 " is not known as FESPI capable",
+					target->tap->idcode);
+			return ERROR_FAIL;
+		}
+
+		fespi_info->ctrl_base = target_device->ctrl_base;
+
+		LOG_DEBUG("Valid FESPI on device %s at address 0x%" PRIx32,
+				target_device->name, bank->base);
+
+	} else {
+	  LOG_DEBUG("Assuming FESPI as specified at address 0x%x with ctrl at 0x%x",
+		    fespi_info->ctrl_base,
+		    bank->base);
 	}
-
-	ctrl_base = target_device->ctrl_base;
-	fespi_info->ctrl_base = ctrl_base;
-
-	LOG_DEBUG("Valid FESPI on device %s at address 0x%" PRIx32,
-			target_device->name, bank->base);
+	ctrl_base = fespi_info->ctrl_base;
 
 	/* read and decode flash ID; returns in SW mode */
 	FESPI_WRITE_REG(FESPI_REG_TXCTRL, FESPI_TXWM(1));

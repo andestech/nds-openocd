@@ -205,6 +205,9 @@ static void telnet_save_history(struct telnet_connection *t_con)
 
 static int telnet_new_connection(struct connection *connection)
 {
+#if _NDS_V5_ONLY_
+	LOG_INFO("Establising Telnet connection");
+#endif
 	struct telnet_connection *telnet_connection;
 	struct telnet_service *telnet_service = connection->service->priv;
 	int i;
@@ -230,12 +233,19 @@ static int telnet_new_connection(struct connection *connection)
 	command_set_output_handler(connection->cmd_ctx, telnet_output, connection);
 
 	/* negotiate telnet options */
+#if _NDS_V5_ONLY_
+	LOG_INFO("Negotiate telnet options");
+#endif
 	telnet_write(connection, negotiate, strlen(negotiate));
 
 	/* print connection banner */
 	if (telnet_service->banner) {
 		telnet_write(connection, telnet_service->banner, strlen(telnet_service->banner));
 		telnet_write(connection, "\r\n", 2);
+
+#if _NDS_V5_ONLY_
+		LOG_INFO("telnet banner: %s", telnet_service->banner);
+#endif
 	}
 
 	/* the prompt is always placed at the line beginning */
@@ -328,7 +338,11 @@ static int telnet_input(struct connection *connection)
 				if (*buf_p == 0xff)
 					t_con->state = TELNET_STATE_IAC;
 				else {
+#if _NDS32_ONLY_
+					if (isprint(*buf_p) || (*buf_p >= 0x80 && *buf_p <= 0xfd)) { /* printable character or UTF-8 not ASCII character(bug18764) */
+#else
 					if (isprint(*buf_p)) {	/* printable character */
+#endif
 						/* watch buffer size leaving one spare character for
 						 * string null termination */
 						if (t_con->line_size == TELNET_LINE_MAX_SIZE-1) {
@@ -573,7 +587,7 @@ static int telnet_input(struct connection *connection)
 				break;
 			default:
 				LOG_ERROR("unknown telnet state");
-				exit(-1);
+				return ERROR_FAIL;
 		}
 
 		bytes_read--;
@@ -624,9 +638,8 @@ int telnet_init(char *banner)
 		return ERROR_OK;
 	}
 
-	struct telnet_service *telnet_service;
-
-	telnet_service = malloc(sizeof(struct telnet_service));
+	struct telnet_service *telnet_service =
+		malloc(sizeof(struct telnet_service));
 
 	if (!telnet_service) {
 		LOG_ERROR("Failed to allocate telnet service.");
@@ -635,13 +648,16 @@ int telnet_init(char *banner)
 
 	telnet_service->banner = banner;
 
-	return add_service("telnet",
-		telnet_port,
-		CONNECTION_LIMIT_UNLIMITED,
-		telnet_new_connection,
-		telnet_input,
-		telnet_connection_closed,
+	int ret = add_service("telnet", telnet_port, CONNECTION_LIMIT_UNLIMITED,
+		telnet_new_connection, telnet_input, telnet_connection_closed,
 		telnet_service);
+
+	if (ret != ERROR_OK) {
+		free(telnet_service);
+		return ret;
+	}
+
+	return ERROR_OK;
 }
 
 /* daemon configuration command telnet_port */

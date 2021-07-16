@@ -53,8 +53,13 @@ static int shutdown_openocd;
 /* store received signal to exit application by killing ourselves */
 static int last_signal;
 
+#if _NDS32_ONLY_
+// NDS32 for profiling-probe pc per-10ms
+int polling_period = 100;
+#else
 /* set the polling period to 100ms */
 static int polling_period = 100;
+#endif
 
 /* address by name on which to listen for incoming TCP/IP connections */
 static char *bindto_name;
@@ -132,7 +137,9 @@ static int add_connection(struct service *service, struct command_context *cmd_c
 		free(out_file);
 		if (c->fd_out == -1) {
 			LOG_ERROR("could not open %s", service->port);
-			exit(1);
+			command_done(c->cmd_ctx);
+			free(c);
+			return ERROR_FAIL;
 		}
 
 		LOG_INFO("accepting '%s' connection from pipe %s", service->name, service->port);
@@ -191,7 +198,13 @@ static int remove_connection(struct service *service, struct connection *connect
 	return ERROR_OK;
 }
 
-/* FIX! make service return error instead of invoking exit() */
+static void free_service(struct service *c)
+{
+	free(c->name);
+	free(c->port);
+	free(c);
+}
+
 int add_service(char *name,
 	const char *port,
 	int max_connections,
@@ -202,8 +215,13 @@ int add_service(char *name,
 {
 	struct service *c, **p;
 	struct hostent *hp;
-	int so_reuseaddr_option = 1;
 
+#if _NDS32_ONLY_
+	// fix bug-9638, port number issue
+	int so_reuseaddr_option = 0;
+#else
+	int so_reuseaddr_option = 1;
+#endif
 	c = malloc(sizeof(struct service));
 
 	c->name = strdup(name);
@@ -232,10 +250,15 @@ int add_service(char *name,
 	if (c->type == CONNECTION_TCP) {
 		c->max_connections = max_connections;
 
+#if _NDS_V5_ONLY_
+		c->fd = socket(AF_INET6, SOCK_STREAM, 0);
+#else
 		c->fd = socket(AF_INET, SOCK_STREAM, 0);
+#endif
 		if (c->fd == -1) {
 			LOG_ERROR("error creating socket: %s", strerror(errno));
-			exit(-1);
+			free_service(c);
+			return ERROR_FAIL;
 		}
 
 		setsockopt(c->fd,
@@ -244,26 +267,68 @@ int add_service(char *name,
 			(void *)&so_reuseaddr_option,
 			sizeof(int));
 
+#if _NDS_V5_ONLY_
+		int off = 0;
+		setsockopt(c->fd,
+			IPPROTO_IPV6,
+			IPV6_V6ONLY,
+			(char *)&off,
+			sizeof(off));
+#endif
+
+
+
 		socket_nonblock(c->fd);
 
 		memset(&c->sin, 0, sizeof(c->sin));
+#if _NDS_V5_ONLY_
+		c->sin.sin6_family = AF_INET6;
+#else
 		c->sin.sin_family = AF_INET;
+#endif
 
 		if (bindto_name == NULL)
+#if _NDS_V5_ONLY_
+			c->sin.sin6_addr = in6addr_any;
+#else
 			c->sin.sin_addr.s_addr = INADDR_ANY;
+#endif
 		else {
 			hp = gethostbyname(bindto_name);
 			if (hp == NULL) {
 				LOG_ERROR("couldn't resolve bindto address: %s", bindto_name);
-				exit(-1);
+				close_socket(c->fd);
+				free_service(c);
+				return ERROR_FAIL;
 			}
+#if _NDS_V5_ONLY_
+			memcpy(&c->sin.sin6_addr, hp->h_addr_list[0], hp->h_length);
+#else
 			memcpy(&c->sin.sin_addr, hp->h_addr_list[0], hp->h_length);
+#endif
 		}
+#if _NDS_V5_ONLY_
+		c->sin.sin6_port = htons(c->portnumber);
+#else
 		c->sin.sin_port = htons(c->portnumber);
+#endif
 
 		if (bind(c->fd, (struct sockaddr *)&c->sin, sizeof(c->sin)) == -1) {
-			LOG_ERROR("couldn't bind %s to socket: %s", name, strerror(errno));
-			exit(-1);
+			// b897807... When gdb_port is 0, don't increment it.
+			LOG_ERROR("couldn't bind %s to socket on port %d: %s", name,
+					c->portnumber, strerror(errno));
+//#if _NDS32_ONLY_
+//			// fix bug-10813, Multiple ICEman failed
+//			close(c->fd);
+//			// fix bug-10792, ICEman option -p, --port, gdb port numbers define issue.
+//			free(c);
+//			return ERROR_FAIL;
+//#else
+//			exit(-1);
+//#endif
+			close_socket(c->fd);
+			free_service(c);
+			return ERROR_FAIL;
 		}
 
 #ifndef _WIN32
@@ -281,8 +346,34 @@ int add_service(char *name,
 
 		if (listen(c->fd, 1) == -1) {
 			LOG_ERROR("couldn't listen on socket: %s", strerror(errno));
-			exit(-1);
+
+//#if _NDS32_ONLY_
+//			// fix bug-10813, Multiple ICEman failed
+//			close(c->fd);
+//			// fix bug-10792, ICEman option -p, --port, gdb port numbers define issue.
+//			free(c);
+//			return ERROR_FAIL;
+//#else
+//			exit(-1);
+//#endif
+			close_socket(c->fd);
+			free_service(c);
+			return ERROR_FAIL;
 		}
+
+#if _NDS_V5_ONLY_
+		struct sockaddr_in6 addr_in;
+#else
+		struct sockaddr_in addr_in;
+#endif
+		socklen_t addr_in_size = sizeof(addr_in);
+		getsockname(c->fd, (struct sockaddr *)&addr_in, &addr_in_size);
+		LOG_INFO("Listening on port %d for %s connections",
+#if _NDS_V5_ONLY_
+				ntohs(addr_in.sin6_port), name);
+#else
+				ntohs(addr_in.sin_port), name);
+#endif
 	} else if (c->type == CONNECTION_STDINOUT) {
 		c->fd = fileno(stdin);
 
@@ -302,13 +393,15 @@ int add_service(char *name,
 		/* we currenty do not support named pipes under win32
 		 * so exit openocd for now */
 		LOG_ERROR("Named pipes currently not supported under this os");
-		exit(1);
+		free_service(c);
+		return ERROR_FAIL;
 #else
 		/* Pipe we're reading from */
 		c->fd = open(c->port, O_RDONLY | O_NONBLOCK);
 		if (c->fd == -1) {
 			LOG_ERROR("could not open %s", c->port);
-			exit(1);
+			free_service(c);
+			return ERROR_FAIL;
 		}
 #endif
 	}
@@ -409,6 +502,7 @@ int server_loop(struct command_context *command_context)
 		} else {
 			/* Every 100ms, can be changed with "poll_period" command */
 			tv.tv_usec = polling_period * 1000;
+
 			/* Only while we're sleeping we'll let others run */
 			openocd_sleep_prelude();
 			kept_alive();
@@ -425,7 +519,7 @@ int server_loop(struct command_context *command_context)
 				FD_ZERO(&read_fds);
 			else {
 				LOG_ERROR("error during select: %s", strerror(errno));
-				exit(-1);
+				return ERROR_FAIL;
 			}
 #else
 
@@ -433,7 +527,7 @@ int server_loop(struct command_context *command_context)
 				FD_ZERO(&read_fds);
 			else {
 				LOG_ERROR("error during select: %s", strerror(errno));
-				exit(-1);
+				return ERROR_FAIL;
 			}
 #endif
 		}
@@ -469,7 +563,11 @@ int server_loop(struct command_context *command_context)
 					add_connection(service, command_context);
 				else {
 					if (service->type == CONNECTION_TCP) {
+#if _NDS_V5_ONLY_
+						struct sockaddr_in6 sin;
+#else
 						struct sockaddr_in sin;
+#endif
 						socklen_t address_size = sizeof(sin);
 						int tmp_fd;
 						tmp_fd = accept(service->fd,
@@ -552,7 +650,7 @@ int server_preinit(void)
 
 	if (WSAStartup(wVersionRequested, &wsaData) != 0) {
 		LOG_ERROR("Failed to Open Winsock");
-		exit(-1);
+		return ERROR_FAIL;
 	}
 
 	/* register ctrl-c handler */
@@ -570,15 +668,30 @@ int server_preinit(void)
 int server_init(struct command_context *cmd_ctx)
 {
 	int ret = tcl_init();
-	if (ERROR_OK != ret)
+
+	if (ret != ERROR_OK)
 		return ret;
 
-	return telnet_init("Open On-Chip Debugger");
+	ret = telnet_init("Open On-Chip Debugger");
+
+	if (ret != ERROR_OK) {
+		remove_services();
+		return ret;
+	}
+
+	return ERROR_OK;
 }
+
+#if _NDS32_ONLY_
+extern int nds_freerun_all_targets(void);
+#endif
 
 int server_quit(void)
 {
 	remove_services();
+#if _NDS32_ONLY_
+	nds_freerun_all_targets();
+#endif
 	target_quit();
 
 #ifdef _WIN32
@@ -749,3 +862,10 @@ COMMAND_HELPER(server_pipe_command, char **out)
 	}
 	return ERROR_OK;
 }
+#if _NDS32_ONLY_
+// NDS32: ctrl-c detect
+int server_get_shutdown(void)
+{
+	return shutdown_openocd;
+}
+#endif

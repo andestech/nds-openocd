@@ -99,6 +99,9 @@ enum reg_data_type_class {
 	REG_TYPE_CLASS_UNION,
 	REG_TYPE_CLASS_STRUCT,
 	REG_TYPE_CLASS_FLAGS,
+#if _NDS32_ONLY_
+	REG_TYPE_CLASS_VENDOR_DEF,
+#endif
 };
 
 struct reg_data_type {
@@ -114,9 +117,9 @@ struct reg_data_type {
 };
 
 struct reg {
-	/** Canonical name of the register. */
+	/* Canonical name of the register. */
 	const char *name;
-	/** Number that gdb uses to access this register. */
+	/* Number that gdb uses to access this register. */
 	uint32_t number;
 	/* TODO. This should probably be const. */
 	struct reg_feature *feature;

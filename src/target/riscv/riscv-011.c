@@ -11,15 +11,24 @@
 #include "config.h"
 #endif
 
-#include "target.h"
+#include "target/target.h"
 #include "target/algorithm.h"
-#include "target_type.h"
-#include "log.h"
+#include "target/target_type.h"
+#include "helper/log.h"
 #include "jtag/jtag.h"
-#include "register.h"
-#include "breakpoints.h"
+#include "target/register.h"
+#include "target/breakpoints.h"
 #include "helper/time_support.h"
 #include "riscv.h"
+#include "asm.h"
+#include "gdb_regs.h"
+
+#if _NDS_V5_ONLY_
+#include "target/nds32_log.h"
+extern int ndsv5_redefine_CSR_name(struct target *target);
+extern int ndsv5_redefine_GPR_FPU_name(struct target *target);
+static int ndsv5_handle_halt(struct target *target, int cause);
+#endif
 
 /**
  * Since almost everything can be accomplish by scanning the dbus register, all
@@ -32,32 +41,32 @@
  * Code structure
  *
  * At the bottom of the stack are the OpenOCD JTAG functions:
- * 		jtag_add_[id]r_scan
- * 		jtag_execute_query
- * 		jtag_add_runtest
+ *     jtag_add_[id]r_scan
+ *     jtag_execute_query
+ *     jtag_add_runtest
  *
  * There are a few functions to just instantly shift a register and get its
  * value:
- * 		dtmcontrol_scan
- * 		idcode_scan
- * 		dbus_scan
+ *    dtmcontrol_scan
+ *    idcode_scan
+ *    dbus_scan
  *
  * Because doing one scan and waiting for the result is slow, most functions
  * batch up a bunch of dbus writes and then execute them all at once. They use
  * the scans "class" for this:
- * 		scans_new
- * 		scans_delete
- * 		scans_execute
- * 		scans_add_...
+ *    scans_new
+ *    scans_delete
+ *    scans_execute
+ *    scans_add_...
  * Usually you new(), call a bunch of add functions, then execute() and look
  * at the results by calling scans_get...()
  *
  * Optimized functions will directly use the scans class above, but slightly
  * lazier code will use the cache functions that in turn use the scans
  * functions:
- * 		cache_get...
- * 		cache_set...
- * 		cache_write
+ *    cache_get...
+ *    cache_set...
+ *    cache_write
  * cache_set... update a local structure, which is then synced to the target
  * with cache_write(). Only Debug RAM words that are actually changed are sent
  * to the target. Afterwards use cache_get... to read results.
@@ -68,7 +77,7 @@
 
 #define DIM(x)		(sizeof(x)/sizeof(*x))
 
-// Constants for legacy SiFive hardware breakpoints.
+/* Constants for legacy SiFive hardware breakpoints. */
 #define CSR_BPCONTROL_X			(1<<0)
 #define CSR_BPCONTROL_W			(1<<1)
 #define CSR_BPCONTROL_R			(1<<2)
@@ -79,10 +88,10 @@
 #define CSR_BPCONTROL_BPMATCH	(0xf<<7)
 #define CSR_BPCONTROL_BPACTION	(0xff<<11)
 
-#define DEBUG_ROM_START         0x800
-#define DEBUG_ROM_RESUME        (DEBUG_ROM_START + 4)
-#define DEBUG_ROM_EXCEPTION     (DEBUG_ROM_START + 8)
-#define DEBUG_RAM_START         0x400
+#define DEBUG_ROM_START		0x800
+#define DEBUG_ROM_RESUME	(DEBUG_ROM_START + 4)
+#define DEBUG_ROM_EXCEPTION	(DEBUG_ROM_START + 8)
+#define DEBUG_RAM_START		0x400
 
 #define SETHALTNOT				0x10c
 
@@ -153,24 +162,7 @@ typedef enum slot {
 /*** Info about the core being debugged. ***/
 
 #define DBUS_ADDRESS_UNKNOWN	0xffff
-#define WALL_CLOCK_TIMEOUT		2
 
-// gdb's register list is defined in riscv_gdb_reg_names gdb/riscv-tdep.c in
-// its source tree. We must interpret the numbers the same here.
-enum {
-	REG_XPR0 = 0,
-	REG_XPR31 = 31,
-	REG_PC = 32,
-	REG_FPR0 = 33,
-	REG_FPR31 = 64,
-	REG_CSR0 = 65,
-	REG_MSTATUS = CSR_MSTATUS + REG_CSR0,
-	REG_CSR4095 = 4160,
-	REG_PRIV = 4161,
-	REG_COUNT
-};
-
-#define MAX_HWBPS			16
 #define DRAM_CACHE_SIZE		16
 
 struct trigger {
@@ -195,7 +187,6 @@ typedef struct {
 	unsigned int dramsize;
 	uint64_t dcsr;
 	uint64_t dpc;
-	uint64_t misa;
 	uint64_t tselect;
 	bool tselect_dirty;
 	/* The value that mstatus actually has on the target right now. This is not
@@ -205,31 +196,19 @@ typedef struct {
 
 	struct memory_cache_line dram_cache[DRAM_CACHE_SIZE];
 
-	/* Single buffer that contains all register names, instead of calling
-	 * malloc for each register. Needs to be freed when reg_list is freed. */
-	char *reg_names;
-	/* Single buffer that contains all register values. */
-	void *reg_values;
-
-	// For each physical trigger, contains -1 if the hwbp is available, or the
-	// unique_id of the breakpoint/watchpoint that is using it.
-	int trigger_unique_id[MAX_HWBPS];
-
-	unsigned int trigger_count;
-
-	// Number of run-test/idle cycles the target requests we do after each dbus
-	// access.
+	/* Number of run-test/idle cycles the target requests we do after each dbus
+	 * access. */
 	unsigned int dtmcontrol_idle;
 
-	// This value is incremented every time a dbus access comes back as "busy".
-	// It's used to determine how many run-test/idle cycles to feed the target
-	// in between accesses.
+	/* This value is incremented every time a dbus access comes back as "busy".
+	 * It's used to determine how many run-test/idle cycles to feed the target
+	 * in between accesses. */
 	unsigned int dbus_busy_delay;
 
-	// This value is incremented every time we read the debug interrupt as
-	// high.  It's used to add extra run-test/idle cycles after setting debug
-	// interrupt high, so ideally we never have to perform a whole extra scan
-	// before the interrupt is cleared.
+	/* This value is incremented every time we read the debug interrupt as
+	 * high.  It's used to add extra run-test/idle cycles after setting debug
+	 * interrupt high, so ideally we never have to perform a whole extra scan
+	 * before the interrupt is cleared. */
 	unsigned int interrupt_high_delay;
 
 	bool need_strict_step;
@@ -245,7 +224,8 @@ typedef struct {
 
 static int poll_target(struct target *target, bool announce);
 static int riscv011_poll(struct target *target);
-static int register_get(struct reg *reg);
+static int get_register(struct target *target, riscv_reg_t *value, int hartid,
+		int regid);
 
 /*** Utility functions. ***/
 
@@ -260,7 +240,7 @@ static riscv011_info_t *get_info(const struct target *target)
 static unsigned int slot_offset(const struct target *target, slot_t slot)
 {
 	riscv011_info_t *info = get_info(target);
-	switch (xlen(target)) {
+	switch (riscv_xlen(target)) {
 		case 32:
 			switch (slot) {
 				case SLOT0: return 4;
@@ -275,8 +255,9 @@ static unsigned int slot_offset(const struct target *target, slot_t slot)
 			}
 	}
 	LOG_ERROR("slot_offset called with xlen=%d, slot=%d",
-			xlen(target), slot);
+			riscv_xlen(target), slot);
 	assert(0);
+	return 0; /* Silence -Werror=return-type */
 }
 
 static uint32_t load_slot(const struct target *target, unsigned int dest,
@@ -362,7 +343,7 @@ static void increase_dbus_busy_delay(struct target *target)
 {
 	riscv011_info_t *info = get_info(target);
 	info->dbus_busy_delay += info->dbus_busy_delay / 10 + 1;
-	LOG_INFO("dtmcontrol_idle=%d, dbus_busy_delay=%d, interrupt_high_delay=%d",
+	LOG_DEBUG("dtmcontrol_idle=%d, dbus_busy_delay=%d, interrupt_high_delay=%d",
 			info->dtmcontrol_idle, info->dbus_busy_delay,
 			info->interrupt_high_delay);
 
@@ -373,7 +354,7 @@ static void increase_interrupt_high_delay(struct target *target)
 {
 	riscv011_info_t *info = get_info(target);
 	info->interrupt_high_delay += info->interrupt_high_delay / 10 + 1;
-	LOG_INFO("dtmcontrol_idle=%d, dbus_busy_delay=%d, interrupt_high_delay=%d",
+	LOG_DEBUG("dtmcontrol_idle=%d, dbus_busy_delay=%d, interrupt_high_delay=%d",
 			info->dtmcontrol_idle, info->dbus_busy_delay,
 			info->interrupt_high_delay);
 }
@@ -395,19 +376,17 @@ static void add_dbus_scan(const struct target *target, struct scan_field *field,
 	jtag_add_dr_scan(target->tap, 1, field, TAP_IDLE);
 
 	int idle_count = info->dtmcontrol_idle + info->dbus_busy_delay;
-	if (data & DMCONTROL_INTERRUPT) {
+	if (data & DMCONTROL_INTERRUPT)
 		idle_count += info->interrupt_high_delay;
-	}
 
-	if (idle_count) {
+	if (idle_count)
 		jtag_add_runtest(idle_count, TAP_IDLE);
-	}
 }
 
 static void dump_field(const struct scan_field *field)
 {
-	static const char *op_string[] = {"nop", "r", "w", "?"};
-	static const char *status_string[] = {"+", "?", "F", "b"};
+	static const char * const op_string[] = {"nop", "r", "w", "?"};
+	static const char * const status_string[] = {"+", "?", "F", "b"};
 
 	if (debug_level < LOG_LVL_DEBUG)
 		return;
@@ -458,9 +437,8 @@ static dbus_status_t dbus_scan(struct target *target, uint16_t *address_in,
 
 	int idle_count = info->dtmcontrol_idle + info->dbus_busy_delay;
 
-	if (idle_count) {
+	if (idle_count)
 		jtag_add_runtest(idle_count, TAP_IDLE);
-	}
 
 	int retval = jtag_execute_queue();
 	if (retval != ERROR_OK) {
@@ -468,13 +446,11 @@ static dbus_status_t dbus_scan(struct target *target, uint16_t *address_in,
 		return retval;
 	}
 
-	if (data_in) {
+	if (data_in)
 		*data_in = buf_get_u64(in, DBUS_DATA_START, DBUS_DATA_SIZE);
-	}
 
-	if (address_in) {
+	if (address_in)
 		*address_in = buf_get_u32(in, DBUS_ADDRESS_START, info->addrbits);
-	}
 
 	dump_field(&field);
 
@@ -486,19 +462,22 @@ static uint64_t dbus_read(struct target *target, uint16_t address)
 	uint64_t value;
 	dbus_status_t status;
 	uint16_t address_in;
-
+	
+	/* If the previous read/write was to the same address, we will get the read data
+	 * from the previous access.
+	 * While somewhat nonintuitive, this is an efficient way to get the data.
+	 */
+	
 	unsigned i = 0;
 	do {
 		status = dbus_scan(target, &address_in, &value, DBUS_OP_READ, address, 0);
-		if (status == DBUS_STATUS_BUSY) {
+		if (status == DBUS_STATUS_BUSY)
 			increase_dbus_busy_delay(target);
-		}
 	} while (((status == DBUS_STATUS_BUSY) || (address_in != address)) &&
 			i++ < 256);
 
-	if (status != DBUS_STATUS_SUCCESS) {
+	if (status != DBUS_STATUS_SUCCESS)
 		LOG_ERROR("failed read from 0x%x; value=0x%" PRIx64 ", status=%d\n", address, value, status);
-	}
 
 	return value;
 }
@@ -509,21 +488,19 @@ static void dbus_write(struct target *target, uint16_t address, uint64_t value)
 	unsigned i = 0;
 	while (status == DBUS_STATUS_BUSY && i++ < 256) {
 		status = dbus_scan(target, NULL, NULL, DBUS_OP_WRITE, address, value);
-		if (status == DBUS_STATUS_BUSY) {
+		if (status == DBUS_STATUS_BUSY)
 			increase_dbus_busy_delay(target);
-		}
 	}
-	if (status != DBUS_STATUS_SUCCESS) {
+	if (status != DBUS_STATUS_SUCCESS)
 		LOG_ERROR("failed to write 0x%" PRIx64 " to 0x%x; status=%d\n", value, address, status);
-	}
 }
 
 /*** scans "class" ***/
 
 typedef struct {
-	// Number of scans that space is reserved for.
+	/* Number of scans that space is reserved for. */
 	unsigned int scan_count;
-	// Size reserved in memory for each scan, in bytes.
+	/* Size reserved in memory for each scan, in bytes. */
 	unsigned int scan_size;
 	unsigned int next_scan;
 	uint8_t *in;
@@ -536,9 +513,9 @@ static scans_t *scans_new(struct target *target, unsigned int scan_count)
 {
 	scans_t *scans = malloc(sizeof(scans_t));
 	scans->scan_count = scan_count;
-	// This code also gets called before xlen is detected.
-	if (xlen(target))
-		scans->scan_size = 2 + xlen(target) / 8;
+	/* This code also gets called before xlen is detected. */
+	if (riscv_xlen(target))
+		scans->scan_size = 2 + riscv_xlen(target) / 8;
 	else
 		scans->scan_size = 2 + 128 / 8;
 	scans->next_scan = 0;
@@ -566,9 +543,8 @@ static void scans_reset(scans_t *scans)
 
 static void scans_dump(scans_t *scans)
 {
-	for (unsigned int i = 0; i < scans->next_scan; i++) {
+	for (unsigned int i = 0; i < scans->next_scan; i++)
 		dump_field(&scans->field[i]);
-	}
 }
 
 static int scans_execute(scans_t *scans)
@@ -641,7 +617,7 @@ static void scans_add_read32(scans_t *scans, uint16_t address, bool set_interrup
 static void scans_add_read(scans_t *scans, slot_t slot, bool set_interrupt)
 {
 	const struct target *target = scans->target;
-	switch (xlen(target)) {
+	switch (riscv_xlen(target)) {
 		case 32:
 			scans_add_read32(scans, slot_offset(target, slot), set_interrupt);
 			break;
@@ -726,19 +702,19 @@ static int wait_for_debugint_clear(struct target *target, bool ignore_first)
 {
 	time_t start = time(NULL);
 	if (ignore_first) {
-		// Throw away the results of the first read, since they'll contain the
-		// result of the read that happened just before debugint was set.
-		// (Assuming the last scan before calling this function was one that
-		// sets debugint.)
+		/* Throw away the results of the first read, since they'll contain the
+		 * result of the read that happened just before debugint was set.
+		 * (Assuming the last scan before calling this function was one that
+		 * sets debugint.) */
 		read_bits(target);
 	}
 	while (1) {
 		bits_t bits = read_bits(target);
-		if (!bits.interrupt) {
+		if (!bits.interrupt)
 			return ERROR_OK;
-		}
-		if (time(NULL) - start > WALL_CLOCK_TIMEOUT) {
-			LOG_ERROR("Timed out waiting for debug int to clear.");
+		if (time(NULL) - start > riscv_command_timeout_sec) {
+			LOG_ERROR("Timed out waiting for debug int to clear."
+				  "Increase timeout with riscv set_command_timeout_sec.");
 			return ERROR_FAIL;
 		}
 	}
@@ -762,11 +738,11 @@ static void cache_set32(struct target *target, unsigned int index, uint32_t data
 	riscv011_info_t *info = get_info(target);
 	if (info->dram_cache[index].valid &&
 			info->dram_cache[index].data == data) {
-		// This is already preset on the target.
-		LOG_DEBUG("cache[0x%x] = 0x%x (hit)", index, data);
+		/* This is already preset on the target. */
+		LOG_DEBUG("cache[0x%x] = 0x%08x: DASM(0x%x) (hit)", index, data, data);
 		return;
 	}
-	LOG_DEBUG("cache[0x%x] = 0x%x", index, data);
+	LOG_DEBUG("cache[0x%x] = 0x%08x: DASM(0x%x)", index, data, data);
 	info->dram_cache[index].data = data;
 	info->dram_cache[index].valid = true;
 	info->dram_cache[index].dirty = true;
@@ -776,9 +752,8 @@ static void cache_set(struct target *target, slot_t slot, uint64_t data)
 {
 	unsigned int offset = slot_offset(target, slot);
 	cache_set32(target, offset, data);
-	if (xlen(target) > 32) {
+	if (riscv_xlen(target) > 32)
 		cache_set32(target, offset + 1, data >> 32);
-	}
 }
 
 static void cache_set_jump(struct target *target, unsigned int index)
@@ -825,9 +800,8 @@ static void cache_clean(struct target *target)
 {
 	riscv011_info_t *info = get_info(target);
 	for (unsigned int i = 0; i < info->dramsize; i++) {
-		if (i >= 4) {
+		if (i >= 4)
 			info->dram_cache[i].valid = false;
-		}
 		info->dram_cache[i].dirty = false;
 	}
 }
@@ -839,9 +813,8 @@ static int cache_check(struct target *target)
 
 	for (unsigned int i = 0; i < info->dramsize; i++) {
 		if (info->dram_cache[i].valid && !info->dram_cache[i].dirty) {
-			if (dram_check32(target, i, info->dram_cache[i].data) != ERROR_OK) {
+			if (dram_check32(target, i, info->dram_cache[i].data) != ERROR_OK)
 				error++;
-			}
 		}
 	}
 
@@ -864,14 +837,13 @@ static int cache_write(struct target *target, unsigned int address, bool run)
 
 	unsigned int last = info->dramsize;
 	for (unsigned int i = 0; i < info->dramsize; i++) {
-		if (info->dram_cache[i].dirty) {
+		if (info->dram_cache[i].dirty)
 			last = i;
-		}
 	}
 
 	if (last == info->dramsize) {
-		// Nothing needs to be written to RAM.
-		dbus_write(target, DMCONTROL, DMCONTROL_HALTNOT | DMCONTROL_INTERRUPT);
+		/* Nothing needs to be written to RAM. */
+		dbus_write(target, DMCONTROL, DMCONTROL_HALTNOT | (run ? DMCONTROL_INTERRUPT : 0));
 
 	} else {
 		for (unsigned int i = 0; i < info->dramsize; i++) {
@@ -884,12 +856,12 @@ static int cache_write(struct target *target, unsigned int address, bool run)
 	}
 
 	if (run || address < CACHE_NO_READ) {
-		// Throw away the results of the first read, since it'll contain the
-		// result of the read that happened just before debugint was set.
+		/* Throw away the results of the first read, since it'll contain the
+		 * result of the read that happened just before debugint was set. */
 		scans_add_read32(scans, address, false);
 
-		// This scan contains the results of the read the caller requested, as
-		// well as an interrupt bit worth looking at.
+		/* This scan contains the results of the read the caller requested, as
+		 * well as an interrupt bit worth looking at. */
 		scans_add_read32(scans, address, false);
 	}
 
@@ -921,19 +893,17 @@ static int cache_write(struct target *target, unsigned int address, bool run)
 	if (errors) {
 		increase_dbus_busy_delay(target);
 
-		// Try again, using the slow careful code.
-		// Write all RAM, just to be extra cautious.
+		/* Try again, using the slow careful code.
+		 * Write all RAM, just to be extra cautious. */
 		for (unsigned int i = 0; i < info->dramsize; i++) {
-			if (i == last && run) {
+			if (i == last && run)
 				dram_write32(target, last, info->dram_cache[last].data, true);
-			} else {
+			else
 				dram_write32(target, i, info->dram_cache[i].data, false);
-			}
 			info->dram_cache[i].dirty = false;
 		}
-		if (run) {
+		if (run)
 			cache_clean(target);
-		}
 
 		if (wait_for_debugint_clear(target, true) != ERROR_OK) {
 			LOG_ERROR("Debug interrupt didn't clear.");
@@ -945,9 +915,8 @@ static int cache_write(struct target *target, unsigned int address, bool run)
 		if (run) {
 			cache_clean(target);
 		} else {
-			for (unsigned int i = 0; i < info->dramsize; i++) {
+			for (unsigned int i = 0; i < info->dramsize; i++)
 				info->dram_cache[i].dirty = false;
-			}
 		}
 
 		if (run || address < CACHE_NO_READ) {
@@ -955,14 +924,14 @@ static int cache_write(struct target *target, unsigned int address, bool run)
 					DBUS_DATA_START + 33, 1);
 			if (interrupt) {
 				increase_interrupt_high_delay(target);
-				// Slow path wait for it to clear.
+				/* Slow path wait for it to clear. */
 				if (wait_for_debugint_clear(target, false) != ERROR_OK) {
 					LOG_ERROR("Debug interrupt didn't clear.");
 					dump_debug_ram(target);
 					return ERROR_FAIL;
 				}
 			} else {
-				// We read a useful value in that last scan.
+				/* We read a useful value in that last scan. */
 				unsigned int read_addr = scans_get_u32(scans, scans->next_scan-1,
 						DBUS_ADDRESS_START, info->addrbits);
 				if (read_addr != address) {
@@ -996,9 +965,8 @@ static uint64_t cache_get(struct target *target, slot_t slot)
 {
 	unsigned int offset = slot_offset(target, slot);
 	uint64_t value = cache_get32(target, offset);
-	if (xlen(target) > 32) {
+	if (riscv_xlen(target) > 32)
 		value |= ((uint64_t) cache_get32(target, offset + 1)) << 32;
-	}
 	return value;
 }
 
@@ -1017,14 +985,13 @@ static int wait_for_state(struct target *target, enum target_state state)
 	time_t start = time(NULL);
 	while (1) {
 		int result = riscv011_poll(target);
-		if (result != ERROR_OK) {
+		if (result != ERROR_OK)
 			return result;
-		}
-		if (target->state == state) {
+		if (target->state == state)
 			return ERROR_OK;
-		}
-		if (time(NULL) - start > WALL_CLOCK_TIMEOUT) {
-			LOG_ERROR("Timed out waiting for state %d.", state);
+		if (time(NULL) - start > riscv_command_timeout_sec) {
+			LOG_ERROR("Timed out waiting for state %d. "
+				  "Increase timeout with riscv set_command_timeout_sec.", state);
 			return ERROR_FAIL;
 		}
 	}
@@ -1032,14 +999,22 @@ static int wait_for_state(struct target *target, enum target_state state)
 
 static int read_csr(struct target *target, uint64_t *value, uint32_t csr)
 {
+	riscv011_info_t *info = get_info(target);
 	cache_set32(target, 0, csrr(S0, csr));
 	cache_set_store(target, 1, S0, SLOT0);
 	cache_set_jump(target, 2);
-	if (cache_write(target, 4, true) != ERROR_OK) {
+	if (cache_write(target, 4, true) != ERROR_OK)
 		return ERROR_FAIL;
-	}
 	*value = cache_get(target, SLOT0);
 	LOG_DEBUG("csr 0x%x = 0x%" PRIx64, csr, *value);
+
+	uint32_t exception = cache_get32(target, info->dramsize-1);
+	if (exception) {
+		LOG_WARNING("Got exception 0x%x when reading %s", exception,
+				gdb_regno_name(GDB_REGNO_CSR0 + csr));
+		*value = ~0;
+		return ERROR_FAIL;
+	}
 
 	return ERROR_OK;
 }
@@ -1051,9 +1026,8 @@ static int write_csr(struct target *target, uint32_t csr, uint64_t value)
 	cache_set32(target, 1, csrw(S0, csr));
 	cache_set_jump(target, 2);
 	cache_set(target, SLOT0, value);
-	if (cache_write(target, 4, true) != ERROR_OK) {
+	if (cache_write(target, 4, true) != ERROR_OK)
 		return ERROR_FAIL;
-	}
 
 	return ERROR_OK;
 }
@@ -1063,9 +1037,8 @@ static int write_gpr(struct target *target, unsigned int gpr, uint64_t value)
 	cache_set_load(target, 0, gpr, SLOT0);
 	cache_set_jump(target, 1);
 	cache_set(target, SLOT0, value);
-	if (cache_write(target, 4, true) != ERROR_OK) {
+	if (cache_write(target, 4, true) != ERROR_OK)
 		return ERROR_FAIL;
-	}
 	return ERROR_OK;
 }
 
@@ -1105,45 +1078,42 @@ static int execute_resume(struct target *target, bool step)
 
 	maybe_write_tselect(target);
 
-	// TODO: check if dpc is dirty (which also is true if an exception was hit
-	// at any time)
+	/* TODO: check if dpc is dirty (which also is true if an exception was hit
+	 * at any time) */
 	cache_set_load(target, 0, S0, SLOT0);
 	cache_set32(target, 1, csrw(S0, CSR_DPC));
 	cache_set_jump(target, 2);
 	cache_set(target, SLOT0, info->dpc);
-	if (cache_write(target, 4, true) != ERROR_OK) {
+	if (cache_write(target, 4, true) != ERROR_OK)
 		return ERROR_FAIL;
-	}
 
-	struct reg *mstatus_reg = &target->reg_cache->reg_list[REG_MSTATUS];
+	struct reg *mstatus_reg = &target->reg_cache->reg_list[GDB_REGNO_MSTATUS];
 	if (mstatus_reg->valid) {
-		uint64_t mstatus_user = buf_get_u64(mstatus_reg->value, 0, xlen(target));
+		uint64_t mstatus_user = buf_get_u64(mstatus_reg->value, 0, riscv_xlen(target));
 		if (mstatus_user != info->mstatus_actual) {
 			cache_set_load(target, 0, S0, SLOT0);
 			cache_set32(target, 1, csrw(S0, CSR_MSTATUS));
 			cache_set_jump(target, 2);
 			cache_set(target, SLOT0, mstatus_user);
-			if (cache_write(target, 4, true) != ERROR_OK) {
+			if (cache_write(target, 4, true) != ERROR_OK)
 				return ERROR_FAIL;
-			}
 		}
 	}
 
 	info->dcsr |= DCSR_EBREAKM | DCSR_EBREAKH | DCSR_EBREAKS | DCSR_EBREAKU;
 	info->dcsr &= ~DCSR_HALT;
 
-	if (step) {
+	if (step)
 		info->dcsr |= DCSR_STEP;
-	} else {
+	else
 		info->dcsr &= ~DCSR_STEP;
-	}
 
 	dram_write32(target, 0, lw(S0, ZERO, DEBUG_RAM_START + 16), false);
 	dram_write32(target, 1, csrw(S0, CSR_DCSR), false);
 	dram_write32(target, 2, fence_i(), false);
 	dram_write_jump(target, 3, false);
 
-	// Write DCSR value, set interrupt and clear haltnot.
+	/* Write DCSR value, set interrupt and clear haltnot. */
 	uint64_t dbus_value = DMCONTROL_INTERRUPT | info->dcsr;
 	dbus_write(target, dram_address(4), dbus_value);
 
@@ -1160,7 +1130,7 @@ static int execute_resume(struct target *target, bool step)
 	return ERROR_OK;
 }
 
-// Execute a step, and wait for reentry into Debug Mode.
+/* Execute a step, and wait for reentry into Debug Mode. */
 static int full_step(struct target *target, bool announce)
 {
 	int result = execute_resume(target, true);
@@ -1173,8 +1143,9 @@ static int full_step(struct target *target, bool announce)
 			return result;
 		if (target->state != TARGET_DEBUG_RUNNING)
 			break;
-		if (time(NULL) - start > WALL_CLOCK_TIMEOUT) {
-			LOG_ERROR("Timed out waiting for step to complete.");
+		if (time(NULL) - start > riscv_command_timeout_sec) {
+			LOG_ERROR("Timed out waiting for step to complete."
+					"Increase timeout with riscv set_command_timeout_sec");
 			return ERROR_FAIL;
 		}
 	}
@@ -1189,30 +1160,6 @@ static int resume(struct target *target, int debug_execution, bool step)
 	}
 
 	return execute_resume(target, step);
-}
-
-/** Update register sizes based on xlen. */
-static void update_reg_list(struct target *target)
-{
-	riscv011_info_t *info = get_info(target);
-	if (info->reg_values) {
-		free(info->reg_values);
-	}
-	info->reg_values = malloc(REG_COUNT * xlen(target) / 4);
-
-	for (unsigned int i = 0; i < REG_COUNT; i++) {
-		struct reg *r = &target->reg_cache->reg_list[i];
-		r->value = info->reg_values + i * xlen(target) / 4;
-		if (r->dirty) {
-			LOG_ERROR("Register %d was dirty. Its value is lost.", i);
-		}
-		if (i == REG_PRIV) {
-			r->size = 8;
-		} else {
-			r->size = xlen(target);
-		}
-		r->valid = false;
-	}
 }
 
 static uint64_t reg_cache_get(struct target *target, unsigned int number)
@@ -1238,92 +1185,52 @@ static void reg_cache_set(struct target *target, unsigned int number,
 
 static int update_mstatus_actual(struct target *target)
 {
-	struct reg *mstatus_reg = &target->reg_cache->reg_list[REG_MSTATUS];
+	struct reg *mstatus_reg = &target->reg_cache->reg_list[GDB_REGNO_MSTATUS];
 	if (mstatus_reg->valid) {
-		// We previously made it valid.
+		/* We previously made it valid. */
 		return ERROR_OK;
 	}
 
-	// Force reading the register. In that process mstatus_actual will be
-	// updated.
-	return register_get(&target->reg_cache->reg_list[REG_MSTATUS]);
+	/* Force reading the register. In that process mstatus_actual will be
+	 * updated. */
+	riscv_reg_t mstatus;
+	return get_register(target, &mstatus, 0, GDB_REGNO_MSTATUS);
 }
 
 /*** OpenOCD target functions. ***/
 
-static int register_get(struct reg *reg)
+static int register_read(struct target *target, riscv_reg_t *value, int regnum)
 {
-	struct target *target = (struct target *) reg->arch_info;
 	riscv011_info_t *info = get_info(target);
-
-	maybe_write_tselect(target);
-
-	if (reg->number <= REG_XPR31) {
-		buf_set_u64(reg->value, 0, xlen(target), reg_cache_get(target, reg->number));
-		LOG_DEBUG("%s=0x%" PRIx64, reg->name, reg_cache_get(target, reg->number));
-		return ERROR_OK;
-	} else if (reg->number == REG_PC) {
-		buf_set_u32(reg->value, 0, 32, info->dpc);
-		reg->valid = true;
-		LOG_DEBUG("%s=0x%" PRIx64 " (cached)", reg->name, info->dpc);
-		return ERROR_OK;
-	} else if (reg->number >= REG_FPR0 && reg->number <= REG_FPR31) {
-		int result = update_mstatus_actual(target);
-		if (result != ERROR_OK) {
-			return result;
-		}
-		unsigned i = 0;
-		if ((info->mstatus_actual & MSTATUS_FS) == 0) {
-			info->mstatus_actual = set_field(info->mstatus_actual, MSTATUS_FS, 1);
-			cache_set_load(target, i++, S0, SLOT1);
-			cache_set32(target, i++, csrw(S0, CSR_MSTATUS));
-			cache_set(target, SLOT1, info->mstatus_actual);
-		}
-
-		if (xlen(target) == 32) {
-			cache_set32(target, i++, fsw(reg->number - REG_FPR0, 0, DEBUG_RAM_START + 16));
-		} else {
-			cache_set32(target, i++, fsd(reg->number - REG_FPR0, 0, DEBUG_RAM_START + 16));
-		}
-		cache_set_jump(target, i++);
-	} else if (reg->number >= REG_CSR0 && reg->number <= REG_CSR4095) {
-		cache_set32(target, 0, csrr(S0, reg->number - REG_CSR0));
+	if (regnum >= GDB_REGNO_CSR0 && regnum <= GDB_REGNO_CSR4095) {
+		cache_set32(target, 0, csrr(S0, regnum - GDB_REGNO_CSR0));
 		cache_set_store(target, 1, S0, SLOT0);
 		cache_set_jump(target, 2);
-	} else if (reg->number == REG_PRIV) {
-		buf_set_u64(reg->value, 0, 8, get_field(info->dcsr, DCSR_PRV));
-		LOG_DEBUG("%s=%d (cached)", reg->name,
-				(int) get_field(info->dcsr, DCSR_PRV));
-		return ERROR_OK;
 	} else {
-		LOG_ERROR("Don't know how to read register %d (%s)", reg->number, reg->name);
+		LOG_ERROR("Don't know how to read register %d", regnum);
 		return ERROR_FAIL;
 	}
 
-	if (cache_write(target, 4, true) != ERROR_OK) {
+	if (cache_write(target, 4, true) != ERROR_OK)
 		return ERROR_FAIL;
-	}
 
 	uint32_t exception = cache_get32(target, info->dramsize-1);
 	if (exception) {
-		LOG_ERROR("Got exception 0x%x when reading register %d", exception,
-				reg->number);
-		buf_set_u64(reg->value, 0, xlen(target), ~0);
+		LOG_WARNING("Got exception 0x%x when reading %s", exception, gdb_regno_name(regnum));
+		*value = ~0;
 		return ERROR_FAIL;
 	}
 
-	uint64_t value = cache_get(target, SLOT0);
-	LOG_DEBUG("%s=0x%" PRIx64, reg->name, value);
-	buf_set_u64(reg->value, 0, xlen(target), value);
+	*value = cache_get(target, SLOT0);
+	LOG_DEBUG("reg[%d]=0x%" PRIx64, regnum, *value);
 
-	if (reg->number == REG_MSTATUS) {
-		info->mstatus_actual = value;
-		reg->valid = true;
-	}
+	if (regnum == GDB_REGNO_MSTATUS)
+		info->mstatus_actual = *value;
 
 	return ERROR_OK;
 }
 
+/* Write the register. No caching or games. */
 static int register_write(struct target *target, unsigned int number,
 		uint64_t value)
 {
@@ -1333,23 +1240,22 @@ static int register_write(struct target *target, unsigned int number,
 
 	if (number == S0) {
 		cache_set_load(target, 0, S0, SLOT0);
-		cache_set32(target, 1, csrw(S0, CSR_DSCRATCH));
+		cache_set32(target, 1, csrw(S0, CSR_DSCRATCH0));
 		cache_set_jump(target, 2);
 	} else if (number == S1) {
 		cache_set_load(target, 0, S0, SLOT0);
 		cache_set_store(target, 1, S0, SLOT_LAST);
 		cache_set_jump(target, 2);
-	} else if (number <= REG_XPR31) {
-		cache_set_load(target, 0, number - REG_XPR0, SLOT0);
+	} else if (number <= GDB_REGNO_XPR31) {
+		cache_set_load(target, 0, number - GDB_REGNO_ZERO, SLOT0);
 		cache_set_jump(target, 1);
-	} else if (number == REG_PC) {
+	} else if (number == GDB_REGNO_PC) {
 		info->dpc = value;
 		return ERROR_OK;
-	} else if (number >= REG_FPR0 && number <= REG_FPR31) {
+	} else if (number >= GDB_REGNO_FPR0 && number <= GDB_REGNO_FPR31) {
 		int result = update_mstatus_actual(target);
-		if (result != ERROR_OK) {
+		if (result != ERROR_OK)
 			return result;
-		}
 		unsigned i = 0;
 		if ((info->mstatus_actual & MSTATUS_FS) == 0) {
 			info->mstatus_actual = set_field(info->mstatus_actual, MSTATUS_FS, 1);
@@ -1358,21 +1264,19 @@ static int register_write(struct target *target, unsigned int number,
 			cache_set(target, SLOT1, info->mstatus_actual);
 		}
 
-		if (xlen(target) == 32) {
-			cache_set32(target, i++, flw(number - REG_FPR0, 0, DEBUG_RAM_START + 16));
-		} else {
-			cache_set32(target, i++, fld(number - REG_FPR0, 0, DEBUG_RAM_START + 16));
-		}
+		if (riscv_xlen(target) == 32)
+			cache_set32(target, i++, flw(number - GDB_REGNO_FPR0, 0, DEBUG_RAM_START + 16));
+		else
+			cache_set32(target, i++, fld(number - GDB_REGNO_FPR0, 0, DEBUG_RAM_START + 16));
 		cache_set_jump(target, i++);
-	} else if (number >= REG_CSR0 && number <= REG_CSR4095) {
+	} else if (number >= GDB_REGNO_CSR0 && number <= GDB_REGNO_CSR4095) {
 		cache_set_load(target, 0, S0, SLOT0);
-		cache_set32(target, 1, csrw(S0, number - REG_CSR0));
+		cache_set32(target, 1, csrw(S0, number - GDB_REGNO_CSR0));
 		cache_set_jump(target, 2);
 
-		if (number == REG_MSTATUS) {
+		if (number == GDB_REGNO_MSTATUS)
 			info->mstatus_actual = value;
-		}
-	} else if (number == REG_PRIV) {
+	} else if (number == GDB_REGNO_PRIV) {
 		info->dcsr = set_field(info->dcsr, DCSR_PRV, value);
 		return ERROR_OK;
 	} else {
@@ -1381,38 +1285,71 @@ static int register_write(struct target *target, unsigned int number,
 	}
 
 	cache_set(target, SLOT0, value);
-	if (cache_write(target, info->dramsize - 1, true) != ERROR_OK) {
+	if (cache_write(target, info->dramsize - 1, true) != ERROR_OK)
 		return ERROR_FAIL;
-	}
 
 	uint32_t exception = cache_get32(target, info->dramsize-1);
 	if (exception) {
-		LOG_ERROR("Got exception 0x%x when writing register %d", exception,
-				number);
+		LOG_WARNING("Got exception 0x%x when writing %s", exception,
+				gdb_regno_name(number));
 		return ERROR_FAIL;
 	}
 
 	return ERROR_OK;
 }
 
-static int register_set(struct reg *reg, uint8_t *buf)
+static int get_register(struct target *target, riscv_reg_t *value, int hartid,
+		int regid)
 {
-	struct target *target = (struct target *) reg->arch_info;
+	assert(hartid == 0);
+	riscv011_info_t *info = get_info(target);
 
-	uint64_t value = buf_get_u64(buf, 0, xlen(target));
+	maybe_write_tselect(target);
 
-	LOG_DEBUG("write 0x%" PRIx64 " to %s", value, reg->name);
-	struct reg *r = &target->reg_cache->reg_list[reg->number];
-	r->valid = true;
-	memcpy(r->value, buf, (r->size + 7) / 8);
+	if (regid <= GDB_REGNO_XPR31) {
+		*value = reg_cache_get(target, regid);
+	} else if (regid == GDB_REGNO_PC) {
+		*value = info->dpc;
+	} else if (regid >= GDB_REGNO_FPR0 && regid <= GDB_REGNO_FPR31) {
+		int result = update_mstatus_actual(target);
+		if (result != ERROR_OK)
+			return result;
+		unsigned i = 0;
+		if ((info->mstatus_actual & MSTATUS_FS) == 0) {
+			info->mstatus_actual = set_field(info->mstatus_actual, MSTATUS_FS, 1);
+			cache_set_load(target, i++, S0, SLOT1);
+			cache_set32(target, i++, csrw(S0, CSR_MSTATUS));
+			cache_set(target, SLOT1, info->mstatus_actual);
+		}
 
-	return register_write(target, reg->number, value);
+		if (riscv_xlen(target) == 32)
+			cache_set32(target, i++, fsw(regid - GDB_REGNO_FPR0, 0, DEBUG_RAM_START + 16));
+		else
+			cache_set32(target, i++, fsd(regid - GDB_REGNO_FPR0, 0, DEBUG_RAM_START + 16));
+		cache_set_jump(target, i++);
+
+		if (cache_write(target, 4, true) != ERROR_OK)
+			return ERROR_FAIL;
+	} else if (regid == GDB_REGNO_PRIV) {
+		*value = get_field(info->dcsr, DCSR_PRV);
+	} else {
+		int result = register_read(target, value, regid);
+		if (result != ERROR_OK)
+			return result;
+	}
+
+	if (regid == GDB_REGNO_MSTATUS)
+		target->reg_cache->reg_list[regid].valid = true;
+
+	return ERROR_OK;
 }
 
-static struct reg_arch_type riscv_reg_arch_type = {
-	.get = register_get,
-	.set = register_set
-};
+static int set_register(struct target *target, int hartid, int regid,
+		uint64_t value)
+{
+	assert(hartid == 0);
+	return register_write(target, regid, value);
+}
 
 static int halt(struct target *target)
 {
@@ -1437,51 +1374,22 @@ static int init_target(struct command_context *cmd_ctx,
 {
 	LOG_DEBUG("init");
 	riscv_info_t *generic_info = (riscv_info_t *) target->arch_info;
+	generic_info->get_register = get_register;
+	generic_info->set_register = set_register;
+
 	generic_info->version_specific = calloc(1, sizeof(riscv011_info_t));
 	if (!generic_info->version_specific)
 		return ERROR_FAIL;
-	riscv011_info_t *info = get_info(target);
 
-	target->reg_cache = calloc(1, sizeof(*target->reg_cache));
-	target->reg_cache->name = "RISC-V registers";
-	target->reg_cache->num_regs = REG_COUNT;
+	/* Assume 32-bit until we discover the real value in examine(). */
+	generic_info->xlen[0] = 32;
+	riscv_init_registers(target);
 
-	target->reg_cache->reg_list = calloc(REG_COUNT, sizeof(struct reg));
-
-	const unsigned int max_reg_name_len = 12;
-	info->reg_names = calloc(1, REG_COUNT * max_reg_name_len);
-	char *reg_name = info->reg_names;
-	info->reg_values = NULL;
-
-	for (unsigned int i = 0; i < REG_COUNT; i++) {
-		struct reg *r = &target->reg_cache->reg_list[i];
-		r->number = i;
-		r->caller_save = true;
-		r->dirty = false;
-		r->valid = false;
-		r->exist = true;
-		r->type = &riscv_reg_arch_type;
-		r->arch_info = target;
-		if (i <= REG_XPR31) {
-			sprintf(reg_name, "x%d", i);
-		} else if (i == REG_PC) {
-			sprintf(reg_name, "pc");
-		} else if (i >= REG_FPR0 && i <= REG_FPR31) {
-			sprintf(reg_name, "f%d", i - REG_FPR0);
-		} else if (i >= REG_CSR0 && i <= REG_CSR4095) {
-			sprintf(reg_name, "csr%d", i - REG_CSR0);
-		} else if (i == REG_PRIV) {
-			sprintf(reg_name, "priv");
-		}
-		if (reg_name[0]) {
-			r->name = reg_name;
-		}
-		reg_name += strlen(reg_name) + 1;
-		assert(reg_name < info->reg_names + REG_COUNT * max_reg_name_len);
-	}
-	update_reg_list(target);
-
-	memset(info->trigger_unique_id, 0xff, sizeof(info->trigger_unique_id));
+#if _NDS_V5_ONLY_
+	/* redirect all CSRs (r->name/r->exist) to NDS define */
+	ndsv5_redefine_CSR_name(target);
+	ndsv5_redefine_GPR_FPU_name(target);
+#endif
 
 	return ERROR_OK;
 }
@@ -1494,234 +1402,6 @@ static void deinit_target(struct target *target)
 	info->version_specific = NULL;
 }
 
-static int add_trigger(struct target *target, struct trigger *trigger)
-{
-	riscv011_info_t *info = get_info(target);
-
-	maybe_read_tselect(target);
-
-	unsigned int i;
-	for (i = 0; i < info->trigger_count; i++) {
-		if (info->trigger_unique_id[i] != -1) {
-			continue;
-		}
-
-		write_csr(target, CSR_TSELECT, i);
-
-		uint64_t tdata1;
-		read_csr(target, &tdata1, CSR_TDATA1);
-		int type = get_field(tdata1, MCONTROL_TYPE(xlen(target)));
-
-		if (type != 2) {
-			continue;
-		}
-
-		if (tdata1 & (MCONTROL_EXECUTE | MCONTROL_STORE | MCONTROL_LOAD)) {
-			// Trigger is already in use, presumably by user code.
-			continue;
-		}
-
-		// address/data match trigger
-		tdata1 |= MCONTROL_DMODE(xlen(target));
-		tdata1 = set_field(tdata1, MCONTROL_ACTION,
-				MCONTROL_ACTION_DEBUG_MODE);
-		tdata1 = set_field(tdata1, MCONTROL_MATCH, MCONTROL_MATCH_EQUAL);
-		tdata1 |= MCONTROL_M;
-		if (info->misa & (1 << ('H' - 'A')))
-			tdata1 |= MCONTROL_H;
-		if (info->misa & (1 << ('S' - 'A')))
-			tdata1 |= MCONTROL_S;
-		if (info->misa & (1 << ('U' - 'A')))
-			tdata1 |= MCONTROL_U;
-
-		if (trigger->execute)
-			tdata1 |= MCONTROL_EXECUTE;
-		if (trigger->read)
-			tdata1 |= MCONTROL_LOAD;
-		if (trigger->write)
-			tdata1 |= MCONTROL_STORE;
-
-		write_csr(target, CSR_TDATA1, tdata1);
-
-		uint64_t tdata1_rb;
-		read_csr(target, &tdata1_rb, CSR_TDATA1);
-		LOG_DEBUG("tdata1=0x%" PRIx64, tdata1_rb);
-
-		if (tdata1 != tdata1_rb) {
-			LOG_DEBUG("Trigger %d doesn't support what we need; After writing 0x%"
-					PRIx64 " to tdata1 it contains 0x%" PRIx64,
-					i, tdata1, tdata1_rb);
-			write_csr(target, CSR_TDATA1, 0);
-			continue;
-		}
-
-		write_csr(target, CSR_TDATA2, trigger->address);
-
-		LOG_DEBUG("Using resource %d for bp %d", i,
-				trigger->unique_id);
-		info->trigger_unique_id[i] = trigger->unique_id;
-		break;
-	}
-	if (i >= info->trigger_count) {
-		LOG_ERROR("Couldn't find an available hardware trigger.");
-		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
-	}
-
-	return ERROR_OK;
-}
-
-static int remove_trigger(struct target *target, struct trigger *trigger)
-{
-	riscv011_info_t *info = get_info(target);
-
-	maybe_read_tselect(target);
-
-	unsigned int i;
-	for (i = 0; i < info->trigger_count; i++) {
-		if (info->trigger_unique_id[i] == trigger->unique_id) {
-			break;
-		}
-	}
-	if (i >= info->trigger_count) {
-		LOG_ERROR("Couldn't find the hardware resources used by hardware "
-				"trigger.");
-		return ERROR_FAIL;
-	}
-	LOG_DEBUG("Stop using resource %d for bp %d", i, trigger->unique_id);
-	write_csr(target, CSR_TSELECT, i);
-	write_csr(target, CSR_TDATA1, 0);
-	info->trigger_unique_id[i] = -1;
-
-	return ERROR_OK;
-}
-
-static void trigger_from_breakpoint(struct trigger *trigger,
-		const struct breakpoint *breakpoint)
-{
-	trigger->address = breakpoint->address;
-	trigger->length = breakpoint->length;
-	trigger->mask = ~0LL;
-	trigger->read = false;
-	trigger->write = false;
-	trigger->execute = true;
-	// unique_id is unique across both breakpoints and watchpoints.
-	trigger->unique_id = breakpoint->unique_id;
-}
-
-static void trigger_from_watchpoint(struct trigger *trigger,
-		const struct watchpoint *watchpoint)
-{
-	trigger->address = watchpoint->address;
-	trigger->length = watchpoint->length;
-	trigger->mask = watchpoint->mask;
-	trigger->value = watchpoint->value;
-	trigger->read = (watchpoint->rw == WPT_READ || watchpoint->rw == WPT_ACCESS);
-	trigger->write = (watchpoint->rw == WPT_WRITE || watchpoint->rw == WPT_ACCESS);
-	trigger->execute = false;
-	// unique_id is unique across both breakpoints and watchpoints.
-	trigger->unique_id = watchpoint->unique_id;
-}
-
-static int add_breakpoint(struct target *target,
-	struct breakpoint *breakpoint)
-{
-	if (breakpoint->type == BKPT_SOFT) {
-		if (target_read_memory(target, breakpoint->address, breakpoint->length, 1,
-					breakpoint->orig_instr) != ERROR_OK) {
-			LOG_ERROR("Failed to read original instruction at 0x%x",
-					breakpoint->address);
-			return ERROR_FAIL;
-		}
-
-		int retval;
-		if (breakpoint->length == 4) {
-			retval = target_write_u32(target, breakpoint->address, ebreak());
-		} else {
-			retval = target_write_u16(target, breakpoint->address, ebreak_c());
-		}
-		if (retval != ERROR_OK) {
-			LOG_ERROR("Failed to write %d-byte breakpoint instruction at 0x%x",
-					breakpoint->length, breakpoint->address);
-			return ERROR_FAIL;
-		}
-
-	} else if (breakpoint->type == BKPT_HARD) {
-		struct trigger trigger;
-		trigger_from_breakpoint(&trigger, breakpoint);
-		int result = add_trigger(target, &trigger);
-		if (result != ERROR_OK) {
-			return result;
-		}
-
-	} else {
-		LOG_INFO("OpenOCD only supports hardware and software breakpoints.");
-		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
-	}
-
-	breakpoint->set = true;
-
-	return ERROR_OK;
-}
-
-static int remove_breakpoint(struct target *target,
-		struct breakpoint *breakpoint)
-{
-	if (breakpoint->type == BKPT_SOFT) {
-		if (target_write_memory(target, breakpoint->address, breakpoint->length, 1,
-					breakpoint->orig_instr) != ERROR_OK) {
-			LOG_ERROR("Failed to restore instruction for %d-byte breakpoint at "
-					"0x%x", breakpoint->length, breakpoint->address);
-			return ERROR_FAIL;
-		}
-
-	} else if (breakpoint->type == BKPT_HARD) {
-		struct trigger trigger;
-		trigger_from_breakpoint(&trigger, breakpoint);
-		int result = remove_trigger(target, &trigger);
-		if (result != ERROR_OK) {
-			return result;
-		}
-
-	} else {
-		LOG_INFO("OpenOCD only supports hardware and software breakpoints.");
-		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
-	}
-
-	breakpoint->set = false;
-
-	return ERROR_OK;
-}
-
-static int add_watchpoint(struct target *target,
-		struct watchpoint *watchpoint)
-{
-	struct trigger trigger;
-	trigger_from_watchpoint(&trigger, watchpoint);
-
-	int result = add_trigger(target, &trigger);
-	if (result != ERROR_OK) {
-		return result;
-	}
-	watchpoint->set = true;
-
-	return ERROR_OK;
-}
-
-static int remove_watchpoint(struct target *target,
-		struct watchpoint *watchpoint)
-{
-	struct trigger trigger;
-	trigger_from_watchpoint(&trigger, watchpoint);
-
-	int result = remove_trigger(target, &trigger);
-	if (result != ERROR_OK) {
-		return result;
-	}
-	watchpoint->set = false;
-
-	return ERROR_OK;
-}
-
 static int strict_step(struct target *target, bool announce)
 {
 	riscv011_info_t *info = get_info(target);
@@ -1730,13 +1410,13 @@ static int strict_step(struct target *target, bool announce)
 
 	struct breakpoint *breakpoint = target->breakpoints;
 	while (breakpoint) {
-		remove_breakpoint(target, breakpoint);
+		riscv_remove_breakpoint(target, breakpoint);
 		breakpoint = breakpoint->next;
 	}
 
 	struct watchpoint *watchpoint = target->watchpoints;
 	while (watchpoint) {
-		remove_watchpoint(target, watchpoint);
+		riscv_remove_watchpoint(target, watchpoint);
 		watchpoint = watchpoint->next;
 	}
 
@@ -1746,13 +1426,13 @@ static int strict_step(struct target *target, bool announce)
 
 	breakpoint = target->breakpoints;
 	while (breakpoint) {
-		add_breakpoint(target, breakpoint);
+		riscv_add_breakpoint(target, breakpoint);
 		breakpoint = breakpoint->next;
 	}
 
 	watchpoint = target->watchpoints;
 	while (watchpoint) {
-		add_watchpoint(target, watchpoint);
+		riscv_add_watchpoint(target, watchpoint);
 		watchpoint = watchpoint->next;
 	}
 
@@ -1761,7 +1441,7 @@ static int strict_step(struct target *target, bool announce)
 	return ERROR_OK;
 }
 
-static int step(struct target *target, int current, uint32_t address,
+static int step(struct target *target, int current, target_addr_t address,
 		int handle_breakpoints)
 {
 	riscv011_info_t *info = get_info(target);
@@ -1769,11 +1449,11 @@ static int step(struct target *target, int current, uint32_t address,
 	jtag_add_ir_scan(target->tap, &select_dbus, TAP_IDLE);
 
 	if (!current) {
-		if (xlen(target) > 32) {
+		if (riscv_xlen(target) > 32) {
 			LOG_WARNING("Asked to resume at 32-bit PC on %d-bit target.",
-					xlen(target));
+					riscv_xlen(target));
 		}
-		int result = register_write(target, REG_PC, address);
+		int result = register_write(target, GDB_REGNO_PC, address);
 		if (result != ERROR_OK)
 			return result;
 	}
@@ -1791,7 +1471,7 @@ static int step(struct target *target, int current, uint32_t address,
 
 static int examine(struct target *target)
 {
-	// Don't need to select dbus, since the first thing we do is read dtmcontrol.
+	/* Don't need to select dbus, since the first thing we do is read dtmcontrol. */
 
 	uint32_t dtmcontrol = dtmcontrol_scan(target, 0);
 	LOG_DEBUG("dtmcontrol=0x%x", dtmcontrol);
@@ -1808,17 +1488,25 @@ static int examine(struct target *target)
 		return ERROR_FAIL;
 	}
 
+	RISCV_INFO(r);
+	r->hart_count = 1;
+
 	riscv011_info_t *info = get_info(target);
 	info->addrbits = get_field(dtmcontrol, DTMCONTROL_ADDRBITS);
 	info->dtmcontrol_idle = get_field(dtmcontrol, DTMCONTROL_IDLE);
 	if (info->dtmcontrol_idle == 0) {
-		// Some old SiFive cores don't set idle but need it to be 1.
+		/* Some old SiFive cores don't set idle but need it to be 1. */
 		uint32_t idcode = idcode_scan(target);
 		if (idcode == 0x10e31913)
 			info->dtmcontrol_idle = 1;
 	}
 
 	uint32_t dminfo = dbus_read(target, DMINFO);
+	/* reset info->dbus_busy_delay=0,
+	   if info->dbus_busy_delay was increase by the 1st dbus_scan() */
+	info->dbus_busy_delay = 0;
+	LOG_DEBUG("info->dbus_busy_delay: 0x%08x", info->dbus_busy_delay);
+
 	LOG_DEBUG("dminfo: 0x%08x", dminfo);
 	LOG_DEBUG("  abussize=0x%x", get_field(dminfo, DMINFO_ABUSSIZE));
 	LOG_DEBUG("  serialcount=0x%x", get_field(dminfo, DMINFO_SERIALCOUNT));
@@ -1847,26 +1535,27 @@ static int examine(struct target *target)
 		return ERROR_FAIL;
 	}
 
-	// Figure out XLEN, and test writing all of Debug RAM while we're at it.
+	/* Pretend this is a 32-bit system until we have found out the true value. */
+	r->xlen[0] = 32;
+
+	/* Figure out XLEN, and test writing all of Debug RAM while we're at it. */
 	cache_set32(target, 0, xori(S1, ZERO, -1));
-	// 0xffffffff  0xffffffff:ffffffff  0xffffffff:ffffffff:ffffffff:ffffffff
+	/* 0xffffffff  0xffffffff:ffffffff  0xffffffff:ffffffff:ffffffff:ffffffff */
 	cache_set32(target, 1, srli(S1, S1, 31));
-	// 0x00000001  0x00000001:ffffffff  0x00000001:ffffffff:ffffffff:ffffffff
+	/* 0x00000001  0x00000001:ffffffff  0x00000001:ffffffff:ffffffff:ffffffff */
 	cache_set32(target, 2, sw(S1, ZERO, DEBUG_RAM_START));
 	cache_set32(target, 3, srli(S1, S1, 31));
-	// 0x00000000  0x00000000:00000003  0x00000000:00000003:ffffffff:ffffffff
+	/* 0x00000000  0x00000000:00000003  0x00000000:00000003:ffffffff:ffffffff */
 	cache_set32(target, 4, sw(S1, ZERO, DEBUG_RAM_START + 4));
 	cache_set_jump(target, 5);
-	for (unsigned i = 6; i < info->dramsize; i++) {
+	for (unsigned i = 6; i < info->dramsize; i++)
 		cache_set32(target, i, i * 0x01020304);
-	}
 
 	cache_write(target, 0, false);
 
-	// Check that we can actually read/write dram.
-	if (cache_check(target) != ERROR_OK) {
+	/* Check that we can actually read/write dram. */
+	if (cache_check(target) != ERROR_OK)
 		return ERROR_FAIL;
-	}
 
 	cache_write(target, 0, true);
 	cache_invalidate(target);
@@ -1875,11 +1564,11 @@ static int examine(struct target *target)
 	uint32_t word1 = cache_get32(target, 1);
 	riscv_info_t *generic_info = (riscv_info_t *) target->arch_info;
 	if (word0 == 1 && word1 == 0) {
-		generic_info->xlen = 32;
+		generic_info->xlen[0] = 32;
 	} else if (word0 == 0xffffffff && word1 == 3) {
-		generic_info->xlen = 64;
+		generic_info->xlen[0] = 64;
 	} else if (word0 == 0xffffffff && word1 == 0xffffffff) {
-		generic_info->xlen = 128;
+		generic_info->xlen[0] = 128;
 	} else {
 		uint32_t exception = cache_get32(target, info->dramsize-1);
 		LOG_ERROR("Failed to discover xlen; word0=0x%x, word1=0x%x, exception=0x%x",
@@ -1887,25 +1576,35 @@ static int examine(struct target *target)
 		dump_debug_ram(target);
 		return ERROR_FAIL;
 	}
-	LOG_DEBUG("Discovered XLEN is %d", xlen(target));
+	LOG_DEBUG("Discovered XLEN is %d", riscv_xlen(target));
 
-	// Update register list to match discovered XLEN.
-	update_reg_list(target);
-
-	if (read_csr(target, &info->misa, CSR_MISA) != ERROR_OK) {
-		LOG_ERROR("Failed to read misa.");
-		return ERROR_FAIL;
+	if (read_csr(target, &r->misa, CSR_MISA) != ERROR_OK) {
+		const unsigned old_csr_misa = 0xf10;
+		LOG_WARNING("Failed to read misa at 0x%x; trying 0x%x.", CSR_MISA,
+				old_csr_misa);
+		if (read_csr(target, &r->misa, old_csr_misa) != ERROR_OK) {
+			/* Maybe this is an old core that still has $misa at the old
+			 * address. */
+			LOG_ERROR("Failed to read misa at 0x%x.", old_csr_misa);
+			return ERROR_FAIL;
+		}
 	}
+
+	/* Update register list to match discovered XLEN/supported extensions. */
+	riscv_init_registers(target);
 
 	info->never_halted = true;
 
 	int result = riscv011_poll(target);
-	if (result != ERROR_OK) {
+	if (result != ERROR_OK)
 		return result;
-	}
 
 	target_set_examined(target);
-	LOG_INFO("Examined RISCV core; XLEN=%d, misa=0x%" PRIx64, xlen(target), info->misa);
+	riscv_set_current_hartid(target, 0);
+	for (size_t i = 0; i < 32; ++i)
+		reg_cache_set(target, i, -1);
+	LOG_INFO("Examined RISCV core; XLEN=%d, misa=0x%" PRIx64,
+			riscv_xlen(target), r->misa);
 
 	return ERROR_OK;
 }
@@ -1916,41 +1615,40 @@ static riscv_error_t handle_halt_routine(struct target *target)
 
 	scans_t *scans = scans_new(target, 256);
 
-	// Read all GPRs as fast as we can, because gdb is going to ask for them
-	// anyway. Reading them one at a time is much slower.
+	/* Read all GPRs as fast as we can, because gdb is going to ask for them
+	 * anyway. Reading them one at a time is much slower. */
 
-	// Write the jump back to address 1.
+	/* Write the jump back to address 1. */
 	scans_add_write_jump(scans, 1, false);
 	for (int reg = 1; reg < 32; reg++) {
-		if (reg == S0 || reg == S1) {
+		if (reg == S0 || reg == S1)
 			continue;
-		}
 
-		// Write store instruction.
+		/* Write store instruction. */
 		scans_add_write_store(scans, 0, reg, SLOT0, true);
 
-		// Read value.
+		/* Read value. */
 		scans_add_read(scans, SLOT0, false);
 	}
 
-	// Write store of s0 at index 1.
+	/* Write store of s0 at index 1. */
 	scans_add_write_store(scans, 1, S0, SLOT0, false);
-	// Write jump at index 2.
+	/* Write jump at index 2. */
 	scans_add_write_jump(scans, 2, false);
 
-	// Read S1 from debug RAM
+	/* Read S1 from debug RAM */
 	scans_add_write_load(scans, 0, S0, SLOT_LAST, true);
-	// Read value.
+	/* Read value. */
 	scans_add_read(scans, SLOT0, false);
 
-	// Read S0 from dscratch
-	unsigned int csr[] = {CSR_DSCRATCH, CSR_DPC, CSR_DCSR};
+	/* Read S0 from dscratch */
+	unsigned int csr[] = {CSR_DSCRATCH0, CSR_DPC, CSR_DCSR};
 	for (unsigned int i = 0; i < DIM(csr); i++) {
 		scans_add_write32(scans, 0, csrr(S0, csr[i]), true);
 		scans_add_read(scans, SLOT0, false);
 	}
 
-	// Final read to get the last value out.
+	/* Final read to get the last value out. */
 	scans_add_read32(scans, 4, false);
 
 	int retval = scans_execute(scans);
@@ -1964,8 +1662,8 @@ static riscv_error_t handle_halt_routine(struct target *target)
 	unsigned result = 0;
 	uint64_t value = 0;
 	reg_cache_set(target, 0, 0);
-	// The first scan result is the result from something old we don't care
-	// about.
+	/* The first scan result is the result from something old we don't care
+	 * about. */
 	for (unsigned int i = 1; i < scans->next_scan && dbus_busy == 0; i++) {
 		dbus_status_t status = scans_get_u32(scans, i, DBUS_OP_START,
 				DBUS_OP_SIZE);
@@ -1992,48 +1690,114 @@ static riscv_error_t handle_halt_routine(struct target *target)
 		if (address == 4 || address == 5) {
 			unsigned int reg;
 			switch (result) {
-				case 0: reg = 1; break;
-				case 1: reg = 2; break;
-				case 2: reg = 3; break;
-				case 3: reg = 4; break;
-				case 4: reg = 5; break;
-				case 5: reg = 6; break;
-				case 6: reg = 7; break;
-						// S0
-						// S1
-				case 7: reg = 10; break;
-				case 8: reg = 11; break;
-				case 9: reg = 12; break;
-				case 10: reg = 13; break;
-				case 11: reg = 14; break;
-				case 12: reg = 15; break;
-				case 13: reg = 16; break;
-				case 14: reg = 17; break;
-				case 15: reg = 18; break;
-				case 16: reg = 19; break;
-				case 17: reg = 20; break;
-				case 18: reg = 21; break;
-				case 19: reg = 22; break;
-				case 20: reg = 23; break;
-				case 21: reg = 24; break;
-				case 22: reg = 25; break;
-				case 23: reg = 26; break;
-				case 24: reg = 27; break;
-				case 25: reg = 28; break;
-				case 26: reg = 29; break;
-				case 27: reg = 30; break;
-				case 28: reg = 31; break;
-				case 29: reg = S1; break;
-				case 30: reg = S0; break;
-				case 31: reg = CSR_DPC; break;
-				case 32: reg = CSR_DCSR; break;
+				case 0:
+					reg = 1;
+					break;
+				case 1:
+					reg = 2;
+					break;
+				case 2:
+					reg = 3;
+					break;
+				case 3:
+					reg = 4;
+					break;
+				case 4:
+					reg = 5;
+					break;
+				case 5:
+					reg = 6;
+					break;
+				case 6:
+					reg = 7;
+					break;
+					/* S0 */
+					/* S1 */
+				case 7:
+					reg = 10;
+					break;
+				case 8:
+					reg = 11;
+					break;
+				case 9:
+					reg = 12;
+					break;
+				case 10:
+					reg = 13;
+					break;
+				case 11:
+					reg = 14;
+					break;
+				case 12:
+					reg = 15;
+					break;
+				case 13:
+					reg = 16;
+					break;
+				case 14:
+					reg = 17;
+					break;
+				case 15:
+					reg = 18;
+					break;
+				case 16:
+					reg = 19;
+					break;
+				case 17:
+					reg = 20;
+					break;
+				case 18:
+					reg = 21;
+					break;
+				case 19:
+					reg = 22;
+					break;
+				case 20:
+					reg = 23;
+					break;
+				case 21:
+					reg = 24;
+					break;
+				case 22:
+					reg = 25;
+					break;
+				case 23:
+					reg = 26;
+					break;
+				case 24:
+					reg = 27;
+					break;
+				case 25:
+					reg = 28;
+					break;
+				case 26:
+					reg = 29;
+					break;
+				case 27:
+					reg = 30;
+					break;
+				case 28:
+					reg = 31;
+					break;
+				case 29:
+					reg = S1;
+					break;
+				case 30:
+					reg = S0;
+					break;
+				case 31:
+					reg = CSR_DPC;
+					break;
+				case 32:
+					reg = CSR_DCSR;
+					break;
 				default:
-						 assert(0);
+					assert(0);
 			}
-			if (xlen(target) == 32) {
+			if (riscv_xlen(target) == 32) {
 				reg_cache_set(target, reg, data & 0xffffffff);
 				result++;
-			} else if (xlen(target) == 64) {
+			} else if (riscv_xlen(target) == 64) {
 				if (address == 4) {
 					value = data & 0xffffffff;
 				} else if (address == 5) {
@@ -2054,7 +1818,7 @@ static riscv_error_t handle_halt_routine(struct target *target)
 		return RE_AGAIN;
 	}
 
-	// TODO: get rid of those 2 variables and talk to the cache directly.
+	/* TODO: get rid of those 2 variables and talk to the cache directly. */
 	info->dpc = reg_cache_get(target, CSR_DPC);
 	info->dcsr = reg_cache_get(target, CSR_DCSR);
 
@@ -2090,8 +1854,8 @@ static int handle_halt(struct target *target, bool announce)
 			break;
 		case DCSR_CAUSE_HWBP:
 			target->debug_reason = DBG_REASON_WPTANDBKPT;
-			// If we halted because of a data trigger, gdb doesn't know to do
-			// the disable-breakpoints-step-enable-breakpoints dance.
+			/* If we halted because of a data trigger, gdb doesn't know to do
+			 * the disable-breakpoints-step-enable-breakpoints dance. */
 			info->need_strict_step = true;
 			break;
 		case DCSR_CAUSE_DEBUGINT:
@@ -2106,35 +1870,24 @@ static int handle_halt(struct target *target, bool announce)
 					cause, info->dcsr);
 	}
 
+#if _NDS_V5_ONLY_
+	if (ndsv5_handle_halt(target, cause) != ERROR_OK) {
+		/* resume target */
+		return ERROR_OK;
+	}
+#endif
+
 	if (info->never_halted) {
 		info->never_halted = false;
-
-		// Disable any hardware triggers that have dmode set. We can't have set
-		// them ourselves. Maybe they're left over from some killed debug
-		// session.
-		// Count the number of triggers while we're at it.
 
 		int result = maybe_read_tselect(target);
 		if (result != ERROR_OK)
 			return result;
-		for (info->trigger_count = 0; info->trigger_count < MAX_HWBPS; info->trigger_count++) {
-			write_csr(target, CSR_TSELECT, info->trigger_count);
-			uint64_t tselect_rb;
-			read_csr(target, &tselect_rb, CSR_TSELECT);
-			if (info->trigger_count != tselect_rb)
-				break;
-			uint64_t tdata1;
-			read_csr(target, &tdata1, CSR_TDATA1);
-			if ((tdata1 & MCONTROL_DMODE(xlen(target))) &&
-					(tdata1 & (MCONTROL_EXECUTE | MCONTROL_STORE | MCONTROL_LOAD))) {
-				write_csr(target, CSR_TDATA1, 0);
-			}
-		}
+		riscv_enumerate_triggers(target);
 	}
 
-	if (announce) {
+	if (announce)
 		target_call_event_callbacks(target, TARGET_EVENT_HALTED);
-	}
 
 	const char *cause_string[] = {
 		"none",
@@ -2144,10 +1897,10 @@ static int handle_halt(struct target *target, bool announce)
 		"step",
 		"halt"
 	};
-	// This is logged to the user so that gdb will show it when a user types
-	// 'monitor reset init'. At that time gdb appears to have the pc cached
-	// still so if a user manually inspects the pc it will still have the old
-	// value.
+	/* This is logged to the user so that gdb will show it when a user types
+	 * 'monitor reset init'. At that time gdb appears to have the pc cached
+	 * still so if a user manually inspects the pc it will still have the old
+	 * value. */
 	LOG_USER("halted at 0x%" PRIx64 " due to %s", info->dpc, cause_string[cause]);
 
 	return ERROR_OK;
@@ -2157,12 +1910,11 @@ static int poll_target(struct target *target, bool announce)
 {
 	jtag_add_ir_scan(target->tap, &select_dbus, TAP_IDLE);
 
-	// Inhibit debug logging during poll(), which isn't usually interesting and
-	// just fills up the screen/logs with clutter.
+	/* Inhibit debug logging during poll(), which isn't usually interesting and
+	 * just fills up the screen/logs with clutter. */
 	int old_debug_level = debug_level;
-	if (debug_level >= LOG_LVL_DEBUG) {
+	if (debug_level >= LOG_LVL_DEBUG)
 		debug_level = LOG_LVL_INFO;
-	}
 	bits_t bits = read_bits(target);
 	debug_level = old_debug_level;
 
@@ -2170,11 +1922,10 @@ static int poll_target(struct target *target, bool announce)
 		target->state = TARGET_DEBUG_RUNNING;
 		LOG_DEBUG("debug running");
 	} else if (bits.haltnot && !bits.interrupt) {
-		if (target->state != TARGET_HALTED) {
+		if (target->state != TARGET_HALTED)
 			return handle_halt(target, announce);
-		}
 	} else if (!bits.haltnot && bits.interrupt) {
-		// Target is halting. There is no state for that, so don't change anything.
+		/* Target is halting. There is no state for that, so don't change anything. */
 		LOG_DEBUG("halting");
 	} else if (!bits.haltnot && !bits.interrupt) {
 		target->state = TARGET_RUNNING;
@@ -2188,19 +1939,19 @@ static int riscv011_poll(struct target *target)
 	return poll_target(target, true);
 }
 
-static int riscv011_resume(struct target *target, int current, uint32_t address,
-		int handle_breakpoints, int debug_execution)
+static int riscv011_resume(struct target *target, int current,
+		target_addr_t address, int handle_breakpoints, int debug_execution)
 {
 	riscv011_info_t *info = get_info(target);
 
 	jtag_add_ir_scan(target->tap, &select_dbus, TAP_IDLE);
 
 	if (!current) {
-		if (xlen(target) > 32) {
+		if (riscv_xlen(target) > 32) {
 			LOG_WARNING("Asked to resume at 32-bit PC on %d-bit target.",
-					xlen(target));
+					riscv_xlen(target));
 		}
-		int result = register_write(target, REG_PC, address);
+		int result = register_write(target, GDB_REGNO_PC, address);
 		if (result != ERROR_OK)
 			return result;
 	}
@@ -2217,28 +1968,27 @@ static int riscv011_resume(struct target *target, int current, uint32_t address,
 static int assert_reset(struct target *target)
 {
 	riscv011_info_t *info = get_info(target);
-	// TODO: Maybe what I implemented here is more like soft_reset_halt()?
+	/* TODO: Maybe what I implemented here is more like soft_reset_halt()? */
 
 	jtag_add_ir_scan(target->tap, &select_dbus, TAP_IDLE);
 
-	// The only assumption we can make is that the TAP was reset.
+	/* The only assumption we can make is that the TAP was reset. */
 	if (wait_for_debugint_clear(target, true) != ERROR_OK) {
 		LOG_ERROR("Debug interrupt didn't clear.");
 		return ERROR_FAIL;
 	}
 
-	// Not sure what we should do when there are multiple cores.
-	// Here just reset the single hart we're talking to.
+	/* Not sure what we should do when there are multiple cores.
+	 * Here just reset the single hart we're talking to. */
 	info->dcsr |= DCSR_EBREAKM | DCSR_EBREAKH | DCSR_EBREAKS |
 		DCSR_EBREAKU | DCSR_HALT;
-	if (target->reset_halt) {
+	if (target->reset_halt)
 		info->dcsr |= DCSR_NDRESET;
-	} else {
+	else
 		info->dcsr |= DCSR_FULLRESET;
-	}
 	dram_write32(target, 0, lw(S0, ZERO, DEBUG_RAM_START + 16), false);
 	dram_write32(target, 1, csrw(S0, CSR_DCSR), false);
-	// We shouldn't actually need the jump because a reset should happen.
+	/* We shouldn't actually need the jump because a reset should happen. */
 	dram_write_jump(target, 2, false);
 	dram_write32(target, 4, info->dcsr, true);
 	cache_invalidate(target);
@@ -2251,17 +2001,32 @@ static int assert_reset(struct target *target)
 static int deassert_reset(struct target *target)
 {
 	jtag_add_ir_scan(target->tap, &select_dbus, TAP_IDLE);
-	if (target->reset_halt) {
-		return wait_for_state(target, TARGET_HALTED);
+
+#if 0//_NDS_V5_ONLY_
+	if( target->reset_halt ) {
+		return halt(target);
 	} else {
-		return wait_for_state(target, TARGET_RUNNING);
+		return resume(target, 0, false);
 	}
+#else
+	if (target->reset_halt)
+		return wait_for_state(target, TARGET_HALTED);
+	else
+		return wait_for_state(target, TARGET_RUNNING);
+#endif
 }
 
-static int read_memory(struct target *target, uint32_t address,
+static int read_memory(struct target *target, target_addr_t address,
 		uint32_t size, uint32_t count, uint8_t *buffer)
 {
 	jtag_add_ir_scan(target->tap, &select_dbus, TAP_IDLE);
+
+	/* fix-bug, do NOT run the program(DMCONTROL_INTERRUPT) in cache_write(),
+	   because dram[4] is invalid
+	   until scans_add_write32(scans, 4, address + offset, true);
+	   can add cache_invalidate() to invalidate all dram[]
+	*/
+	cache_invalidate(target);
 
 	cache_set32(target, 0, lw(S0, ZERO, DEBUG_RAM_START + 16));
 	switch (size) {
@@ -2285,7 +2050,7 @@ static int read_memory(struct target *target, uint32_t address,
 	cache_write(target, CACHE_NO_READ, false);
 
 	riscv011_info_t *info = get_info(target);
-	const int max_batch_size = 256;
+	const unsigned max_batch_size = 256;
 	scans_t *scans = scans_new(target, max_batch_size);
 
 	uint32_t result_value = 0x777;
@@ -2296,13 +2061,13 @@ static int read_memory(struct target *target, uint32_t address,
 
 		for (unsigned int j = 0; j < batch_size; j++) {
 			if (i + j == count) {
-				// Just insert a read so we can scan out the last value.
+				/* Just insert a read so we can scan out the last value. */
 				scans_add_read32(scans, 4, false);
 			} else if (i + j >= count + 1) {
-				// And check for errors.
+				/* And check for errors. */
 				scans_add_read32(scans, info->dramsize-1, false);
 			} else {
-				// Write the next address and set interrupt.
+				/* Write the next address and set interrupt. */
 				uint32_t offset = size * (i + j);
 				scans_add_write32(scans, 4, address + offset, true);
 			}
@@ -2334,9 +2099,8 @@ static int read_memory(struct target *target, uint32_t address,
 			}
 			uint64_t data = scans_get_u64(scans, j, DBUS_DATA_START,
 					DBUS_DATA_SIZE);
-			if (data & DMCONTROL_INTERRUPT) {
+			if (data & DMCONTROL_INTERRUPT)
 				execute_busy++;
-			}
 			if (i + j == count + 2) {
 				result_value = data;
 			} else if (i + j > 1) {
@@ -2359,28 +2123,27 @@ static int read_memory(struct target *target, uint32_t address,
 			}
 			LOG_DEBUG("j=%d status=%d data=%09" PRIx64, j, status, data);
 		}
-		if (dbus_busy) {
+		if (dbus_busy)
 			increase_dbus_busy_delay(target);
-		}
-		if (execute_busy) {
+		if (execute_busy)
 			increase_interrupt_high_delay(target);
-		}
 		if (dbus_busy || execute_busy) {
 			wait_for_debugint_clear(target, false);
 
-			// Retry.
-			LOG_INFO("Retrying memory read starting from 0x%x with more delays",
-					address + size * i);
+			/* Retry. */
+			LOG_INFO("Retrying memory read starting from 0x%" TARGET_PRIxADDR
+					" with more delays", address + size * i);
 		} else {
 			i += batch_size;
 		}
 	}
 
 	if (result_value != 0) {
-		LOG_USER("Core got an exception (0x%x) while reading from 0x%x",
-				result_value, address + size * (count-1));
+		LOG_USER("Core got an exception (0x%x) while reading from 0x%"
+				TARGET_PRIxADDR, result_value, address + size * (count-1));
 		if (count > 1) {
-			LOG_USER("(It may have failed between 0x%x and 0x%x as well, but we "
+			LOG_USER("(It may have failed between 0x%" TARGET_PRIxADDR
+					" and 0x%" TARGET_PRIxADDR " as well, but we "
 					"didn't check then.)",
 					address, address + size * (count-2) + size - 1);
 		}
@@ -2423,29 +2186,27 @@ static int setup_write_memory(struct target *target, uint32_t size)
 	return ERROR_OK;
 }
 
-static int write_memory(struct target *target, uint32_t address,
+static int write_memory(struct target *target, target_addr_t address,
 		uint32_t size, uint32_t count, const uint8_t *buffer)
 {
 	riscv011_info_t *info = get_info(target);
 	jtag_add_ir_scan(target->tap, &select_dbus, TAP_IDLE);
 
-	// Set up the address.
+	/* Set up the address. */
 	cache_set_store(target, 0, T0, SLOT1);
 	cache_set_load(target, 1, T0, SLOT0);
 	cache_set_jump(target, 2);
 	cache_set(target, SLOT0, address);
-	if (cache_write(target, 5, true) != ERROR_OK) {
+	if (cache_write(target, 5, true) != ERROR_OK)
 		return ERROR_FAIL;
-	}
 
 	uint64_t t0 = cache_get(target, SLOT1);
 	LOG_DEBUG("t0 is 0x%" PRIx64, t0);
 
-	if (setup_write_memory(target, size) != ERROR_OK) {
+	if (setup_write_memory(target, size) != ERROR_OK)
 		return ERROR_FAIL;
-	}
 
-	const int max_batch_size = 256;
+	const unsigned max_batch_size = 256;
 	scans_t *scans = scans_new(target, max_batch_size);
 
 	uint32_t result_value = 0x777;
@@ -2456,10 +2217,10 @@ static int write_memory(struct target *target, uint32_t address,
 
 		for (unsigned int j = 0; j < batch_size; j++) {
 			if (i + j >= count) {
-				// Check for an exception.
+				/* Check for an exception. */
 				scans_add_read32(scans, info->dramsize-1, false);
 			} else {
-				// Write the next value and set interrupt.
+				/* Write the next value and set interrupt. */
 				uint32_t value;
 				uint32_t offset = size * (i + j);
 				switch (size) {
@@ -2509,47 +2270,42 @@ static int write_memory(struct target *target, uint32_t address,
 					return ERROR_FAIL;
 			}
 			int interrupt = scans_get_u32(scans, j, DBUS_DATA_START + 33, 1);
-			if (interrupt) {
+			if (interrupt)
 				execute_busy++;
-			}
-			if (i + j == count + 1) {
+			if (i + j == count + 1)
 				result_value = scans_get_u32(scans, j, DBUS_DATA_START, 32);
-			}
 		}
-		if (dbus_busy) {
+		if (dbus_busy)
 			increase_dbus_busy_delay(target);
-		}
-		if (execute_busy) {
+		if (execute_busy)
 			increase_interrupt_high_delay(target);
-		}
 		if (dbus_busy || execute_busy) {
 			wait_for_debugint_clear(target, false);
 
-			// Retry.
-			// Set t0 back to what it should have been at the beginning of this
-			// batch.
-			LOG_INFO("Retrying memory write starting from 0x%x with more delays",
-					address + size * i);
+			/* Retry.
+			 * Set t0 back to what it should have been at the beginning of this
+			 * batch. */
+			LOG_INFO("Retrying memory write starting from 0x%" TARGET_PRIxADDR
+					" with more delays", address + size * i);
 
 			cache_clean(target);
 
-			if (write_gpr(target, T0, address + size * i) != ERROR_OK) {
+			if (write_gpr(target, T0, address + size * i) != ERROR_OK)
 				goto error;
-			}
 
-			if (setup_write_memory(target, size) != ERROR_OK) {
+			if (setup_write_memory(target, size) != ERROR_OK)
 				goto error;
-			}
 		} else {
 			i += batch_size;
 		}
 	}
 
 	if (result_value != 0) {
-		LOG_ERROR("Core got an exception (0x%x) while writing to 0x%x",
-				result_value, address + size * (count-1));
+		LOG_ERROR("Core got an exception (0x%x) while writing to 0x%"
+				TARGET_PRIxADDR, result_value, address + size * (count-1));
 		if (count > 1) {
-			LOG_ERROR("(It may have failed between 0x%x and 0x%x as well, but we "
+			LOG_ERROR("(It may have failed between 0x%" TARGET_PRIxADDR
+					" and 0x%" TARGET_PRIxADDR " as well, but we "
 					"didn't check then.)",
 					address, address + size * (count-2) + size - 1);
 		}
@@ -2570,8 +2326,7 @@ static int arch_state(struct target *target)
 	return ERROR_OK;
 }
 
-struct target_type riscv011_target =
-{
+struct target_type riscv011_target = {
 	.name = "riscv",
 
 	.init_target = init_target,
@@ -2591,11 +2346,51 @@ struct target_type riscv011_target =
 	.read_memory = read_memory,
 	.write_memory = write_memory,
 
-	.add_breakpoint = add_breakpoint,
-	.remove_breakpoint = remove_breakpoint,
-
-	.add_watchpoint = add_watchpoint,
-	.remove_watchpoint = remove_watchpoint,
-
 	.arch_state = arch_state,
 };
+
+#if _NDS_V5_ONLY_
+//struct reg_arch_type riscv_reg_arch_type_011 = {
+//	.get = register_get,
+//	.set = register_set
+//};
+
+int riscv011_poll_wo_announce(struct target *target)
+{
+	return poll_target(target, false);
+}
+
+extern int ndsv5_virtual_hosting_check(struct target *target);
+extern int ndsv5_hit_watchpoint_check(struct target *target);
+extern int ndsv5_get_watched_address(struct target *target);
+
+static int ndsv5_handle_halt(struct target *target, int cause)
+{
+	riscv011_info_t *info = get_info(target);
+	switch (cause) {
+		case DCSR_CAUSE_SWBP:
+			ndsv5_virtual_hosting_check(target);
+			break;
+		case DCSR_CAUSE_HWBP:
+			info->need_strict_step = false;
+			target->debug_reason = DBG_REASON_WPTANDBKPT;
+			// If we halted because of a data trigger, gdb doesn't know to do
+			// the disable-breakpoints-step-enable-breakpoints dance.
+			if (ndsv5_hit_watchpoint_check(target) == ERROR_OK) {
+				if (ndsv5_get_watched_address(target) == ERROR_OK) {
+					strict_step(target, false);
+					target->debug_reason = DBG_REASON_WATCHPOINT;
+				} else {
+					/* false match watchpoint, resume target */
+					LOG_DEBUG("false match watchpoint");
+					info->need_strict_step = true;
+					/* current pc, addr = 0, do not handle breakpoints, not debugging */
+					riscv011_resume(target, 1, 0, 0, 0);
+					return ERROR_FAIL;
+				}
+			}
+			break;
+	}
+	return ERROR_OK;
+}
+#endif

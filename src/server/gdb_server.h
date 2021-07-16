@@ -45,7 +45,35 @@ static inline struct target *get_target_from_connection(struct connection *conne
 	return gdb_service->target;
 }
 
+void gdb_set_frontend_state_running(struct connection *connection);
+void gdb_sig_halted(struct connection *connection);
+
 #define ERROR_GDB_BUFFER_TOO_SMALL (-800)
 #define ERROR_GDB_TIMEOUT (-801)
 
-#endif /* OPENOCD_SERVER_GDB_SERVER_H */
+#if _NDS32_ONLY_
+#define GDB_FILE_IO_O_RDONLY	0x0
+#define GDB_FILE_IO_O_WRONLY	0x1
+#define GDB_FILE_IO_O_RDWR		0x2
+#define GDB_FILE_IO_O_APPEND	0x8
+#define GDB_FILE_IO_O_CREAT		0x200
+#define GDB_FILE_IO_O_TRUNC		0x400
+#define GDB_FILE_IO_O_EXCL		0x800
+
+#define GDB_FILE_IO_S_IFREG		0100000
+#define GDB_FILE_IO_S_IFDIR		040000
+#define GDB_FILE_IO_S_IRUSR		0400
+#define GDB_FILE_IO_S_IWUSR		0200
+#define GDB_FILE_IO_S_IXUSR		0100
+
+#if IS_WIN32 == 0
+#define GDB_FILE_IO_S_IRGRP		040
+#define GDB_FILE_IO_S_IWGRP		020
+#define GDB_FILE_IO_S_IXGRP		010
+#define GDB_FILE_IO_S_IROTH		04
+#define GDB_FILE_IO_S_IWOTH		02
+#define GDB_FILE_IO_S_IXOTH		01
+#endif
+#endif
+
+#endif	/* GDB_SERVER_H */

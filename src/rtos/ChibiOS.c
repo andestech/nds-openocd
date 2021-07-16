@@ -103,7 +103,7 @@ static struct ChibiOS_params ChibiOS_params_list[] = {
 };
 #define CHIBIOS_NUM_PARAMS ((int)(sizeof(ChibiOS_params_list)/sizeof(struct ChibiOS_params)))
 
-static int ChibiOS_detect_rtos(struct target *target);
+static bool ChibiOS_detect_rtos(struct target *target);
 static int ChibiOS_create(struct target *target);
 static int ChibiOS_update_threads(struct rtos *rtos);
 static int ChibiOS_get_thread_reg_list(struct rtos *rtos, int64_t thread_id, char **hex_reg_list);
@@ -440,11 +440,11 @@ static int ChibiOS_update_threads(struct rtos *rtos)
 		if (threadState < CHIBIOS_NUM_STATES)
 			state_desc = ChibiOS_thread_states[threadState];
 		else
-			state_desc = "Unknown state";
+			state_desc = "Unknown";
 
 		curr_thrd_details->extra_info_str = malloc(strlen(
-					state_desc)+1);
-		strcpy(curr_thrd_details->extra_info_str, state_desc);
+					state_desc)+8);
+		sprintf(curr_thrd_details->extra_info_str, "State: %s", state_desc);
 
 		curr_thrd_details->exists = true;
 
@@ -510,7 +510,7 @@ static int ChibiOS_get_symbol_list_to_lookup(symbol_table_elem_t *symbol_list[])
 	return 0;
 }
 
-static int ChibiOS_detect_rtos(struct target *target)
+static bool ChibiOS_detect_rtos(struct target *target)
 {
 	if ((target->rtos->symbols != NULL) &&
 			((target->rtos->symbols[ChibiOS_VAL_rlist].address != 0) ||
@@ -519,14 +519,14 @@ static int ChibiOS_detect_rtos(struct target *target)
 		if (target->rtos->symbols[ChibiOS_VAL_ch_debug].address == 0) {
 			LOG_INFO("It looks like the target may be running ChibiOS "
 					"without ch_debug.");
-			return 0;
+			return false;
 		}
 
 		/* looks like ChibiOS with memory map enabled.*/
-		return 1;
+		return true;
 	}
 
-	return 0;
+	return false;
 }
 
 static int ChibiOS_create(struct target *target)

@@ -18,10 +18,17 @@
 #ifndef OPENOCD_JTAG_DRIVERS_LIBUSB_COMMON_H
 #define OPENOCD_JTAG_DRIVERS_LIBUSB_COMMON_H
 
-#ifdef HAVE_LIBUSB1
-#include <libusb1_common.h>
+#if _NDS32_ONLY_
+	#if IS_CYGWIN
+	#include "libusb10_common.h"
+	#else
+	#include "libusb1_common.h"
+	#endif
 #else
-#include <libusb0_common.h>
+	#ifdef HAVE_LIBUSB1
+	#include "libusb1_common.h"
+	#else
+	#include "libusb0_common.h"
+	#endif
 #endif
-
 #endif /* OPENOCD_JTAG_DRIVERS_LIBUSB_COMMON_H */

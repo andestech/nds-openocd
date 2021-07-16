@@ -13,18 +13,26 @@ else
     exit 1
 fi
 
+LIBTOOL_DIR=.
 if [ "$1" = "nosubmodule" ]; then
     SKIP_SUBMODULE=1
 elif [ -n "$1" ]; then
-    echo "$0: Illegal argument $1"
-    echo "USAGE: $0 [nosubmodule]"
-    exit 1
+#    echo "$0: Illegal argument $1"
+#    echo "USAGE: $0 [nosubmodule]"
+#    exit 1
+    LIBTOOL_DIR=$1
 fi
+
+os_type=`uname`
 
 # bootstrap the autotools
 (
 set -x
-aclocal
+if [ "$os_type" = "Darwin" ]; then
+	aclocal -I $LIBTOOL_DIR -I /usr/local/share/aclocal
+else
+	aclocal -I $LIBTOOL_DIR -I /usr/share/aclocal
+fi
 ${libtoolize} --automake --copy
 autoconf
 autoheader
@@ -37,6 +45,13 @@ else
     echo "Setting up submodules"
     git submodule init
     git submodule update
+fi
+
+if [ -x src/jtag/drivers/libjaylink/autogen.sh ]; then
+    (
+    cd src/jtag/drivers/libjaylink
+    ./autogen.sh
+    )
 fi
 
 echo "Bootstrap complete. Quick build instructions:"

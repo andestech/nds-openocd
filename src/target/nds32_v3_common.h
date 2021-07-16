@@ -13,11 +13,12 @@
  *   GNU General Public License for more details.                          *
  *                                                                         *
  *   You should have received a copy of the GNU General Public License     *
- *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
+ *   along with this program; if not, write to the                         *
+ *   Free Software Foundation, Inc.,                                       *
+ *   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.           *
  ***************************************************************************/
-
-#ifndef OPENOCD_TARGET_NDS32_V3_COMMON_H
-#define OPENOCD_TARGET_NDS32_V3_COMMON_H
+#ifndef __NDS32_V3_COMMON_H__
+#define __NDS32_V3_COMMON_H__
 
 #include "target.h"
 
@@ -34,7 +35,7 @@ void nds32_v3_common_register_callback(struct nds32_v3_common_callback *callback
 int nds32_v3_target_request_data(struct target *target,
 		uint32_t size, uint8_t *buffer);
 int nds32_v3_checksum_memory(struct target *target,
-		uint32_t address, uint32_t count, uint32_t *checksum);
+		target_addr_t address, uint32_t count, uint32_t *checksum);
 int nds32_v3_hit_watchpoint(struct target *target,
 		struct watchpoint **hit_watchpoint);
 int nds32_v3_target_create_common(struct target *target, struct nds32 *nds32);
@@ -43,19 +44,19 @@ int nds32_v3_run_algorithm(struct target *target,
 		struct mem_param *mem_params,
 		int num_reg_params,
 		struct reg_param *reg_params,
-		uint32_t entry_point,
-		uint32_t exit_point,
+		target_addr_t entry_point,
+		target_addr_t exit_point,
 		int timeout_ms,
 		void *arch_info);
-int nds32_v3_read_buffer(struct target *target, uint32_t address,
+int nds32_v3_read_buffer(struct target *target, target_addr_t address,
 		uint32_t size, uint8_t *buffer);
-int nds32_v3_write_buffer(struct target *target, uint32_t address,
+int nds32_v3_write_buffer(struct target *target, target_addr_t address,
 		uint32_t size, const uint8_t *buffer);
-int nds32_v3_read_memory(struct target *target, uint32_t address,
+int nds32_v3_read_memory(struct target *target, target_addr_t address,
 		uint32_t size, uint32_t count, uint8_t *buffer);
-int nds32_v3_write_memory(struct target *target, uint32_t address,
+int nds32_v3_write_memory(struct target *target, target_addr_t address,
 		uint32_t size, uint32_t count, const uint8_t *buffer);
 int nds32_v3_init_target(struct command_context *cmd_ctx,
 		struct target *target);
 
-#endif /* OPENOCD_TARGET_NDS32_V3_COMMON_H */
+#endif	/* __NDS32_V3_COMMON_H__ */

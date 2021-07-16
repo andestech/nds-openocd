@@ -67,7 +67,23 @@ int jtag_libusb_set_configuration(jtag_libusb_device_handle *devh,
 int jtag_libusb_choose_interface(struct jtag_libusb_device_handle *devh,
 		unsigned int *usb_read_ep,
 		unsigned int *usb_write_ep,
-		int bclass, int subclass, int protocol);
+		int bclass, int subclass, int protocol, int trans_type);
 int jtag_libusb_get_pid(struct jtag_libusb_device *dev, uint16_t *pid);
+int jtag_libusb_get_ep_max_packet_size(jtag_libusb_device_handle *devh,
+		unsigned int epnum,
+		unsigned int *p_max_packet_size);
+
+#if _NDS32_ONLY_
+int jtag_libusb_get_endpoints(struct jtag_libusb_device *udev,
+		unsigned int *usb_read_ep,
+		unsigned int *usb_write_ep,
+		unsigned int *usb_rx_max_packet,
+		unsigned int *usb_tx_max_packet);
+int jtag_libusb_get_descriptor_string(jtag_libusb_device_handle *dev_handle,
+		struct jtag_libusb_device *dev,
+		char **pdescp_Manufacturer,
+		char **pdescp_Product,
+		unsigned int *pdescp_bcdDevice);
+#endif
 
 #endif /* OPENOCD_JTAG_DRIVERS_LIBUSB0_COMMON_H */

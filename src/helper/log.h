@@ -46,6 +46,7 @@
  * LOG_LVL_WARNING - non-fatal errors, that may be resolved later
  * LOG_LVL_INFO - state information, etc.
  * LOG_LVL_DEBUG - debug statements, execution trace
+ * LOG_LVL_DEBUG_IO - verbose debug, low-level I/O trace
  */
 enum log_levels {
 	LOG_LVL_SILENT = -3,
@@ -54,12 +55,15 @@ enum log_levels {
 	LOG_LVL_ERROR = 0,
 	LOG_LVL_WARNING = 1,
 	LOG_LVL_INFO = 2,
-	LOG_LVL_DEBUG = 3
+	LOG_LVL_DEBUG = 3,
+	LOG_LVL_DEBUG_IO = 4,
 };
 
 void log_printf(enum log_levels level, const char *file, unsigned line,
 		const char *function, const char *format, ...)
 __attribute__ ((format (PRINTF_ATTRIBUTE_FORMAT, 5, 6)));
+void log_vprintf_lf(enum log_levels level, const char *file, unsigned line,
+		const char *function, const char *format, va_list args);
 void log_printf_lf(enum log_levels level, const char *file, unsigned line,
 		const char *function, const char *format, ...)
 __attribute__ ((format (PRINTF_ATTRIBUTE_FORMAT, 5, 6)));
@@ -69,7 +73,9 @@ __attribute__ ((format (PRINTF_ATTRIBUTE_FORMAT, 5, 6)));
  */
 void log_init(void);
 int set_log_output(struct command_context *cmd_ctx, FILE *output);
-
+#if _NDS32_ONLY_
+FILE *get_log_output(void);
+#endif
 int log_register_commands(struct command_context *cmd_ctx);
 
 void keep_alive(void);
@@ -94,12 +100,44 @@ char *alloc_vprintf(const char *fmt, va_list ap);
 char *alloc_printf(const char *fmt, ...);
 
 extern int debug_level;
-
+#if _NDS32_ONLY_
+extern int nds_bak_debug_level;
+#endif
 /* Avoid fn call and building parameter list if we're not outputting the information.
  * Matters on feeble CPUs for DEBUG/INFO statements that are involved frequently */
 
 #define LOG_LEVEL_IS(FOO)  ((debug_level) >= (FOO))
 
+#define LOG_DEBUG_IO(expr ...) \
+	do { \
+		if (debug_level >= LOG_LVL_DEBUG_IO) \
+			log_printf_lf(LOG_LVL_DEBUG, \
+				__FILE__, __LINE__, __func__, \
+				expr); \
+	} while (0)
+
+#if _NDS32_ONLY_
+#define NDS_INFO(expr ...) \
+	do { \
+		if (debug_level >= LOG_LVL_INFO) { \
+			nds_bak_debug_level = debug_level; \
+			debug_level = LOG_LVL_DEBUG; \
+			log_printf_lf(LOG_LVL_DEBUG, \
+				__FILE__, __LINE__, __func__, \
+				expr); \
+			debug_level = nds_bak_debug_level; \
+		} \
+	} while (0)
+
+#define LOG_DEBUG(expr ...) \
+	do { \
+		if (debug_level >= LOG_LVL_INFO) \
+			log_printf_lf(LOG_LVL_DEBUG, \
+				__FILE__, __LINE__, __func__, \
+				expr); \
+	} while (0)
+
+#else
 #define LOG_DEBUG(expr ...) \
 	do { \
 		if (debug_level >= LOG_LVL_DEBUG) \
@@ -107,6 +145,7 @@ extern int debug_level;
 				__FILE__, __LINE__, __func__, \
 				expr); \
 	} while (0)
+#endif
 
 #define LOG_INFO(expr ...) \
 	log_printf_lf(LOG_LVL_INFO, __FILE__, __LINE__, __func__, expr)

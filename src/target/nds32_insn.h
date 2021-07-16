@@ -13,18 +13,23 @@
  *   GNU General Public License for more details.                          *
  *                                                                         *
  *   You should have received a copy of the GNU General Public License     *
- *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
+ *   along with this program; if not, write to the                         *
+ *   Free Software Foundation, Inc.,                                       *
+ *   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.           *
  ***************************************************************************/
+#ifndef __NDS32_INSN_H__
+#define __NDS32_INSN_H__
 
-#ifndef OPENOCD_TARGET_NDS32_INSN_H
-#define OPENOCD_TARGET_NDS32_INSN_H
 
+/* 32-bit instructions */
 #define NOP						(0x40000009)
 #define DSB						(0x64000008)
 #define ISB						(0x64000009)
 #define BEQ_MINUS_12			(0x4C000000 | 0x3FFA)
 #define MTSR_DTR(a)				(0x64000003 | (((0x03 << 7) | (0x08 << 3) | (0x00 << 0)) << 10) | (((a) & 0x1F) << 20))
 #define MFSR_DTR(a)				(0x64000002 | (((0x03 << 7) | (0x08 << 3) | (0x00 << 0)) << 10) | (((a) & 0x1F) << 20))
+#define INST_MTSR(gr,sr)		(0x64000003 | (((0x03 << 7) | (0x08 << 3) | (((sr) & 0x1F) << 0)) << 10) | (((gr) & 0x1F) << 20))
+#define INST_MFSR(gr,sr)		(0x64000002 | (((0x03 << 7) | (0x08 << 3) | (((sr) & 0x1F) << 0)) << 10) | (((gr) & 0x1F) << 20))
 #define SETHI(a, b)				(0x46000000 | ((a) << 20) | (b))
 #define ORI(a, b, c)			(0x58000000 | ((a) << 20) | ((b) << 15) | (c))
 #define LWI_BI(a, b)			(0x0C000001 | (a << 20) | (b << 15))
@@ -37,14 +42,19 @@
 #define L1D_IX_WB(a)			(0x64000021 | ((a) << 15))
 #define L1D_IX_INVAL(a)			(0x64000001 | ((a) << 15))
 #define L1D_VA_INVAL(a)			(0x64000101 | ((a) << 15))
+#define L1D_VA_INVAL_ALVL(a)	(0x64000501 | ((a) << 15))
 #define L1D_VA_WB(a)			(0x64000121 | ((a) << 15))
+#define L1D_VA_WB_ALVL(a)	    (0x64000521 | ((a) << 15))
 #define L1D_IX_RTAG(a)			(0x64000061 | ((a) << 15))
 #define L1D_IX_RWD(a)			(0x64000081 | ((a) << 15))
 #define L1I_IX_INVAL(a)			(0x64000201 | ((a) << 15))
 #define L1I_VA_INVAL(a)			(0x64000301 | ((a) << 15))
+#define L1I_VA_INVAL_ALVL(a)	(0x64000701 | ((a) << 15))
 #define L1I_IX_RTAG(a)			(0x64000261 | ((a) << 15))
 #define L1I_IX_RWD(a)			(0x64000281 | ((a) << 15))
 #define L1I_VA_FILLCK(a)		(0x64000361 | ((a) << 15))
+#define L1D_INVALLALL           (0x640000E1)
+#define L1D_WBALL_ALVL          (0x640005E1)
 #define ISYNC(a)				(0x6400000d | ((a) << 20))
 #define MSYNC_STORE				(0x6400002c)
 #define MSYNC_ALL				(0x6400000c)
@@ -63,16 +73,27 @@
 #define AMTAR(a, b)				(0x60300040 | (a << 15) | b)
 #define AMFAR2(a, b)			(0x60300260 | (a << 15) | b)
 #define AMTAR2(a, b)			(0x60300240 | (a << 15) | b)
-#define FMFCSR					(0x6A000701)
-#define FMTCSR					(0x6A000709)
-#define FMFCFG					(0x6A000301)
+#define FMFCSR(a)				(0x6A000701)| (a << 20)
+#define FMTCSR(a)				(0x6A000709)| (a << 20)
+#define FMFCFG(a)				(0x6A000301)| (a << 20)
 #define FMFSR(a, b)				(0x6A000001 | ((a) << 20) | ((b) << 15))
 #define FMTSR(a, b)				(0x6A000009 | ((a) << 20) | ((b) << 15))
 #define FMFDR(a, b)				(0x6A000041 | ((a) << 20) | ((b) << 15))
 #define FMTDR(a, b)				(0x6A000049 | ((a) << 20) | ((b) << 15))
+#define SUB(a,b)                (0x40000001 | ((a) << 20) | ((a) << 15) | ((b) << 10))
+#define BGEZ_MINUS_8            (0x4E040000 | 0xFFFC)
+
+#define AND(a, b, c)    (0x40000002 | ((a) << 20) | ((b) << 15) | ((c) << 10))
+#define OR(a, b, c)     (0x40000004 | ((a) << 20) | ((b) << 15) | ((c) << 10))
+
 
 /* break instructions */
+//#define VIRTUAL_IO_EXIT	0x640FFFEA
+#define BREAK_SWID15(x)	((x) >> 5) & 0x7FFF
+/* For V3, It is EX9 instruction if SWID9 > 31. For V2 it should be '(x) & 0x1FF'. */
+#define BREAK16_SWID9(x)	(x) & 0x1F
 extern const int NDS32_BREAK_16;
 extern const int NDS32_BREAK_32;
 
-#endif /* OPENOCD_TARGET_NDS32_INSN_H */
+
+#endif /* __NDS32_INSN_H__ */
