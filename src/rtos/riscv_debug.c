@@ -256,14 +256,31 @@ static int riscv_gdb_v_packet(struct connection *connection, const char *packet,
 	int threadid;
 	if (sscanf(packet_stttrr, "vCont;s:%d;c", &threadid) == 1) {
 		riscv_set_rtos_hartid(target, threadid - 1);
+#if _NDS32_ONLY_
+		riscv_set_current_hartid(target, threadid - 1);
+		target->state = TARGET_RUNNING;
+		gdb_set_frontend_state_running(connection);
+		target_call_event_callbacks(target, TARGET_EVENT_GDB_START);
+		return target_step(target, 1, 0x0, 0);
+#else /* _NDS32_ONLY_ */
 		riscv_step_rtos_hart(target);
 		/* Stepping changes the current thread to whichever thread was stepped. */
 		target->rtos->current_threadid = threadid;
 
 		gdb_put_packet(connection, "S05", 3);
+#endif /* _NDS32_ONLY_ */
 		return JIM_OK;
 
 	} else if (strcmp(packet_stttrr, "vCont;c") == 0) {
+#if _NDS32_ONLY_
+		target->gdb_running_type = 'c';
+		LOG_DEBUG("target->gdb_running_type = c");
+
+		/* for solving demo code:demo-smp-V5 cannot start profiling issue */
+		target_call_event_callbacks(target, TARGET_EVENT_GDB_START);
+		target_resume(target, 1, 0, 0, 0);
+		gdb_set_frontend_state_running(connection);
+#else
 		target_call_event_callbacks(target, TARGET_EVENT_GDB_START);
 		target_call_event_callbacks(target, TARGET_EVENT_RESUME_START);
 		riscv_set_all_rtos_harts(target);
@@ -272,6 +289,7 @@ static int riscv_gdb_v_packet(struct connection *connection, const char *packet,
 		gdb_set_frontend_state_running(connection);
 		target_call_event_callbacks(target, TARGET_EVENT_RESUMED);
 		target_call_event_callbacks(target, TARGET_EVENT_RESUME_END);
+#endif /* _NDS32_ONLY_ */
 		return JIM_OK;
 
 	} else if (strncmp(packet_stttrr, "vCont", 5) == 0) {

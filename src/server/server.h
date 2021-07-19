@@ -46,7 +46,11 @@ enum connection_type {
 struct connection {
 	int fd;
 	int fd_out;	/* When using pipes we're writing to a different fd */
+#if _NDS_V5_ONLY_
+	struct sockaddr_in6 sin;
+#else /* _NDS_V5_ONLY_ */
 	struct sockaddr_in sin;
+#endif /* _NDS_V5_ONLY_ */
 	struct command_context *cmd_ctx;
 	struct service *service;
 	int input_pending;
@@ -64,7 +68,11 @@ struct service {
 	char *port;
 	unsigned short portnumber;
 	int fd;
+#if _NDS_V5_ONLY_
+	struct sockaddr_in6 sin;
+#else /* _NDS_V5_ONLY_ */
 	struct sockaddr_in sin;
+#endif /* _NDS_V5_ONLY_ */
 	int max_connections;
 	struct connection *connections;
 	new_connection_handler_t new_connection;

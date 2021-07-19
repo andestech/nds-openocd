@@ -42,6 +42,9 @@ struct breakpoint {
 	struct breakpoint *next;
 	uint32_t unique_id;
 	int linked_BRP;
+#if _NDS32_ONLY_
+	uint8_t *bytecode;
+#endif
 };
 
 struct watchpoint {
@@ -53,6 +56,9 @@ struct watchpoint {
 	int set;
 	struct watchpoint *next;
 	int unique_id;
+#if _NDS32_ONLY_
+	uint8_t *bytecode;
+#endif
 };
 
 void breakpoint_clear_target(struct target *target);
@@ -75,5 +81,18 @@ void watchpoint_remove(struct target *target, target_addr_t address);
 /* report type and address of just hit watchpoint */
 int watchpoint_hit(struct target *target, enum watchpoint_rw *rw,
 		target_addr_t *address);
+
+#if _NDS32_ONLY_
+#define BP_WP_LENGTH_MASK    (~0xFF000000)
+#define BP_WP_NON_SIMPLE     0x80000000
+#define BP_WP_TRIGGER_ON     0x40000000
+#define BP_WP_FORCE_VA_ON    0x20000000
+
+#define BP_WP_DATA_COMPARE   0x08000000
+#define BP_WP_USER_WATCH     0x04000000
+#define BP_WP_CONDITIONAL    0x02000000
+
+int nds32_backup_tmp_bytecode_data(char *p_bytecode);
+#endif /* _NDS32_ONLY_ */
 
 #endif /* OPENOCD_TARGET_BREAKPOINTS_H */

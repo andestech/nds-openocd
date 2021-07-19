@@ -1,3 +1,6 @@
+#ifndef __OPCODES_H_
+#define __OPCODES_H_
+
 #include "encoding.h"
 
 #define ZERO	0
@@ -353,3 +356,37 @@ static uint32_t vslide1down_vx(unsigned int vd, unsigned int vs2,
 	return (vm << 25) | (vs2 << 20) | (rs1 << 15) | (vd << 7) |
 		MATCH_VSLIDE1DOWN_VX;
 }
+
+#if _NDS_V5_ONLY_
+static uint32_t slli(unsigned int dest, unsigned int src, uint8_t shamt) __attribute__ ((unused));
+static uint32_t slli(unsigned int dest, unsigned int src, uint8_t shamt)
+{
+	return (bits(shamt, 5, 0) << 20) |
+		(src << 15) |
+		(dest << 7) |
+		MATCH_SLLI;
+}
+
+static uint32_t or_r(unsigned int dest, unsigned int src1, unsigned int src2) __attribute__ ((unused));
+static uint32_t or_r(unsigned int dest, unsigned int src1, unsigned int src2)
+{
+	return (src2 << 20) |
+		(src1 << 15) |
+		(dest << 7) |
+		MATCH_OR;
+}
+
+static uint32_t bfoz64(unsigned int dest, unsigned int src, uint8_t msb, uint8_t lsb) __attribute__ ((unused));
+static uint32_t bfoz64(unsigned int dest, unsigned int src, uint8_t msb, uint8_t lsb)
+{
+	return (bits(msb, 5, 0) << 26) |
+		(bits(lsb, 5, 0) << 20) |
+		(src << 15) |
+		(dest << 7) |
+		MATCH_CUSTOM2 | MATCH_BFOZ;
+}
+#endif /* _NDS_V5_ONLY_ */
+
+
+
+#endif /* __OPCODES_H_ */

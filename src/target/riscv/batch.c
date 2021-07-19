@@ -14,6 +14,10 @@ static void dump_field(int idle, const struct scan_field *field);
 struct riscv_batch *riscv_batch_alloc(struct target *target, size_t scans, size_t idle)
 {
 	scans += 4;
+#if _NDS_V5_ONLY_
+	/* _NDS_RW_MEMORY_64BITS_ */
+	scans += 2;
+#endif
 	struct riscv_batch *out = calloc(1, sizeof(*out));
 	out->target = target;
 	out->allocated_scans = scans;
@@ -41,7 +45,12 @@ void riscv_batch_free(struct riscv_batch *batch)
 
 bool riscv_batch_full(struct riscv_batch *batch)
 {
+#if _NDS_V5_ONLY_
+	/* _NDS_RW_MEMORY_64BITS_ */
+	return batch->used_scans > (batch->allocated_scans - 6);
+#else
 	return batch->used_scans > (batch->allocated_scans - 4);
+#endif
 }
 
 int riscv_batch_run(struct riscv_batch *batch)
@@ -67,6 +76,9 @@ int riscv_batch_run(struct riscv_batch *batch)
 
 	if (jtag_execute_queue() != ERROR_OK) {
 		LOG_ERROR("Unable to execute JTAG queue");
+#if _NDS_DISABLE_ABORT_
+		NDS32_LOG("Unable to execute JTAG queue");
+#endif
 		return ERROR_FAIL;
 	}
 
@@ -76,8 +88,27 @@ int riscv_batch_run(struct riscv_batch *batch)
 			buffer_shr((batch->fields + i)->in_value, sizeof(uint64_t), 1);
 	}
 
+#if _NDS_V5_ONLY_
+	struct scan_field *field;
+	uint64_t in;
+	unsigned int in_op;
+	for (size_t i = 0; i < batch->used_scans; ++i) {
+		field = batch->fields + i;
+		if (field->in_value) {
+			in = buf_get_u64(field->in_value, 0, field->num_bits);
+			in_op = get_field(in, DTM_DMI_OP);
+			if (in_op == 3) {
+				LOG_DEBUG("in_op = 0x%x, DMI_STATUS_BUSY", in_op);
+				batch->used_scans --;
+				return ERROR_FAIL;
+			}
+		}
+		dump_field(batch->idle_count, batch->fields + i);
+	}
+#else
 	for (size_t i = 0; i < batch->used_scans; ++i)
 		dump_field(batch->idle_count, batch->fields + i);
+#endif /* _NDS_V5_ONLY_ */
 
 	return ERROR_OK;
 }

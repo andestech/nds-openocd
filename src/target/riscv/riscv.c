@@ -18,6 +18,13 @@
 #include "gdb_regs.h"
 #include "rtos/rtos.h"
 
+#if _NDS_V5_ONLY_
+#include "ndsv5.h"
+#include "ndsv5-013.h"
+#include "target/nds32_log.h"
+#include "target/ndsv5_ace.h"
+#endif
+
 /**
  * Since almost everything can be accomplish by scanning the dbus register, all
  * functions here assume dbus is already selected. The exception are functions
@@ -235,6 +242,9 @@ uint32_t bscan_tunnel_nested_tap_select_dmi_num_fields = DIM(_bscan_tunnel_neste
 struct scan_field *bscan_tunnel_data_register_select_dmi = _bscan_tunnel_data_register_select_dmi;
 uint32_t bscan_tunnel_data_register_select_dmi_num_fields = DIM(_bscan_tunnel_data_register_select_dmi);
 
+#if _NDS_V5_ONLY_
+/* Move this struct declaration to riscv.h */
+#else /* _NDS_V5_ONLY_ */
 struct trigger {
 	uint64_t address;
 	uint32_t length;
@@ -243,6 +253,7 @@ struct trigger {
 	bool read, write, execute;
 	int unique_id;
 };
+#endif /* _NDS_V5_ONLY_ */
 
 /* Wall-clock timeout for a command/access. Settable via RISC-V Target commands.*/
 int riscv_command_timeout_sec = DEFAULT_COMMAND_TIMEOUT_SEC;
@@ -406,8 +417,11 @@ uint32_t dtmcontrol_scan_via_bscan(struct target *target, uint32_t out)
 }
 
 
-
+#if _NDS_V5_ONLY_
+uint32_t dtmcontrol_scan(struct target *target, uint32_t out)
+#else
 static uint32_t dtmcontrol_scan(struct target *target, uint32_t out)
+#endif
 {
 	struct scan_field field;
 	uint8_t in_value[4];
@@ -441,7 +455,11 @@ static uint32_t dtmcontrol_scan(struct target *target, uint32_t out)
 	return in;
 }
 
+#if _NDS_V5_ONLY_
+struct target_type *get_target_type(struct target *target)
+#else
 static struct target_type *get_target_type(struct target *target)
+#endif
 {
 	riscv_info_t *info = (riscv_info_t *) target->arch_info;
 
@@ -485,7 +503,11 @@ static int riscv_init_target(struct command_context *cmd_ctx,
 			bscan_tunnel_nested_tap_select_dmi[2].num_bits = bscan_tunnel_ir_width;
 	}
 
+#if _NDS_V5_ONLY_
+	/* To support NDS virtual hosting */
+#else
 	riscv_semihosting_init(target);
+#endif /* _NDS_V5_ONLY_ */
 
 	target->debug_reason = DBG_REASON_DBGRQ;
 
@@ -500,8 +522,10 @@ static void riscv_free_registers(struct target *target)
 			if (target->reg_cache->reg_list[0].arch_info)
 				free(target->reg_cache->reg_list[0].arch_info);
 			/* Free the ones we allocated separately. */
-			for (unsigned i = GDB_REGNO_COUNT; i < target->reg_cache->num_regs; i++)
+			for (unsigned i = GDB_REGNO_COUNT; i < target->reg_cache->num_regs; i++) {
+				printf("free #%d 0x%x", i, target->reg_cache->reg_list[i].arch_info);
 				free(target->reg_cache->reg_list[i].arch_info);
+			}
 			free(target->reg_cache->reg_list);
 		}
 		free(target->reg_cache);
@@ -606,7 +630,21 @@ static int maybe_add_trigger_t2(struct target *target, unsigned hartid,
 	tdata1 |= MCONTROL_DMODE(riscv_xlen(target));
 	tdata1 = set_field(tdata1, MCONTROL_ACTION,
 			MCONTROL_ACTION_DEBUG_MODE);
+#if _NDS_V5_ONLY_
+	tdata1 = set_field(tdata1, MCONTROL_TYPE(riscv_xlen(target)), 2);
+	if (trigger->execute) {
+		//trigger from breakpoint:ignor address alignment and length issue
+		tdata1 = set_field(tdata1, MCONTROL_MATCH, MCONTROL_MATCH_EQUAL);
+	} else {
+		if (trigger->length == 1) {
+			tdata1 = set_field(tdata1, MCONTROL_MATCH, MCONTROL_MATCH_EQUAL);
+		} else {
+			tdata1 = set_field(tdata1, MCONTROL_MATCH, MCONTROL_MATCH_NAPOT);
+		}
+	}
+#else /* _NDS_V5_ONLY_ */
 	tdata1 = set_field(tdata1, MCONTROL_MATCH, MCONTROL_MATCH_EQUAL);
+#endif /* _NDS_V5_ONLY_ */
 	tdata1 |= MCONTROL_M;
 	if (r->misa[hartid] & (1 << ('H' - 'A')))
 		tdata1 |= MCONTROL_H;
@@ -687,6 +725,25 @@ static int add_trigger(struct target *target, struct trigger *trigger)
 		int type = get_field(tdata1, MCONTROL_TYPE(riscv_xlen(target)));
 
 		result = ERROR_OK;
+
+#if _NDS_V5_ONLY_
+		if (trigger->execute) {
+			/* trigger from breakpoint:ignor address alignment and length issue */
+		} else {
+			/* trigger from watchpoint:address alignment and extend length */
+			LOG_DEBUG("ori_trigger_address:0x%" PRIx64 ", ori_trigger_length:0x%x", trigger->address, trigger->length);
+			uint64_t end_address;
+			end_address = trigger->address + trigger->length;
+
+			/* 8bytes alignment:contain rv32(4bytes or rv32dc:8bytes) and rv64(8bytes) */
+			trigger->address &= ~((0x1 << 3) - 1);
+			trigger->length = end_address - trigger->address;
+
+			/* redefine: trigger->address */
+			modify_trigger_address_mbit_match(target, trigger);
+		}
+#endif
+
 		for (int hartid = first_hart; hartid < riscv_count_harts(target); ++hartid) {
 			if (!riscv_hart_enabled(target, hartid))
 				continue;
@@ -725,6 +782,9 @@ static int add_trigger(struct target *target, struct trigger *trigger)
 	}
 
 	if (i >= r->trigger_count[first_hart]) {
+#if _NDS_V5_ONLY_
+		NDS32_LOG(NDS32_ERRMSG_TARGET_MAX_HW_BREAKPOINT, r->trigger_count[first_hart]);
+#endif
 		LOG_ERROR("Couldn't find an available hardware trigger.");
 		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
 	}
@@ -757,13 +817,38 @@ int riscv_add_breakpoint(struct target *target, struct breakpoint *breakpoint)
 
 		uint8_t buff[4];
 		buf_set_u32(buff, 0, breakpoint->length * CHAR_BIT, breakpoint->length == 4 ? ebreak() : ebreak_c());
+#if _NDS_V5_ONLY_
+		int retval = target_write_memory(target, breakpoint->address, 2, breakpoint->length / 2, buff);
+#else /* _NDS_V5_ONLY_ */
 		int const retval = target_write_memory(target, breakpoint->address, 2, breakpoint->length / 2, buff);
+#endif /* _NDS_V5_ONLY_ */
 
 		if (retval != ERROR_OK) {
 			LOG_ERROR("Failed to write %d-byte breakpoint instruction at 0x%"
 					TARGET_PRIxADDR, breakpoint->length, breakpoint->address);
+
+#if _NDS_V5_ONLY_
+			/* auto convert to hardware breakpoint if failed */
+			struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+			if (nds32->auto_convert_hw_bp) {
+				LOG_INFO("auto_convert to hw bp at 0x%" TARGET_PRIxADDR, breakpoint->address);
+				breakpoint->type = BKPT_HARD;
+				return riscv_add_breakpoint(target, breakpoint);
+			}
+#endif /* _NDS_V5_ONLY_ */
+
 			return ERROR_FAIL;
 		}
+
+#if _NDS_V5_ONLY_
+		/* Read back to check write successful!? */
+		uint8_t *instr = malloc(4);
+		target_read_memory(target, breakpoint->address, breakpoint->length, 1,
+				instr);
+		if(memcmp(breakpoint->orig_instr, instr, breakpoint->length) == 0 )
+			retval = ERROR_FAIL;
+		free(instr);
+#endif /* _NDS_V5_ONLY_ */
 
 	} else if (breakpoint->type == BKPT_HARD) {
 		struct trigger trigger;
@@ -818,7 +903,13 @@ static int remove_trigger(struct target *target, struct trigger *trigger)
 		if (result != ERROR_OK)
 			return result;
 		riscv_set_register_on_hart(target, hartid, GDB_REGNO_TSELECT, i);
-		riscv_set_register_on_hart(target, hartid, GDB_REGNO_TDATA1, 0);
+#if _NDS_V5_ONLY_
+		/* Fix Hardware bug: don't disable trigger module */
+		riscv_set_register_on_hart(target, hartid, GDB_REGNO_TDATA1,
+			set_field(0, MCONTROL_TYPE(riscv_xlen(target)), 2));
+#else /* _NDS_V5_ONLY_ */
+ 		riscv_set_register_on_hart(target, hartid, GDB_REGNO_TDATA1, 0);
+#endif /* _NDS_V5_ONLY_ */
 		riscv_set_register_on_hart(target, hartid, GDB_REGNO_TSELECT, tselect);
 	}
 	r->trigger_unique_id[i] = -1;
@@ -989,12 +1080,22 @@ static int oldriscv_step(struct target *target, int current, uint32_t address,
 	return tt->step(target, current, address, handle_breakpoints);
 }
 
+#if _NDS_V5_ONLY_
+int old_or_new_riscv_step(
+		struct target *target,
+		int current,
+		target_addr_t address,
+		int handle_breakpoints
+)
+#else
 static int old_or_new_riscv_step(
 		struct target *target,
 		int current,
 		target_addr_t address,
 		int handle_breakpoints
-){
+)
+#endif
+{
 	RISCV_INFO(r);
 	LOG_DEBUG("handle_breakpoints=%d", handle_breakpoints);
 	if (r->is_halted == NULL)
@@ -1003,8 +1104,11 @@ static int old_or_new_riscv_step(
 		return riscv_openocd_step(target, current, address, handle_breakpoints);
 }
 
-
+#if _NDS_V5_ONLY_
+int riscv_examine(struct target *target)
+#else
 static int riscv_examine(struct target *target)
+#endif
 {
 	LOG_DEBUG("riscv_examine()");
 	if (target_was_examined(target)) {
@@ -1037,7 +1141,11 @@ static int oldriscv_poll(struct target *target)
 	return tt->poll(target);
 }
 
+#if _NDS_V5_ONLY_
+int old_or_new_riscv_poll(struct target *target)
+#else
 static int old_or_new_riscv_poll(struct target *target)
+#endif
 {
 	RISCV_INFO(r);
 	if (r->is_halted == NULL)
@@ -1108,7 +1216,11 @@ int halt_go(struct target *target)
 
 static int halt_finish(struct target *target)
 {
+#if _NDS_V5_ONLY_ & (!_NDS_SUPPORT_WITHOUT_ANNOUNCING_)
 	return target_call_event_callbacks(target, TARGET_EVENT_HALTED);
+#else
+	return ERROR_OK;
+#endif
 }
 
 int riscv_halt(struct target *target)
@@ -1170,12 +1282,25 @@ static int riscv_assert_reset(struct target *target)
 {
 	LOG_DEBUG("[%d]", target->coreid);
 	struct target_type *tt = get_target_type(target);
+#if _NDS_V5_ONLY_
+	/* Avoid use reg_cache when target not examined (CPU unavailable on examine) */
+	LOG_DEBUG("Assert reset on [%s] hart %d", target->tap->dotted_name, target->coreid);
+	riscv_select_current_hart(target);
+	if (target_was_examined(target))
+		riscv_invalidate_register_cache(target);
+#else /* _NDS_V5_ONLY_ */
 	riscv_invalidate_register_cache(target);
+#endif /* _NDS_V5_ONLY_ */
 	return tt->assert_reset(target);
 }
 
 static int riscv_deassert_reset(struct target *target)
 {
+#if _NDS_V5_ONLY_
+	LOG_DEBUG("Deassert reset on [%s] hart %d", target->tap->dotted_name, target->coreid);
+	riscv_select_current_hart(target);
+#endif /* _NDS_V5_ONLY_ */
+
 	LOG_DEBUG("[%d]", target->coreid);
 	struct target_type *tt = get_target_type(target);
 	return tt->deassert_reset(target);
@@ -1217,6 +1342,9 @@ static int resume_prep(struct target *target, int current,
 	if (!current)
 		riscv_set_register(target, GDB_REGNO_PC, address);
 
+#if _NDS_V5_ONLY_
+	/*TODO: FIXED ME */
+#else
 	if (target->debug_reason == DBG_REASON_WATCHPOINT) {
 		/* To be able to run off a trigger, disable all the triggers, step, and
 		 * then resume as usual. */
@@ -1254,6 +1382,7 @@ static int resume_prep(struct target *target, int current,
 		if (result != ERROR_OK)
 			return result;
 	}
+#endif /* _NDS_V5_ONLY_ */
 
 	if (r->is_halted) {
 		if (riscv_resume_prep_all_harts(target) != ERROR_OK)
@@ -1354,7 +1483,11 @@ int riscv_resume(struct target *target, int current, target_addr_t address,
 			debug_execution, false);
 }
 
+#if _NDS_V5_ONLY_
+int riscv_select_current_hart(struct target *target)
+#else
 static int riscv_select_current_hart(struct target *target)
+#endif
 {
 	RISCV_INFO(r);
 	if (riscv_rtos_enabled(target)) {
@@ -1522,6 +1655,84 @@ static int riscv_read_memory(struct target *target, target_addr_t address,
 	if (riscv_select_current_hart(target) != ERROR_OK)
 		return ERROR_FAIL;
 
+#if _NDS_V5_ONLY_
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	struct nds32_v5_memory *memory = &(nds32->memory);
+	int retval = ERROR_OK;
+	uint64_t reg_mcache_ctl_value = 0;
+
+	target_addr_t physical_address = address;
+	if( ndsv5_virtual_to_physical(target, address, &physical_address) != ERROR_OK )
+		return ERROR_FAIL;
+
+	// ilm and dlm exist and mmsc_cfg.LMSLVP == 1, when bus mode access address need add LM_BASE
+	if (memory->access_channel == NDS_MEMORY_ACC_BUS) {
+		if (!nds32->execute_register_init && (ndsv5_dis_cache_busmode == 1)) {
+			struct reg *reg_name = ndsv5_get_reg_by_CSR(target, CSR_MICM_CFG);
+			uint64_t micm_cfg_value = ndsv5_get_register_value(reg_name);
+			NDS_INFO("micm_cfg = 0x%" PRIx64, micm_cfg_value);
+			reg_name = ndsv5_get_reg_by_CSR(target, CSR_MDCM_CFG);
+			uint64_t mdcm_cfg_value = ndsv5_get_register_value(reg_name);
+			NDS_INFO("mdcm_cfg = 0x%" PRIx64, mdcm_cfg_value);
+
+			// micm_cfg.ISZ != 0 | mdcm_cfg.DSZ != 0 (bit 8-6), CSR_MCACHE_CTL exist
+			if (((micm_cfg_value & 0x1c0) == 0) && ((mdcm_cfg_value & 0x1c0) == 0)) {
+				NDS_INFO("CSR_MCACHE_CTL not exist");
+				ndsv5_dis_cache_busmode = 0;
+			}
+		}
+		if (ndsv5_dis_cache_busmode == 1) {
+			//if dis cache bus mode, saved and disable cache
+			bus_mode_on(target, &reg_mcache_ctl_value);
+		} else {
+			//according to eticket 16199, default no support system bus access, so ndsv5_system_bus_access default value is 0
+			if (ndsv5_system_bus_access == 1) {
+				retval = ndsv5_lm_slvp_support(target, physical_address, CSR_MILMB);
+				if (retval == ERROR_OK)
+					physical_address = physical_address + LM_BASE;
+				else if (retval == ERROR_TARGET_RESOURCE_NOT_AVAILABLE) {
+					retval = ndsv5_lm_slvp_support(target, physical_address, CSR_MDLMB);
+					if (retval == ERROR_OK)
+						physical_address = physical_address + LM_BASE;
+				}
+			}
+		}
+	}
+
+	if (ndsv5_byte_access_from_burn == 1)
+		retval = ndsv5_readwrite_byte(target, physical_address, size, count, buffer, 0);
+	else
+		retval = ndsv5_read_memory(target, physical_address, size, count, buffer);
+
+	if( ndsv5_use_mprv_mode == 1 ) {
+		uint64_t dcsr;
+		if ((nds_dmi_quick_access) && (!riscv_is_halted(target))) {
+			// Resotre mstatus
+			ndsv5_set_csr_reg_quick_access(target, GDB_REGNO_MSTATUS, ndsv5_backup_mstatus);
+			// Restore dcsr
+			ndsv5_get_csr_reg_quick_access(target, GDB_REGNO_DCSR, &dcsr);
+			dcsr &= ~(0x10);
+			ndsv5_set_csr_reg_quick_access(target, GDB_REGNO_DCSR, dcsr);
+		} else {
+			// Resotre mstatus
+			riscv_set_register(target, GDB_REGNO_MSTATUS, ndsv5_backup_mstatus);
+
+			// Restore dcsr
+			riscv_get_register(target, &dcsr, GDB_REGNO_DCSR);
+			dcsr &= ~(0x10);
+			riscv_set_register(target, GDB_REGNO_DCSR, dcsr);
+		}
+	}
+	if (memory->access_channel == NDS_MEMORY_ACC_BUS) {
+		if (ndsv5_dis_cache_busmode == 1) {
+			//if bus mode, restore cache
+			bus_mode_off(target, reg_mcache_ctl_value);
+		}
+	}
+
+	return retval;
+#endif /* _NDS_V5_ONLY_ */
+
 	target_addr_t physical_addr;
 	if (target->type->virt2phys(target, address, &physical_addr) == ERROR_OK)
 		address = physical_addr;
@@ -1545,6 +1756,83 @@ static int riscv_write_memory(struct target *target, target_addr_t address,
 	if (riscv_select_current_hart(target) != ERROR_OK)
 		return ERROR_FAIL;
 
+#if _NDS_V5_ONLY_
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	struct nds32_v5_memory *memory = &(nds32->memory);
+	int retval = ERROR_OK;
+	uint64_t reg_mcache_ctl_value = 0;
+
+	target_addr_t physical_address = address;
+	if( ndsv5_virtual_to_physical(target, address, &physical_address) != ERROR_OK )
+		return ERROR_FAIL;
+
+	// ilm and dlm exist and mmsc_cfg.LMSLVP == 1, when bus mode access address need add LM_BASE
+	if (memory->access_channel == NDS_MEMORY_ACC_BUS) {
+		if (!nds32->execute_register_init && (ndsv5_dis_cache_busmode == 1)) {
+			struct reg *reg_name = ndsv5_get_reg_by_CSR(target, CSR_MICM_CFG);
+			uint64_t micm_cfg_value = ndsv5_get_register_value(reg_name);
+			NDS_INFO("micm_cfg = 0x%" PRIx64, micm_cfg_value);
+			reg_name = ndsv5_get_reg_by_CSR(target, CSR_MDCM_CFG);
+			uint64_t mdcm_cfg_value = ndsv5_get_register_value(reg_name);
+			NDS_INFO("mdcm_cfg = 0x%" PRIx64, mdcm_cfg_value);
+
+			// micm_cfg.ISZ != 0 | mdcm_cfg.DSZ != 0 (bit 8-6), CSR_MCACHE_CTL exist
+			if (((micm_cfg_value & 0x1c0) == 0) && ((mdcm_cfg_value & 0x1c0) == 0)) {
+				NDS_INFO("CSR_MCACHE_CTL not exist");
+				ndsv5_dis_cache_busmode = 0;
+			}
+		}
+		if (ndsv5_dis_cache_busmode == 1) {
+			//if dis cache bus mode, saved and disable cache
+			bus_mode_on(target, &reg_mcache_ctl_value);
+		} else {
+			//according to eticket 16199, default no support system bus access, so ndsv5_system_bus_access default value is 0
+			if (ndsv5_system_bus_access == 1) {
+				retval = ndsv5_lm_slvp_support(target, physical_address, CSR_MILMB);
+				if (retval == ERROR_OK)
+					physical_address = physical_address + LM_BASE;
+				else if (retval == ERROR_TARGET_RESOURCE_NOT_AVAILABLE) {
+					retval = ndsv5_lm_slvp_support(target, physical_address, CSR_MDLMB);
+					if (retval == ERROR_OK)
+						physical_address = physical_address + LM_BASE;
+				}
+			}
+		}
+	}
+
+	if (ndsv5_byte_access_from_burn == 1)
+		retval = ndsv5_readwrite_byte(target, physical_address, size, count, buffer, 1);
+	else
+		retval = ndsv5_write_memory(target, physical_address, size, count, buffer);
+
+	if( ndsv5_use_mprv_mode == 1 ) {
+		uint64_t dcsr;
+		if ((nds_dmi_quick_access) && (!riscv_is_halted(target))) {
+			// Resotre mstatus
+			ndsv5_set_csr_reg_quick_access(target, GDB_REGNO_MSTATUS, ndsv5_backup_mstatus);
+			// Restore dcsr
+			ndsv5_get_csr_reg_quick_access(target, GDB_REGNO_DCSR, &dcsr);
+			dcsr &= ~(0x10);
+			ndsv5_set_csr_reg_quick_access(target, GDB_REGNO_DCSR, dcsr);
+		} else {
+			// Resotre mstatus
+			riscv_set_register(target, GDB_REGNO_MSTATUS, ndsv5_backup_mstatus);
+
+			// Restore dcsr
+			riscv_get_register(target, &dcsr, GDB_REGNO_DCSR);
+			dcsr &= ~(0x10);
+			riscv_set_register(target, GDB_REGNO_DCSR, dcsr);
+		}
+	}
+	if (memory->access_channel == NDS_MEMORY_ACC_BUS) {
+		if (ndsv5_dis_cache_busmode == 1) {
+			//if bus mode, restore cache
+			bus_mode_off(target, reg_mcache_ctl_value);
+		}
+	}
+	return retval;
+#endif /* _NDS_V5_ONLY_ */
+
 	target_addr_t physical_addr;
 	if (target->type->virt2phys(target, address, &physical_addr) == ERROR_OK)
 		address = physical_addr;
@@ -1561,6 +1849,10 @@ static int riscv_get_gdb_reg_list_internal(struct target *target,
 	LOG_DEBUG("rtos_hartid=%d, current_hartid=%d, reg_class=%d, read=%d",
 			r->rtos_hartid, r->current_hartid, reg_class, read);
 
+#if _NDS_V5_ONLY_
+	int hartid = riscv_current_hartid(target);
+#endif /* _NDS_V5_ONLY_ */
+
 	if (!target->reg_cache) {
 		LOG_ERROR("Target not initialized. Return ERROR_FAIL.");
 		return ERROR_FAIL;
@@ -1571,7 +1863,14 @@ static int riscv_get_gdb_reg_list_internal(struct target *target,
 
 	switch (reg_class) {
 		case REG_CLASS_GENERAL:
+#if _NDS_V5_ONLY_
+			if (riscv_supports_extension(target, hartid, 'E'))
+				*reg_list_size = 16;
+			else
+				*reg_list_size = 33;	/* TODO: WHY!? */
+#else /* _NDS_V5_ONLY_ */
 			*reg_list_size = 33;
+#endif /* _NDS_V5_ONLY_ */
 			break;
 		case REG_CLASS_ALL:
 			*reg_list_size = target->reg_cache->num_regs;
@@ -1605,6 +1904,14 @@ static int riscv_get_gdb_reg_list_noread(struct target *target,
 		struct reg **reg_list[], int *reg_list_size,
 		enum target_register_class reg_class)
 {
+#if _NDS_V5_ONLY_
+	/* TODO: Check if this is necessory */
+	if (!target_was_examined(target)) {
+		NDS_INFO("target was NOT examined");
+		ndsv5_examine(target);
+	}
+#endif /* _NDS_V5_ONLY_ */
+
 	return riscv_get_gdb_reg_list_internal(target, reg_list, reg_list_size,
 			reg_class, false);
 }
@@ -1613,6 +1920,14 @@ static int riscv_get_gdb_reg_list(struct target *target,
 		struct reg **reg_list[], int *reg_list_size,
 		enum target_register_class reg_class)
 {
+#if _NDS_V5_ONLY_
+	/* TODO: Check if this is necessory */
+	if (!target_was_examined(target)) {
+		NDS_INFO("target was NOT examined");
+		ndsv5_examine(target);
+	}
+#endif /* _NDS_V5_ONLY_ */
+
 	return riscv_get_gdb_reg_list_internal(target, reg_list, reg_list_size,
 			reg_class, true);
 }
@@ -1695,14 +2010,23 @@ static int riscv_run_algorithm(struct target *target, int num_mem_params,
 	reg_mstatus->type->get(reg_mstatus);
 	current_mstatus = buf_get_u64(reg_mstatus->value, 0, reg_mstatus->size);
 	uint64_t ie_mask = MSTATUS_MIE | MSTATUS_HIE | MSTATUS_SIE | MSTATUS_UIE;
-	buf_set_u64(mstatus_bytes, 0, info->xlen[0], set_field(current_mstatus,
+#if _NDS_V5_ONLY_
+	buf_set_u64(mstatus_bytes, 0, info->xlen[nds_targetburn_corenum], set_field(current_mstatus,
 				ie_mask, 0));
+#else /* _NDS_V5_ONLY_ */
+ 	buf_set_u64(mstatus_bytes, 0, info->xlen[0], set_field(current_mstatus,
+ 				ie_mask, 0));
+#endif /* _NDS_V5_ONLY_ */
 
 	reg_mstatus->type->set(reg_mstatus, mstatus_bytes);
 
 	/* Run algorithm */
 	LOG_DEBUG("resume at 0x%" TARGET_PRIxADDR, entry_point);
+#if _NDS_V5_ONLY_
+	if (ndsv5_openocd_resume_one_hart(target, 0, entry_point, 0, 0, nds_targetburn_corenum) != ERROR_OK)
+#else /* _NDS_V5_ONLY_ */
 	if (riscv_resume_internal(target, 0, entry_point, 0, 0, true) != ERROR_OK)
+#endif /* _NDS_V5_ONLY_ */
 		return ERROR_FAIL;
 
 	int64_t start = timeval_ms();
@@ -1711,8 +2035,13 @@ static int riscv_run_algorithm(struct target *target, int num_mem_params,
 		int64_t now = timeval_ms();
 		if (now - start > timeout_ms) {
 			LOG_ERROR("Algorithm timed out after %" PRId64 " ms.", now - start);
-			riscv_halt(target);
-			old_or_new_riscv_poll(target);
+#if _NDS_V5_ONLY_
+			ndsv5_openocd_halt_one_hart(target, nds_targetburn_corenum);
+			ndsv5_openocd_poll_one_hart(target, nds_targetburn_corenum);
+#else /* _NDS_V5_ONLY_ */
+ 			riscv_halt(target);
+ 			old_or_new_riscv_poll(target);
+#endif /* _NDS_V5_ONLY_ */
 			enum gdb_regno regnums[] = {
 				GDB_REGNO_RA, GDB_REGNO_SP, GDB_REGNO_GP, GDB_REGNO_TP,
 				GDB_REGNO_T0, GDB_REGNO_T1, GDB_REGNO_T2, GDB_REGNO_FP,
@@ -1735,7 +2064,11 @@ static int riscv_run_algorithm(struct target *target, int num_mem_params,
 			return ERROR_TARGET_TIMEOUT;
 		}
 
+#if _NDS_V5_ONLY_
+		int result = ndsv5_openocd_poll_one_hart(target, nds_targetburn_corenum);
+#else /* _NDS_V5_ONLY_ */
 		int result = old_or_new_riscv_poll(target);
+#endif /* _NDS_V5_ONLY_ */
 		if (result != ERROR_OK)
 			return result;
 	}
@@ -1755,12 +2088,20 @@ static int riscv_run_algorithm(struct target *target, int num_mem_params,
 
 	/* Restore Interrupts */
 	LOG_DEBUG("Restoring Interrupts");
+#if _NDS_V5_ONLY_
+	buf_set_u64(mstatus_bytes, 0, info->xlen[nds_targetburn_corenum], current_mstatus);
+#else /* _NDS_V5_ONLY_ */
 	buf_set_u64(mstatus_bytes, 0, info->xlen[0], current_mstatus);
+#endif /* _NDS_V5_ONLY_ */
 	reg_mstatus->type->set(reg_mstatus, mstatus_bytes);
 
 	/* Restore registers */
 	uint8_t buf[8];
+#if _NDS_V5_ONLY_
+	buf_set_u64(buf, 0, info->xlen[nds_targetburn_corenum], saved_pc);
+#else /* _NDS_V5_ONLY_ */
 	buf_set_u64(buf, 0, info->xlen[0], saved_pc);
+#endif /* _NDS_V5_ONLY_ */
 	if (reg_pc->type->set(reg_pc, buf) != ERROR_OK)
 		return ERROR_FAIL;
 
@@ -1776,7 +2117,11 @@ static int riscv_run_algorithm(struct target *target, int num_mem_params,
 		}
 		LOG_DEBUG("restore %s", reg_params[i].reg_name);
 		struct reg *r = register_get_by_name(target->reg_cache, reg_params[i].reg_name, 0);
+#if _NDS_V5_ONLY_
+		buf_set_u64(buf, 0, info->xlen[nds_targetburn_corenum], saved_regs[r->number]);
+#else /* _NDS_V5_ONLY_ */
 		buf_set_u64(buf, 0, info->xlen[0], saved_regs[r->number]);
+#endif /* _NDS_V5_ONLY_ */
 		if (r->type->set(r, buf) != ERROR_OK) {
 			LOG_ERROR("set(%s) failed", r->name);
 			return ERROR_FAIL;
@@ -1873,7 +2218,9 @@ static int riscv_checksum_memory(struct target *target,
 }
 
 /*** OpenOCD Helper Functions ***/
-
+#if _NDS_V5_ONLY_
+enum riscv_poll_hart riscv_poll_hart(struct target *target, int hartid)
+#else /* _NDS_V5_ONLY_ */
 enum riscv_poll_hart {
 	RPH_NO_CHANGE,
 	RPH_DISCOVERED_HALTED,
@@ -1881,12 +2228,17 @@ enum riscv_poll_hart {
 	RPH_ERROR
 };
 static enum riscv_poll_hart riscv_poll_hart(struct target *target, int hartid)
+#endif /* _NDS_V5_ONLY_ */
 {
 	RISCV_INFO(r);
 	if (riscv_set_current_hartid(target, hartid) != ERROR_OK)
 		return RPH_ERROR;
-
+#if _NDS_V5_ONLY_
+	LOG_DEBUG("polling [%s] hart %d, target->state=%d",
+			target->tap->dotted_name, hartid, target->state);
+#else /* _NDS_V5_ONLY_ */
 	LOG_DEBUG("polling hart %d, target->state=%d", hartid, target->state);
+#endif /* _NDS_V5_ONLY_ */
 
 	/* If OpenOCD thinks we're running but this hart is halted then it's time
 	 * to raise an event. */
@@ -1959,9 +2311,23 @@ int riscv_openocd_poll(struct target *target)
 		if (set_debug_reason(target, halted_hart) != ERROR_OK)
 			return ERROR_FAIL;
 
+#if _NDS_V5_ONLY_
+		if (!target->after_reset_run) {
+			/* call riscv_set_rtos_hartid function update r->rtos_hartid and 
+			 * target->rtos->current_threadid/thread */
+			LOG_DEBUG("riscv_set_rtos_hartid %d", halted_hart);
+			riscv_set_rtos_hartid(target, halted_hart);
+		} else {
+			/* reset_and_run command no need change r->rtos_hartid and 
+			 * target->rtos->current_threadid/thread */
+			LOG_DEBUG("reset run command, no change rtos hart id and current_threadid");
+			target->after_reset_run = false;
+		}
+#else /* _NDS_V5_ONLY_ */
 		target->rtos->current_threadid = halted_hart + 1;
 		target->rtos->current_thread = halted_hart + 1;
 		riscv_set_rtos_hartid(target, halted_hart);
+#endif /* _NDS_V5_ONLY_ */
 
 		/* If we're here then at least one hart triggered.  That means we want
 		 * to go and halt _every_ hart (configured with -rtos riscv) in the
@@ -2036,7 +2402,13 @@ int riscv_openocd_poll(struct target *target)
 			return retval;
 	}
 
+#if _NDS_V5_ONLY_
+	ndsv5_triggered_hart = halted_hart;
+#endif /* _NDS_V5_ONLY_ */
+
+#if _NDS_V5_ONLY_ & (!_NDS_SUPPORT_WITHOUT_ANNOUNCING_)
 	target_call_event_callbacks(target, TARGET_EVENT_HALTED);
+#endif
 	return ERROR_OK;
 }
 
@@ -2061,7 +2433,25 @@ int riscv_openocd_step(
 	target->state = TARGET_RUNNING;
 	target_call_event_callbacks(target, TARGET_EVENT_RESUMED);
 	target->state = TARGET_HALTED;
+
+#if _NDS_V5_ONLY_ & _NDS_SUPPORT_WITHOUT_ANNOUNCING_
+	if (ndsv5_without_announce) {
+		ndsv5_without_announce = 0;
+		return out;
+	}
+#endif /* _NDS_V5_ONLY_ */
+
 	target->debug_reason = DBG_REASON_SINGLESTEP;
+
+#if _NDS_V5_ONLY_
+	/* TODO: should we need this!? */
+	LOG_DEBUG("checking reason");
+	if (ndsv5_handle_triggered(target) != ERROR_OK) {
+		LOG_DEBUG("ndsv5_handle_triggered ERROR");
+		return ERROR_FAIL;
+	}
+#endif /* _NDS_V5_ONLY_ */
+
 	target_call_event_callbacks(target, TARGET_EVENT_HALTED);
 	return out;
 }
@@ -2498,7 +2888,11 @@ COMMAND_HANDLER(riscv_set_ebreaku)
 	return ERROR_OK;
 }
 
+#if _NDS_V5_ONLY_
+const struct command_registration riscv_exec_command_handlers[] = {
+#else /* _NDS_V5_ONLY_ */
 static const struct command_registration riscv_exec_command_handlers[] = {
+#endif /* _NDS_V5_ONLY_ */
 	{
 		.name = "test_compliance",
 		.handler = riscv_test_compliance,
@@ -2923,8 +3317,15 @@ int riscv_set_current_hartid(struct target *target, int hartid)
 
 	int previous_hartid = riscv_current_hartid(target);
 	r->current_hartid = hartid;
+#if _NDS_V5_ONLY_
+	if (!riscv_rtos_enabled(target))
+		assert(riscv_hart_enabled(target, hartid));
+	LOG_DEBUG("setting [%s] hartid to %d, was %d",
+			target->tap->dotted_name, hartid, previous_hartid);
+#else /* _NDS_V5_ONLY_ */
 	assert(riscv_hart_enabled(target, hartid));
 	LOG_DEBUG("setting hartid to %d, was %d", hartid, previous_hartid);
+#endif /* _NDS_V5_ONLY_ */
 	if (r->select_current_hart(target) != ERROR_OK)
 		return ERROR_FAIL;
 
@@ -2942,10 +3343,18 @@ void riscv_invalidate_register_cache(struct target *target)
 
 	LOG_DEBUG("[%d]", target->coreid);
 	register_cache_invalidate(target->reg_cache);
+#if _NDS_V5_ONLY_
+	for (size_t i = 0; i < target->reg_cache->num_regs; ++i) {
+		struct reg *reg = &target->reg_cache->reg_list[i];
+		reg->value = &r->reg_cache_values[i];	/* TODO: Do we need this!? */
+		reg->valid = false;
+	}
+#else /* _NDS_V5_ONLY_ */
 	for (size_t i = 0; i < target->reg_cache->num_regs; ++i) {
 		struct reg *reg = &target->reg_cache->reg_list[i];
 		reg->valid = false;
 	}
+#endif /* _NDS_V5_ONLY_ */
 
 	r->registers_initialized = true;
 }
@@ -2967,6 +3376,11 @@ void riscv_set_rtos_hartid(struct target *target, int hartid)
 	LOG_DEBUG("setting RTOS hartid %d", hartid);
 	RISCV_INFO(r);
 	r->rtos_hartid = hartid;
+
+#if _NDS_V5_ONLY_
+	target->rtos->current_threadid = hartid + 1;
+	target->rtos->current_thread = hartid + 1;
+#endif /* _NDS_V5_ONLY_ */
 }
 
 int riscv_count_harts(struct target *target)
@@ -3043,7 +3457,10 @@ int riscv_get_register_on_hart(struct target *target, riscv_reg_t *value,
 bool riscv_is_halted(struct target *target)
 {
 	RISCV_INFO(r);
+#if _NDS_V5_ONLY_ & _NDS_DISABLE_ABORT_
+#else
 	assert(r->is_halted);
+#endif
 	return r->is_halted(target);
 }
 
@@ -3110,9 +3527,24 @@ int riscv_dmi_write_u64_bits(struct target *target)
 
 bool riscv_hart_enabled(struct target *target, int hartid)
 {
+#if _NDS_V5_ONLY_
+	if (riscv_rtos_enabled(target)) {
+		if (hartid < riscv_count_harts(target)) {
+			if (target->rtos->hart_unavailable[hartid] == 0xFF) {
+				LOG_DEBUG("  hart_unavailable[%d] = 0x%x", riscv_current_hartid(target),
+					target->rtos->hart_unavailable[riscv_current_hartid(target)]);
+				return false;
+			}
+			else
+				return true;
+		}
+		return false;
+	}
+#else /* _NDS_V5_ONLY_ */
 	/* FIXME: Add a hart mask to the RTOS. */
 	if (riscv_rtos_enabled(target))
 		return hartid < riscv_count_harts(target);
+#endif /* _NDS_V5_ONLY_ */
 
 	return hartid == target->coreid;
 }
@@ -3396,6 +3828,12 @@ static int register_get(struct reg *reg)
 			(reg->number >= GDB_REGNO_V0 && reg->number <= GDB_REGNO_V31) ||
 			reg->number == GDB_REGNO_PC)
 		reg->valid = true;
+
+#if _NDS_V5_ONLY_
+	/* Presume all reg to invalid, force to read reg anytime */
+	reg->valid = false;
+#endif /* _NDS_V5_ONLY_ */
+
 	char *str = buf_to_str(reg->value, reg->size, 16);
 	LOG_DEBUG("[%d]{%d} read 0x%s from %s (valid=%d)", target->coreid,
 			riscv_current_hartid(target), str, reg->name, reg->valid);
@@ -3423,6 +3861,11 @@ static int register_set(struct reg *reg, uint8_t *buf)
 			reg->number == GDB_REGNO_PC)
 		reg->valid = true;
 
+#if _NDS_V5_ONLY_
+	/* Presume all reg to invalid, force to read reg anytime */
+	reg->valid = false;
+#endif /* _NDS_V5_ONLY_ */
+
 	if (reg->number >= GDB_REGNO_V0 && reg->number <= GDB_REGNO_V31) {
 		if (!r->set_register_buf) {
 			LOG_ERROR("Writing register %s not supported on this RISC-V target.",
@@ -3436,12 +3879,30 @@ static int register_set(struct reg *reg, uint8_t *buf)
 		uint64_t value = buf_get_u64(buf, 0, reg->size);
 		if (riscv_set_register(target, reg->number, value) != ERROR_OK)
 			return ERROR_FAIL;
+
+#if _NDS_V5_ONLY_
+		/* Read CSR back to check */
+		if( reg->number >= GDB_REGNO_CSR0 ) {
+			uint64_t actual_value;
+			riscv_get_register(target, &actual_value, reg->number);
+			if(value != actual_value) {
+				LOG_ERROR("Written reg %s (0x%" PRIx64 ") does not match read back "
+					  "value (0x%" PRIx64 ")", reg->name, value, actual_value);
+				memcpy(reg->value, (uint8_t*)&actual_value, DIV_ROUND_UP(reg->size, 8));
+			}
+		}
+#endif /* _NDS_V5_ONLY_ */
+
 	}
 
 	return ERROR_OK;
 }
 
+#if _NDS_V5_ONLY_
+struct reg_arch_type riscv_reg_arch_type = {
+#else
 static struct reg_arch_type riscv_reg_arch_type = {
+#endif
 	.get = register_get,
 	.set = register_set
 };
@@ -3464,7 +3925,11 @@ int riscv_init_registers(struct target *target)
 
 	target->reg_cache = calloc(1, sizeof(*target->reg_cache));
 	target->reg_cache->name = "RISC-V Registers";
+#if _NDS_V5_ONLY_
+	target->reg_cache->num_regs = GDB_REGNO_COUNT + acr_reg_count_v5;
+#else /* _NDS_V5_ONLY_ */
 	target->reg_cache->num_regs = GDB_REGNO_COUNT;
+#endif /* _NDS_V5_ONLY_ */
 
 	if (expose_custom) {
 		for (unsigned i = 0; expose_custom[i].low <= expose_custom[i].high; i++) {
@@ -3505,9 +3970,13 @@ int riscv_init_registers(struct target *target)
 	static struct reg_feature feature_virtual = {
 		.name = "org.gnu.gdb.riscv.virtual"
 	};
+#if _NDS_V5_ONLY_
+	/* Mark this out to fix compile warning */
+#else /* _NDS_V5_ONLY_ */
 	static struct reg_feature feature_custom = {
 		.name = "org.gnu.gdb.riscv.custom"
 	};
+#endif /* _NDS_V5_ONLY_ */
 
 	/* These types are built into gdb. */
 	static struct reg_data_type type_ieee_single = { .type = REG_TYPE_IEEE_SINGLE, .id = "ieee_single" };
@@ -3517,6 +3986,24 @@ int riscv_init_registers(struct target *target)
 	static struct reg_data_type type_uint32 = { .type = REG_TYPE_UINT32, .id = "uint32" };
 	static struct reg_data_type type_uint64 = { .type = REG_TYPE_UINT64, .id = "uint64" };
 	static struct reg_data_type type_uint128 = { .type = REG_TYPE_UINT128, .id = "uint128" };
+
+#if _NDS_V5_ONLY_
+	static struct reg_data_type type_vec128 = {
+		.type = REG_TYPE_ARCH_DEFINED,
+		.type_class = REG_TYPE_CLASS_VENDOR_DEF,
+		.id = "vec128"
+	};
+	static struct reg_data_type type_vec256 = {
+		.type = REG_TYPE_ARCH_DEFINED,
+		.type_class = REG_TYPE_CLASS_VENDOR_DEF,
+		.id = "vec256"
+	};
+	static struct reg_data_type type_vec512 = {
+		.type = REG_TYPE_ARCH_DEFINED,
+		.type_class = REG_TYPE_CLASS_VENDOR_DEF,
+		.id = "vec512"
+	};
+#endif /* _NDS_V5_ONLY_ */
 
 	/* This is roughly the XML we want:
 	 * <vector id="bytes" type="uint8" count="16"/>
@@ -3614,10 +4101,15 @@ int riscv_init_registers(struct target *target)
 	};
 	/* encoding.h does not contain the registers in sorted order. */
 	qsort(csr_info, DIM(csr_info), sizeof(*csr_info), cmp_csr_info);
+
 	unsigned csr_info_index = 0;
 
+#if _NDS_V5_ONLY_
+	/* Mark this out to fix complier warning */
+#else /* _NDS_V5_ONLY_ */
 	unsigned custom_range_index = 0;
 	int custom_within_range = 0;
+#endif /* _NDS_V5_ONLY_ */
 
 	riscv_reg_info_t *shared_reg_info = calloc(1, sizeof(riscv_reg_info_t));
 	shared_reg_info->target = target;
@@ -3642,6 +4134,30 @@ int riscv_init_registers(struct target *target)
 		if (number <= GDB_REGNO_XPR31) {
 			r->exist = number <= GDB_REGNO_XPR15 ||
 				!riscv_supports_extension(target, hartid, 'E');
+
+#if _NDS_V5_ONLY_
+			/* RV32E only use first 15 gprs(ex: x0~x15) */
+			if (riscv_supports_extension(target, hartid, 'E')) {
+				if (number > GDB_REGNO_XPR15)
+					r->exist = false;
+			}
+
+			/* TODO: Do we still need code_ptr, data_ptr?! */
+			static struct reg_data_type type_data_ptr = { .type = REG_TYPE_DATA_PTR, .id = "data_ptr" };
+			static struct reg_data_type type_code_ptr = { .type = REG_TYPE_CODE_PTR, .id = "code_ptr" };
+			switch (number) {
+				case GDB_REGNO_RA:
+					r->reg_data_type = &type_code_ptr;
+					break;
+				case GDB_REGNO_SP:
+				case GDB_REGNO_GP:
+				case GDB_REGNO_TP:
+				case GDB_REGNO_S0:
+					r->reg_data_type = &type_data_ptr;
+					break;
+			}
+#endif /* _NDS_V5_ONLY_ */
+
 			/* TODO: For now we fake that all GPRs exist because otherwise gdb
 			 * doesn't work. */
 			r->exist = true;
@@ -3871,6 +4387,8 @@ int riscv_init_registers(struct target *target)
 					csr_info_index < DIM(csr_info) - 1) {
 				csr_info_index++;
 			}
+
+			/// NDS_TODO: Support symbolic name
 			if (csr_info[csr_info_index].number == csr_number) {
 				r->name = csr_info[csr_info_index].name;
 			} else {
@@ -3990,6 +4508,30 @@ int riscv_init_registers(struct target *target)
 					break;
 			}
 
+#if _NDS_V5_ONLY_
+			if (riscv_xlen(target) == 64) {
+				switch (csr_number) {
+					case CSR_SCOUNTEREN:
+					case CSR_MCOUNTEREN:
+					case CSR_DCSR:
+					case CSR_MCOUNTERWEN:
+					case CSR_MCOUNTERINTEN:
+					case CSR_MCOUNTERMASK_M:
+					case CSR_MCOUNTERMASK_S:
+					case CSR_MCOUNTERMASK_U:
+					case CSR_MCOUNTEROVF:
+					case CSR_SCOUNTERINTEN:
+					case CSR_SCOUNTERMASK_S:
+					case CSR_SCOUNTERMASK_U:
+					case CSR_SCOUNTEROVF:
+					case CSR_MCOUNTINHIBIT:
+					case CSR_SCOUNTINHIBIT:
+					case CSR_SCOUNTERMASK_M:
+						r->size = 32;
+				}
+			}
+#endif /* _NDS_V5_ONLY_  */
+
 			if (!r->exist && expose_csr) {
 				for (unsigned i = 0; expose_csr[i].low <= expose_csr[i].high; i++) {
 					if (csr_number >= expose_csr[i].low && csr_number <= expose_csr[i].high) {
@@ -4015,6 +4557,26 @@ int riscv_init_registers(struct target *target)
 			r->feature = &feature_vector;
 			r->reg_data_type = &info->type_vector;
 
+#if _NDS_V5_ONLY_
+			/* TODO: Check we still have this?! */
+			struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+			if (nds32->nds_vector_length == 128) {
+				r->reg_data_type = &type_vec128;
+				r->size = 128;
+			} else if (nds32->nds_vector_length == 256) {
+				r->reg_data_type = &type_vec256;
+				r->size = 256;
+			} else {
+				/* if (nds32->nds_vector_length == 512) { */
+				r->reg_data_type = &type_vec512;
+				r->size = 512;
+			}
+#endif /* _NDS_V5_ONLY_ */
+
+#if _NDS_V5_ONLY_
+		/* To support ACR, make the following code out */
+		} /* Don't delete this braces, it will causing compile error */
+#else
 		} else if (number >= GDB_REGNO_COUNT) {
 			/* Custom registers. */
 			assert(expose_custom);
@@ -4037,6 +4599,7 @@ int riscv_init_registers(struct target *target)
 				custom_range_index++;
 			}
 		}
+#endif /* _NDS_V5_ONLY_ */
 
 		if (reg_name[0])
 			r->name = reg_name;
@@ -4045,6 +4608,60 @@ int riscv_init_registers(struct target *target)
 				max_reg_name_len);
 		r->value = &info->reg_cache_values[number];
 	}
+
+#if _NDS_V5_ONLY_
+	/* TODO: Check ACR still working!? */
+	/* Handle ACR */
+	/* ACR_info acr_list[] = {
+	 *   {"r32b", 32, 2, {"rd32_r77b", "rd64_r77b"}, {"wr32_r77b", "wr64_r77b"} },
+	 *   {"r64b", 64, 5, {"rd32_r12b", ""}, {"wr32_r12b", ""} },
+	 *   {"sram_matrix", 64, 256, {"", ""}, {"", ""} },
+	 * };
+	 */
+	LOG_DEBUG("ACR ID starts from %d", GDB_REGNO_COUNT);
+	unsigned int reg_list_idx = GDB_REGNO_COUNT;
+	for (unsigned int i = 0; i < acr_type_count_v5; i++) {
+		unsigned int acr_number = acr_info_list_v5->num;
+		unsigned int acr_width = acr_info_list_v5->width;
+		char* acr_name = acr_info_list_v5->name;
+		LOG_DEBUG("ACR info -> Name : %s, Num : %d, Width : %d", acr_name, acr_number, acr_width);
+
+		for (unsigned int idx = 0; idx < acr_number; idx++, reg_list_idx++) {
+			struct reg *r = &target->reg_cache->reg_list[reg_list_idx];
+			r->number = reg_list_idx;
+			r->caller_save = true;
+			r->dirty = false;
+			r->valid = false;
+			r->exist = true;
+			r->type = &nds_ace_reg_access_type;
+			r->arch_info = target;
+			r->size = acr_width;
+			r->group = "ace";
+			// ByteSize = ceil(reg->size / 8)
+			unsigned int ByteSize = (!r->size%8) ? r->size/8 : (r->size/8) + 1;
+			r->value = (char*) calloc(ByteSize, sizeof(char));
+
+			r->feature = calloc(sizeof(struct reg_feature), 1);
+			r->feature->name = "org.gnu.gdb.riscv.ace";
+
+			r->reg_data_type = calloc(sizeof(struct reg_data_type), 1);
+			r->reg_data_type->type = REG_TYPE_UINT8;
+			r->reg_data_type->id = acr_name;
+
+			char* acr_reg_name = calloc(strlen(acr_name) + 10, 1);
+			sprintf(acr_reg_name, "%s_%d", acr_name, idx);
+			if (acr_reg_name[0]) {
+				r->name = acr_reg_name;
+			}
+			LOG_DEBUG("\t\tRegister ACR : %s, size = %d", r->name, r->size);
+		}
+		acr_info_list_v5++;
+	}
+
+	/* TODO: remove?! redirect all CSRs (r->name/r->exist) to NDS define */
+	//ndsv5_redefine_CSR_name(target);
+	//ndsv5_redefine_GPR_FPU_name(target);
+#endif /* _NDS_V5_ONLY_ */
 
 	return ERROR_OK;
 }
@@ -4088,3 +4705,61 @@ void riscv_add_bscan_tunneled_scan(struct target *target, struct scan_field *fie
 	}
 	jtag_add_dr_scan(target->tap, ARRAY_SIZE(ctxt->tunneled_dr), ctxt->tunneled_dr, TAP_IDLE);
 }
+
+#if _NDS_V5_ONLY_
+extern const struct command_registration ndsv5_command_handlers[];
+struct target_type ndsv5_target = {
+	.name = "nds_v5",
+
+	.init_target = riscv_init_target,
+	.deinit_target = riscv_deinit_target,
+	.examine = ndsv5_examine,
+
+	/* poll current target status */
+	.poll = ndsv5_poll,
+
+	.halt = ndsv5_halt,
+	.resume = ndsv5_resume,
+	.step = ndsv5_step,
+
+	.assert_reset = riscv_assert_reset,
+	.deassert_reset = riscv_deassert_reset,
+
+	.read_memory = riscv_read_memory,
+	.write_memory = riscv_write_memory,
+	.read_phys_memory = riscv_read_phys_memory,
+	.write_phys_memory = riscv_write_phys_memory,
+
+	.write_buffer = ndsv5_writebuffer,
+
+	.checksum_memory = riscv_checksum_memory,
+
+	.mmu = riscv_mmu,
+	.virt2phys = riscv_virt2phys,
+
+	.get_gdb_reg_list = riscv_get_gdb_reg_list,
+	.get_gdb_reg_list_noread = riscv_get_gdb_reg_list_noread,
+	.get_gdb_arch = ndsv5_get_gdb_arch,
+
+	.add_breakpoint = riscv_add_breakpoint,
+	.remove_breakpoint = riscv_remove_breakpoint,
+
+	.add_watchpoint = riscv_add_watchpoint,
+	.remove_watchpoint = riscv_remove_watchpoint,
+
+	.arch_state = riscv_arch_state,
+
+	.run_algorithm = riscv_run_algorithm,
+
+	.address_bits = riscv_xlen_nonconst,
+	.data_bits = riscv_data_bits,
+
+	.commands = ndsv5_command_handlers,
+	.target_create = ndsv5_target_create,
+	.get_gdb_fileio_info = ndsv5_get_gdb_fileio_info,
+	.gdb_fileio_end = ndsv5_gdb_fileio_end,
+	.hit_watchpoint = ndsv5_hit_watchpoint,
+};
+#endif /* _NDS_V5_ONLY_ */
+
+

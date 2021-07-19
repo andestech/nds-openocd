@@ -102,6 +102,9 @@ enum reg_data_type_class {
 	REG_TYPE_CLASS_UNION,
 	REG_TYPE_CLASS_STRUCT,
 	REG_TYPE_CLASS_FLAGS,
+#if _NDS32_ONLY_
+        REG_TYPE_CLASS_VENDOR_DEF,
+#endif
 };
 
 struct reg_data_type {

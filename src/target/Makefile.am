@@ -130,7 +130,17 @@ NDS32_SRC = \
 	%D%/nds32_v3_common.c \
 	%D%/nds32_v3.c \
 	%D%/nds32_v3m.c \
-	%D%/nds32_aice.c
+	%D%/bytecode-ax.c \
+	%D%/nds32_burner_server.c \
+	%D%/nds32_ace.c \
+	%D%/nds32_tracer.c \
+	%D%/ndsv5_ace.c \
+	%D%/ndsv5_burner_server.c \
+	%D%/ndsv5_cmd.c \
+	%D%/ndsv5_profiling.c \
+	%D%/nds_vtarget.c \
+	%D%/nds_vtarget_cmd.c
+
 
 STM8_SRC = \
 	%D%/stm8.c
@@ -222,6 +232,11 @@ ESIRISC_SRC = \
 	%D%/nds32_v3.h \
 	%D%/nds32_v3m.h \
 	%D%/nds32_aice.h \
+	%D%/bytecode-ax.h \
+	%D%/nds32_ace.h \
+	%D%/nds32_log.h \
+	%D%/nds32_tracer.h \
+	%D%/ndsv5_ace.h \
 	%D%/semihosting_common.h \
 	%D%/stm8.h \
 	%D%/lakemont.h \

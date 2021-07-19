@@ -22,7 +22,12 @@ DRIVERFILES += %D%/driver.c
 DRIVERFILES += %D%/jtag_usb_common.c
 
 if USE_LIBUSB1
+# Fixed by NDS32
+if IS_CYGWIN
+DRIVERFILES += %D%/libusb10_common.c
+else
 DRIVERFILES += %D%/libusb1_common.c
+endif
 %C%_libocdjtagdrivers_la_CPPFLAGS += $(LIBUSB1_CFLAGS)
 %C%_libocdjtagdrivers_la_LIBADD += $(LIBUSB1_LIBS)
 endif
@@ -170,6 +175,7 @@ DRIVERHEADERS = \
 	%D%/jtag_usb_common.h \
 	%D%/libusb0_common.h \
 	%D%/libusb1_common.h \
+	%D%/libusb10_common.h \
 	%D%/libusb_common.h \
 	%D%/minidriver_imp.h \
 	%D%/mpsse.h \

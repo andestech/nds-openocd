@@ -41,6 +41,10 @@
 #include "time_support.h"
 #include "jim-eventloop.h"
 
+#if _NDS32_ONLY_
+#include "target/nds32_log.h"
+#endif /* _NDS32_ONLY_ */
+
 /* nice short description of source file */
 #define __THIS__FILE__ "command.c"
 
@@ -693,6 +697,12 @@ int command_run_line(struct command_context *context, char *line)
 		Jim_MakeErrorMessage(interp);
 		/* error is broadcast */
 		LOG_USER("%s", Jim_GetString(Jim_GetResult(interp), NULL));
+
+#if _NDS32_ONLY_
+		const char *errmsg = Jim_GetString(Jim_GetResult(interp), NULL);
+		if (strlen(errmsg) != 0)
+			NDS32_LOG("<-- %s -->", errmsg);
+#endif /* _NDS32_ONLY_ */
 
 		if (retval == ERROR_OK) {
 			/* It wasn't a low level OpenOCD command that failed */

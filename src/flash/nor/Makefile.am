@@ -42,6 +42,8 @@ NOR_DRIVERS = \
 	%D%/mdr.c \
 	%D%/msp432.c \
 	%D%/mrvlqspi.c \
+	%D%/nds_spiflash.c \
+	%D%/ndsspi200.c \
 	%D%/niietcm4.c \
 	%D%/non_cfi.c \
 	%D%/nrf5.c \

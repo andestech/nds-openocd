@@ -25,6 +25,11 @@
 #include "helper/time_support.h"
 #include <libusb.h>
 
+#if _NDS_V5_ONLY_
+#include "../../target/nds32_log.h"
+char *ftdi_device_address;
+#endif /* _NDS_V5_ONLY_ */
+
 /* Compatibility define for older libusb-1.0 */
 #ifndef LIBUSB_CALL
 #define LIBUSB_CALL
@@ -154,6 +159,56 @@ static bool device_location_equal(libusb_device *device, const char *location)
 	return result;
 }
 
+#if _NDS_V5_ONLY_
+static bool string_device_address_equal(libusb_device *device)
+{
+	bool result = false;
+	uint8_t dnum = libusb_get_device_address(device);
+
+	LOG_DEBUG("device address is %u", dnum);
+
+	if (atoi(ftdi_device_address) != dnum) {
+		LOG_DEBUG("device address mismatch");
+		goto done;
+	} else
+		result = true;
+
+done:
+	return result;
+}
+
+static int jtag_libusb_set_configuration(struct mpsse_ctx *ctx, struct libusb_device_descriptor desc, int configuration)
+{
+	int err;
+	struct libusb_config_descriptor *config = NULL;
+	int cfg = -1;
+
+	err = libusb_get_configuration(ctx->usb_dev, &cfg);
+	if (err != LIBUSB_SUCCESS) {
+		LOG_ERROR("libusb_get_configuration() failed with %s", libusb_error_name(err));
+		return err;
+	}
+
+	err = libusb_get_config_descriptor(libusb_get_device(ctx->usb_dev), configuration, &config);
+	if ((err != LIBUSB_SUCCESS) || (config == NULL)) {
+		LOG_ERROR("libusb_get_config_descriptor() failed with %s", libusb_error_name(err));
+		return err;
+	}
+
+	if (cfg != config->bConfigurationValue) {
+		err = libusb_set_configuration(ctx->usb_dev, config->bConfigurationValue);
+		if (err != LIBUSB_SUCCESS) {
+			LOG_ERROR("libusb_set_configuration() failed with %s", libusb_error_name(err));
+			return err;
+		}
+	}
+
+	libusb_free_config_descriptor(config);
+	return err;
+}
+#endif /* _NDS_V5_ONLY_ */
+
+
 /* Helper to open a libusb device that matches vid, pid, product string and/or serial string.
  * Set any field to 0 as a wildcard. If the device is found true is returned, with ctx containing
  * the already opened handle. ctx->interface must be set to the desired interface (channel) number
@@ -206,6 +261,33 @@ static bool open_matching_device(struct mpsse_ctx *ctx, const uint16_t *vid, con
 			continue;
 		}
 
+#if _NDS_V5_ONLY_
+		if (ftdi_device_address && !string_device_address_equal(device)) {
+			libusb_close(ctx->usb_dev);
+			continue;
+		}
+
+		/* Try to detach ftdi_sio kernel module */
+		err = libusb_detach_kernel_driver(ctx->usb_dev, 0);
+		if (err != LIBUSB_SUCCESS && err != LIBUSB_ERROR_NOT_FOUND
+		    && err != LIBUSB_ERROR_NOT_SUPPORTED) {
+		    LOG_DEBUG("libusb_detach_kernel_driver() failed with %s, trying to continue anyway",
+				libusb_error_name(err));
+		    continue;
+		}
+
+		/* set_configuration must be before claim_interface() (RedHat64) */
+		err = jtag_libusb_set_configuration(ctx, desc, 0);
+		if (err != LIBUSB_SUCCESS)
+			continue;
+
+		err = libusb_claim_interface(ctx->usb_dev, 0);
+		if (err != LIBUSB_SUCCESS) {
+		    LOG_DEBUG("libusb_claim_interface() failed with %s", libusb_error_name(err));
+		    continue;
+		}
+#endif /* _NDS_V5_ONLY_ */
+
 		found = true;
 		break;
 	}
@@ -224,6 +306,8 @@ static bool open_matching_device(struct mpsse_ctx *ctx, const uint16_t *vid, con
 		return false;
 	}
 
+#if _NDS_V5_ONLY_
+#else /* _NDS_V5_ONLY_ */
 	/* Make sure the first configuration is selected */
 	int cfg;
 	err = libusb_get_configuration(ctx->usb_dev, &cfg);
@@ -253,6 +337,7 @@ static bool open_matching_device(struct mpsse_ctx *ctx, const uint16_t *vid, con
 		LOG_ERROR("libusb_claim_interface() failed with %s", libusb_error_name(err));
 		goto error;
 	}
+#endif /* _NDS_V5_ONLY_ */
 
 	/* Reset FTDI device */
 	err = libusb_control_transfer(ctx->usb_dev, FTDI_DEVICE_OUT_REQTYPE,
@@ -277,8 +362,14 @@ static bool open_matching_device(struct mpsse_ctx *ctx, const uint16_t *vid, con
 		ctx->type = TYPE_FT232H;
 		break;
 	default:
+#if _NDS_V5_ONLY_
+		LOG_ERROR("unsupported FTDI chip type: 0x%04x, set to FT2232H", desc.bcdDevice);
+		ctx->type = TYPE_FT2232H;
+		break;
+#else /* _NDS_V5_ONLY_ */
 		LOG_ERROR("unsupported FTDI chip type: 0x%04x", desc.bcdDevice);
 		goto error;
+#endif /* _NDS_V5_ONLY_ */
 	}
 
 	/* Determine maximum packet size and endpoint addresses */
@@ -288,8 +379,13 @@ static bool open_matching_device(struct mpsse_ctx *ctx, const uint16_t *vid, con
 
 	const struct libusb_interface_descriptor *descriptor;
 	descriptor = &config0->interface[ctx->interface].altsetting[0];
+#if _NDS_V5_ONLY_
+	if (descriptor->bNumEndpoints != 2)
+		LOG_DEBUG("bNumEndpoints: %d", descriptor->bNumEndpoints);
+#else
 	if (descriptor->bNumEndpoints != 2)
 		goto desc_error;
+#endif
 
 	ctx->in_ep = 0;
 	ctx->out_ep = 0;
@@ -314,6 +410,10 @@ desc_error:
 error:
 	libusb_free_config_descriptor(config0);
 	libusb_close(ctx->usb_dev);
+
+#if _NDS_V5_ONLY_
+	NDS32_LOG(NDS32_ERRMSG_AICE_RESET_BOX);
+#endif
 	return false;
 }
 
@@ -330,6 +430,13 @@ struct mpsse_ctx *mpsse_open(const uint16_t *vid, const uint16_t *pid, const cha
 	ctx->read_chunk_size = 16384;
 	ctx->read_size = 16384;
 	ctx->write_size = 16384;
+#if _NDS_V5_ONLY_
+	if (*vid == 0x1cfc) {
+		ctx->read_chunk_size = 1024;
+		ctx->read_size = 1024;
+		ctx->write_size = 1024;
+	}
+#endif
 	ctx->read_chunk = malloc(ctx->read_chunk_size);
 	ctx->read_buffer = malloc(ctx->read_size);
 
@@ -626,8 +733,13 @@ void mpsse_set_data_bits_low_byte(struct mpsse_ctx *ctx, uint8_t data, uint8_t d
 	LOG_DEBUG_IO("-");
 
 	if (ctx->retval != ERROR_OK) {
+#if _NDS_V5_ONLY_
+		NDS32_LOG(NDS32_ERRMSG_AICE_RESET_BOX);
+		exit(-1);
+#else
 		LOG_DEBUG_IO("Ignoring command due to previous error");
 		return;
+#endif
 	}
 
 	if (buffer_write_space(ctx) < 3)
@@ -643,8 +755,13 @@ void mpsse_set_data_bits_high_byte(struct mpsse_ctx *ctx, uint8_t data, uint8_t 
 	LOG_DEBUG_IO("-");
 
 	if (ctx->retval != ERROR_OK) {
+#if _NDS_V5_ONLY_
+		NDS32_LOG(NDS32_ERRMSG_AICE_RESET_BOX);
+		exit(-1);
+#else
 		LOG_DEBUG_IO("Ignoring command due to previous error");
 		return;
+#endif
 	}
 
 	if (buffer_write_space(ctx) < 3)
@@ -691,8 +808,13 @@ static void single_byte_boolean_helper(struct mpsse_ctx *ctx, bool var, uint8_t 
 	uint8_t val_if_false)
 {
 	if (ctx->retval != ERROR_OK) {
+#if _NDS_V5_ONLY_
+		NDS32_LOG(NDS32_ERRMSG_AICE_RESET_BOX);
+		exit(-1);
+#else
 		LOG_DEBUG_IO("Ignoring command due to previous error");
 		return;
+#endif
 	}
 
 	if (buffer_write_space(ctx) < 1)
@@ -712,8 +834,13 @@ void mpsse_set_divisor(struct mpsse_ctx *ctx, uint16_t divisor)
 	LOG_DEBUG("%d", divisor);
 
 	if (ctx->retval != ERROR_OK) {
+#if _NDS_V5_ONLY_
+		NDS32_LOG(NDS32_ERRMSG_AICE_RESET_BOX);
+		exit(-1);
+#else
 		LOG_DEBUG_IO("Ignoring command due to previous error");
 		return;
+#endif
 	}
 
 	if (buffer_write_space(ctx) < 3)
@@ -774,6 +901,18 @@ int mpsse_set_frequency(struct mpsse_ctx *ctx, int frequency)
 	frequency = base_clock / 2 / (1 + divisor);
 	LOG_DEBUG("actually %d Hz", frequency);
 
+#if _NDS_V5_ONLY_
+	char tmp_str[100] = {0};
+	if ((unsigned int)(frequency/1000/1000) != 0)
+		sprintf(tmp_str, "%2.3lf MHz", (double)frequency/1000/1000);
+	else if ((unsigned int)(frequency/1000) != 0)
+		sprintf(tmp_str, "%2.3lf KHz", (double)frequency/1000);
+	else
+		sprintf(tmp_str, "%u Hz", frequency);
+
+	NDS32_LOG(NDS32_MSG_JTAG_FREQ_OK, tmp_str);
+#endif
+
 	return frequency;
 }
 
@@ -817,9 +956,22 @@ static LIBUSB_CALL void read_cb(struct libusb_transfer *transfer)
 	LOG_DEBUG_IO("raw chunk %d, transferred %d of %d", transfer->actual_length, res->transferred,
 		ctx->read_count);
 
+#if _NDS_V5_ONLY_
+	if (!res->done) {
+		int retval = libusb_submit_transfer(transfer);
+		if (retval == LIBUSB_ERROR_NO_DEVICE) {
+			NDS32_LOG(NDS32_ERRMSG_AICE_DISCONNECT);
+			exit(-1);
+		}
+
+		if (retval != LIBUSB_SUCCESS)
+			res->done = true;
+	}
+#else /* _NDS_V5_ONLY_ */
 	if (!res->done)
 		if (libusb_submit_transfer(transfer) != LIBUSB_SUCCESS)
 			res->done = true;
+#endif /* _NDS_V5_ONLY_ */
 }
 
 static LIBUSB_CALL void write_cb(struct libusb_transfer *transfer)
@@ -838,8 +990,20 @@ static LIBUSB_CALL void write_cb(struct libusb_transfer *transfer)
 	else {
 		transfer->length = ctx->write_count - res->transferred;
 		transfer->buffer = ctx->write_buffer + res->transferred;
+
+#if _NDS_V5_ONLY_
+		int retval = libusb_submit_transfer(transfer);
+		if (retval == LIBUSB_ERROR_NO_DEVICE) {
+			NDS32_LOG(NDS32_ERRMSG_AICE_DISCONNECT);
+			exit(-1);
+		}
+
+		if (retval != LIBUSB_SUCCESS)
+			res->done = true;
+#else /* _NDS_V5_ONLY_ */
 		if (libusb_submit_transfer(transfer) != LIBUSB_SUCCESS)
 			res->done = true;
+#endif /* _NDS_V5_ONLY_ */
 	}
 }
 
@@ -878,6 +1042,13 @@ int mpsse_flush(struct mpsse_ctx *ctx)
 	if (retval != LIBUSB_SUCCESS)
 		goto error_check;
 
+#if _NDS_V5_ONLY_
+	if (retval == LIBUSB_ERROR_NO_DEVICE) {
+		NDS32_LOG(NDS32_ERRMSG_AICE_DISCONNECT);
+		exit(-1);
+	}
+#endif
+
 	if (ctx->read_count) {
 		read_transfer = libusb_alloc_transfer(0);
 		libusb_fill_bulk_transfer(read_transfer, ctx->usb_dev, ctx->in_ep, ctx->read_chunk,
@@ -888,7 +1059,17 @@ int mpsse_flush(struct mpsse_ctx *ctx)
 			goto error_check;
 	}
 
+#if _NDS_V5_ONLY_
+	if (retval == LIBUSB_ERROR_NO_DEVICE) {
+		NDS32_LOG(NDS32_ERRMSG_AICE_DISCONNECT);
+		exit(-1);
+	}
+#endif
+
 	/* Polling loop, more or less taken from libftdi */
+#if _NDS_V5_ONLY_
+	int retry = 0;
+#endif
 	int64_t start = timeval_ms();
 	while (!write_result.done || !read_result.done) {
 		struct timeval timeout_usb;
@@ -898,6 +1079,14 @@ int mpsse_flush(struct mpsse_ctx *ctx)
 
 		retval = libusb_handle_events_timeout_completed(ctx->usb_ctx, &timeout_usb, NULL);
 		keep_alive();
+
+#if _NDS_V5_ONLY_
+		if (retry++ >= 256) {
+			NDS32_LOG(NDS32_ERRMSG_AICE_DISCONNECT);
+			exit(-1);
+		}
+#endif
+
 		if (retval == LIBUSB_ERROR_NO_DEVICE || retval == LIBUSB_ERROR_INTERRUPTED)
 			break;
 

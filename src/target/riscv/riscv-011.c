@@ -158,6 +158,9 @@ typedef enum slot {
 
 #define DRAM_CACHE_SIZE		16
 
+#if _NDS_V5_ONLY_
+/* Move this struct declaration to riscv.h */
+#else /* _NDS_V5_ONLY_ */
 struct trigger {
 	uint64_t address;
 	uint32_t length;
@@ -166,6 +169,7 @@ struct trigger {
 	bool read, write, execute;
 	int unique_id;
 };
+#endif /* _NDS_V5_ONLY_ */
 
 struct memory_cache_line {
 	uint32_t data;

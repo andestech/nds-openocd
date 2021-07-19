@@ -13,12 +13,15 @@
  *   GNU General Public License for more details.                          *
  *                                                                         *
  *   You should have received a copy of the GNU General Public License     *
- *   along with this program.  If not, see <http://www.gnu.org/licenses/>. *
+ *   along with this program; if not, write to the                         *
+ *   Free Software Foundation, Inc.,                                       *
+ *   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.           *
  ***************************************************************************/
 
-#ifndef OPENOCD_TARGET_NDS32_H
-#define OPENOCD_TARGET_NDS32_H
+#ifndef __NDS32_H__
+#define __NDS32_H__
 
+#include <helper/command.h>
 #include <jtag/jtag.h>
 #include "target.h"
 #include "target_type.h"
@@ -28,7 +31,38 @@
 #include "nds32_insn.h"
 #include "nds32_edm.h"
 
-#define NDS32_EDM_OPERATION_MAX_NUM 64
+#if (_NDS32_ONLY_ == 0)
+#define DBG_REASON_TRACE_BUFFULL         8
+#define DBG_REASON_HIT_MONITOR_WATCH     9
+	
+#define BP_WP_LENGTH_MASK    (~0xFF000000)
+#define BP_WP_NON_SIMPLE     0x80000000
+#define BP_WP_TRIGGER_ON     0x40000000
+#define BP_WP_FORCE_VA_ON    0x20000000
+#define BP_WP_DATA_COMPARE   0x08000000
+#define BP_WP_USER_WATCH     0x04000000
+#define BP_WP_CONDITIONAL    0x02000000
+#endif
+
+#define NDS32_DUMP_CACHE_SUPPORT     1
+#define NDS32_ACE_SUPPORT            1
+#define NDS32_TRACER_SUPPORT         1
+#define NDS32_BURNER_SERVER_SUPPORT  1
+
+#if NDS32_ACE_SUPPORT
+#include "nds32_ace.h"
+#else
+#define MAX_COP_COUNT	4
+#endif
+
+#define BPWP_ID_MAX  32
+#define BPWP_ID_ON   0x01
+#define BPWP_ID_WP   0x80
+#define BPWP_ID_BP   0x40
+
+#define NDS32_EDM_OPERATION_MAX_NUM  (64)
+#define NDS32_MAX_PROFILE_SAMPLES    (512u)
+#define NDS32_MAX_PROFILE_ITERATIONS ((1u << 16) - 1)
 
 #define CHECK_RETVAL(action)			\
 	do {					\
@@ -39,6 +73,8 @@
 			return __retval;	\
 		}				\
 	} while (0)
+
+#define ASSERTOK(x) do{if(ERROR_OK!=(x)){assert(0);return ERROR_FAIL;}}while(0)
 
 /**
  * @file
@@ -66,25 +102,115 @@ enum nds32_debug_reason {
 
 enum nds32_syscall_id {
 	NDS32_SYSCALL_UNDEFINED = 0,
-	NDS32_SYSCALL_EXIT = 1,
-	NDS32_SYSCALL_OPEN = 2,
-	NDS32_SYSCALL_CLOSE = 3,
-	NDS32_SYSCALL_READ = 4,
-	NDS32_SYSCALL_WRITE = 5,
-	NDS32_SYSCALL_LSEEK = 6,
-	NDS32_SYSCALL_UNLINK = 7,
-	NDS32_SYSCALL_RENAME = 3001,
-	NDS32_SYSCALL_FSTAT = 10,
-	NDS32_SYSCALL_STAT = 15,
-	NDS32_SYSCALL_GETTIMEOFDAY = 19,
-	NDS32_SYSCALL_ISATTY = 3002,
-	NDS32_SYSCALL_SYSTEM = 3003,
-	NDS32_SYSCALL_ERRNO = 6001,
+	NDS32_SKIP_BREAK = 0x7E00,
+	/* break SWID */
+	NDS32_SYSCALL_EXIT = 0x7F20,
+	NDS32_SYSCALL_OPEN = 0x7F21,
+	NDS32_SYSCALL_CLOSE = 0x7F22,
+	NDS32_SYSCALL_READ = 0x7F23,
+	NDS32_SYSCALL_WRITE = 0x7F24,
+	NDS32_SYSCALL_LSEEK = 0x7F25,
+	NDS32_SYSCALL_UNLINK = 0x7F26,
+	NDS32_SYSCALL_RENAME = 0x7F27,
+	NDS32_SYSCALL_FSTAT = 0x7F28,
+	NDS32_SYSCALL_STAT = 0x7F29,
+	NDS32_SYSCALL_GETTIMEOFDAY = 0x7F2A,
+	NDS32_SYSCALL_ISATTY = 0x7F2B,
+	NDS32_SYSCALL_SYSTEM = 0x7F2C,
+	NDS32_SYSCALL_ERRNO = 0x7F2D,
+
+	/* Andes virtual library */
+	NDS32_SYSCALL_FOPEN    = 0x7F00,
+	NDS32_SYSCALL_FREOPEN  = 0x7F01,
+	NDS32_SYSCALL_FCLOSE   = 0x7F02,
+	NDS32_SYSCALL_FFLUSH   = 0x7F03,
+	NDS32_SYSCALL_FREAD    = 0x7F04,
+	NDS32_SYSCALL_FWRITE   = 0x7F05,
+	NDS32_SYSCALL_FGETC    = 0x7F06,
+	NDS32_SYSCALL_FGETS    = 0x7F07,
+	NDS32_SYSCALL_FPUTC    = 0x7F08,
+	NDS32_SYSCALL_FPUTS    = 0x7F09,
+	NDS32_SYSCALL_UNGETC   = 0x7F0A,
+	NDS32_SYSCALL_FTELL    = 0x7F0B,
+	NDS32_SYSCALL_FSEEK    = 0x7F0C,
+	NDS32_SYSCALL_REWIND   = 0x7F0D,
+	NDS32_SYSCALL_CLEARERR = 0x7F0E,
+	NDS32_SYSCALL_FEOF     = 0x7F0F,
+	NDS32_SYSCALL_FERROR   = 0x7F10,
+	NDS32_SYSCALL_REMOVE   = 0x7F11,
+	NDS32_SYSCALL_TMPFILE  = 0x7F12,
+	NDS32_VIRTUAL_EXIT = 0x7FFF,
+
+	NDS32_VIO_LIB_API_MAX_ID = 0xFFFF,
 };
+
+enum nds32_fileio_errno {
+	NDS32_EPERM = 1,
+	NDS32_ENOENT = 2,
+	NDS32_EINTR = 4,
+	NDS32_EIO = 5,
+	NDS32_EBADF = 9,
+	NDS32_EACCES = 13,
+	NDS32_EFAULT = 14,
+	NDS32_EBUSY = 16,
+	NDS32_EEXIST = 17,
+	NDS32_ENODEV = 19,
+	NDS32_ENOTDIR = 20,
+	NDS32_EISDIR = 21,
+	NDS32_EINVAL = 22,
+	NDS32_ENFILE = 23,
+	NDS32_EMFILE = 24,
+	NDS32_EFBIG = 27,
+	NDS32_ENOSPC = 28,
+	NDS32_ESPIPE = 29,
+	NDS32_EROFS = 30,
+	NDS32_ENOSYS = 88,
+	NDS32_ENAMETOOLONG = 91,
+	NDS32_EUNKNOWN = 0xFF,
+};
+
+enum target_property {
+	PROPERTY_RUN_MODE,
+	PROPERTY_PROF_ADDR_MIN,
+	PROPERTY_PROF_ADDR_MAX,
+	PROPERTY_PROF_WITH_RANGE,
+	PROPERTY_CAN_PROFILE,
+	PROPERTY_PWR_SAMPLE_RATE,
+	PROPERTY_PWR_SAMPLE_MODE,
+	PROPERTY_PWR_DUMP,
+	PROPERTY_PWR_DISABLE,
+	PROPERTY_PROFILE_DISABLE,
+	PROPERTY_MAX,
+};
+
+enum target_bench {
+	BENCH_ITEM_PROFILE_RATE,
+	BENCH_ITEM_MAX,
+};
+
+enum target_run_mode {
+	RUN_MODE_DEBUG = 0x00,
+	RUN_MODE_PROFILE = 0x01,
+	RUN_MODE_PWR_MONITOR = 0x02,
+	RUN_MODE_PROFILE_PWR = (RUN_MODE_PROFILE|RUN_MODE_PWR_MONITOR),
+	RUN_MODE_MAX,
+};
+
+#ifndef FALSE
+#define FALSE (0 != 0)
+#endif
+#ifndef TRUE
+#define TRUE  (1 == 1)
+#endif
+#define NDS32_TARGET_NULL 0
+#define NDS32_TARGET_EOF -1
 
 #define NDS32_COMMON_MAGIC (int)0xADE5ADE5
 
 struct nds32_edm {
+
+	/** EDM Configuration Register */
+	unsigned int edm_cfg_reg;
 
 	/** EDM_CFG.VER, indicate the EDM version */
 	int version;
@@ -101,6 +227,9 @@ struct nds32_edm {
 
 	/** */
 	bool support_max_stop;
+
+	/** Indicates whether low-interference profiling feature is implemented or not */
+	bool support_probe;
 };
 
 struct nds32_cache {
@@ -165,14 +294,32 @@ struct nds32_memory {
 	/** DLM end address */
 	int dlm_end;
 
+	/** cache ecc */
+	int icache_ecc;
+
+	/** cache ecc */
+	int dcache_ecc;
+
+	/** local mem ecc */
+	int ilm_ecc;
+
+	/** local mem ecc */
+	int dlm_ecc;
+
 	/** Memory access method */
 	enum nds_memory_access access_channel;
 
 	/** Memory access mode */
-	enum nds_memory_select mode;
+	enum nds_memory_select select_acc_mode;
+
+	/** Memory access mode */
+	enum nds_memory_select set_acc_mode;
 
 	/** Address translation */
 	bool address_translation;
+
+	/** turn off VA to PA */
+	int va_to_pa_off;
 };
 
 struct nds32_cpu_version {
@@ -181,10 +328,12 @@ struct nds32_cpu_version {
 	bool performance_extension_2;
 	bool cop_fpu_extension;
 	bool string_extension;
-
+	bool secure;
 	int revision;
 	int cpu_id_family;
 	int cpu_id_version;
+	int ace_support; // Andes Custom Extension
+	int ace_enable;
 };
 
 struct nds32_mmu_config {
@@ -228,6 +377,9 @@ struct nds32_misc_config {
 	bool ifc;
 	bool mcu;
 	bool ex9;
+	bool pft;
+	bool hsp;
+	int msc_ext;
 	int shadow;
 };
 
@@ -244,13 +396,13 @@ struct nds32 {
 	/** Memory information */
 	struct nds32_memory memory;
 
-	/** cpu version */
+	/** CPU version */
 	struct nds32_cpu_version cpu_version;
 
 	/** MMU configuration */
 	struct nds32_mmu_config mmu_config;
 
-	/** Misc configuration */
+	/** Miscellaneous configuration */
 	struct nds32_misc_config misc_config;
 
 	/** Retrieve all core registers, for display. */
@@ -279,9 +431,6 @@ struct nds32 {
 
 	uint32_t watched_address;
 
-	/** Flag reporting whether virtual hosting is active. */
-	bool virtual_hosting;
-
 	/** Flag reporting whether continue/step hits syscall or not */
 	bool hit_syscall;
 
@@ -293,8 +442,6 @@ struct nds32 {
 
 	/** Record syscall ID for other operations to do special processing for target */
 	int active_syscall_id;
-
-	struct breakpoint syscall_break;
 
 	/** Flag reporting whether global stop is active. */
 	bool global_stop;
@@ -318,11 +465,17 @@ struct nds32 {
 	/** EDM passcode for debugging secure MCU */
 	char *edm_passcode;
 
+	/** ACE conf file name if given */
+	const char *aceconf;
+
 	/** current privilege_level if using secure MCU. value 0 is the highest level.  */
 	int privilege_level;
 
 	/** Period to wait after SRST. */
 	uint32_t boot_time;
+	
+	/** Period to wait after RESTART. */
+	uint32_t reset_time;
 
 	/** Flag to indicate HSS steps into ISR or not */
 	bool step_isr_enable;
@@ -335,6 +488,10 @@ struct nds32 {
 
 	/** Flag to indicate fpu-extension is enabled or not */
 	bool fpu_enable;
+
+	/** Flag to indicate ACE/COP-extension is enabled or not */
+	bool ace_enable;
+	bool cop_enable[MAX_COP_COUNT];
 
 	/* Andes Core has mixed endian model. Instruction is always big-endian.
 	 * Data may be big or little endian. Device registers may have different
@@ -356,11 +513,46 @@ struct nds32 {
 	struct target *target;
 
 	void *arch_info;
+
+	/** gdb run mode */
+	enum target_run_mode gdb_run_mode;
+	bool gdb_run_mode_acting;
+	bool gdb_run_mode_halt;
+	bool gdb_pwr_mode_acting;
+	bool is_in_pwring;
+	uint32_t pwr_num_samples;
+	uint32_t pwr_sample_threshold;
+
+	/** profiling data */
+	uint32_t prof_num_request;  //number samples expected
+	uint32_t prof_num_samples;  //number samples in prof_samples[]
+	uint32_t prof_samples[NDS32_MAX_PROFILE_SAMPLES]; //sample data
+	uint32_t prof_total_samples;  //accumulate in buckets
+	uint32_t prof_num_buckets;
+	uint32_t prof_sample_threshold;
+	uint32_t *prof_buckets;
+
+	/** profiling parameters */
+	bool is_in_profiling;
+	bool prof_with_range;
+	uint32_t prof_addr_min;
+	uint32_t prof_addr_max;
+	uint32_t profiling_support;
+
+	/** tracer */
+	bool tracer_pause;
+
+	/** hit user-def-wp (monitor wp) */
+	bool hit_user_def_wp;
+
+	uint32_t nds32_wp_hb_id[BPWP_ID_MAX];
 };
 
 struct nds32_reg {
-	int32_t num;
-	uint8_t value[8];
+	uint32_t num;
+	uint32_t value;
+	uint64_t value_64;
+	char *value_acr;
 	struct target *target;
 	struct nds32 *nds32;
 	bool enable;
@@ -369,6 +561,11 @@ struct nds32_reg {
 struct nds32_edm_operation {
 	uint32_t reg_no;
 	uint32_t value;
+};
+
+struct nds32_relative_core_reg {
+	uint32_t core_reg_num;
+	uint32_t relative_reg_num;
 };
 
 extern int nds32_config(struct nds32 *nds32);
@@ -388,6 +585,8 @@ extern int nds32_write_buffer(struct target *target, uint32_t address,
 		uint32_t size, const uint8_t *buffer);
 extern int nds32_read_buffer(struct target *target, uint32_t address,
 		uint32_t size, uint8_t *buffer);
+extern int nds32_bulk_write_memory(struct target *target,
+		uint32_t address, uint32_t count, const uint8_t *buffer);
 extern int nds32_read_memory(struct target *target, uint32_t address,
 		uint32_t size, uint32_t count, uint8_t *buffer);
 extern int nds32_write_memory(struct target *target, uint32_t address,
@@ -413,6 +612,7 @@ extern int nds32_examine_debug_reason(struct nds32 *nds32);
 extern int nds32_step(struct target *target, int current,
 		target_addr_t address, int handle_breakpoints);
 extern int nds32_target_state(struct nds32 *nds32, enum target_state *state);
+
 extern int nds32_halt(struct target *target);
 extern int nds32_poll(struct target *target);
 extern int nds32_resume(struct target *target, int current,
@@ -421,8 +621,9 @@ extern int nds32_assert_reset(struct target *target);
 extern int nds32_init(struct nds32 *nds32);
 extern int nds32_get_gdb_fileio_info(struct target *target, struct gdb_fileio_info *fileio_info);
 extern int nds32_gdb_fileio_write_memory(struct nds32 *nds32, uint32_t address,
-		uint32_t size, const uint8_t *buffer);
+		uint32_t *size, uint8_t **buffer);
 extern int nds32_gdb_fileio_end(struct target *target, int retcode, int fileio_errno, bool ctrl_c);
+extern int nds32_is_syscall_handled(int syscall_id);
 extern int nds32_reset_halt(struct nds32 *nds32);
 extern int nds32_login(struct nds32 *nds32);
 extern int nds32_profiling(struct target *target, uint32_t *samples,
@@ -435,16 +636,12 @@ static inline struct nds32 *target_to_nds32(struct target *target)
 	return target->arch_info;
 }
 
-/** */
-static inline struct aice_port_s *target_to_aice(struct target *target)
-{
-	assert(target != NULL);
-	return target->tap->priv;
-}
-
 static inline bool is_nds32(struct nds32 *nds32)
 {
-	assert(nds32 != NULL);
+	//assert(nds32 != NULL);
+	if (nds32 == NULL) {
+		return false;
+	}
 	return nds32->common_magic == NDS32_COMMON_MAGIC;
 }
 
@@ -454,4 +651,16 @@ static inline bool nds32_reach_max_interrupt_level(struct nds32 *nds32)
 	return nds32->max_interrupt_level == nds32->current_interrupt_level;
 }
 
-#endif /* OPENOCD_TARGET_NDS32_H */
+struct nds32_mem_access_attr {
+
+	/** the start address of memory block */
+	uint64_t lowAddr;
+
+	/** the end address of memory block */
+	uint64_t highAddr;
+
+	/** accesses memory size (1/2/4) */
+	unsigned int access_size;
+};
+
+#endif /* __NDS32_H__ */
