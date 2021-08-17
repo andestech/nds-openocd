@@ -4384,6 +4384,10 @@ static int riscv013_select_current_hart(struct target *target)
 	RISCV_INFO(r);
 
 	dm013_info_t *dm = get_dm(target);
+#if _NDS_V5_ONLY_
+	LOG_DEBUG("[%s] r->current_hartid: %d", target->tap->dotted_name, r->current_hartid);
+	LOG_DEBUG("[%s] dm->current_hartid: %d", target->tap->dotted_name, dm->current_hartid);
+#endif
 	if (r->current_hartid == dm->current_hartid)
 		return ERROR_OK;
 
@@ -5861,6 +5865,13 @@ int ndsv5_haltonreset(struct target *target, int enable)
 
 	RISCV_INFO(r);
 	int hartid_bak = r->current_hartid;
+
+	/* Correct current dm current_hartid */
+	dm013_info_t *dm = get_dm(target);
+	uint32_t tmp_dmcontrol;
+	dmi_read(target, &tmp_dmcontrol, DMI_DMCONTROL);
+	dm->current_hartid = get_field(tmp_dmcontrol, DMI_DMCONTROL_HARTSELLO);
+
 	for (i = 0; i < r->hart_count(target); i++) {
 		r->current_hartid = i;
 		riscv013_select_current_hart(target);
@@ -5887,6 +5898,7 @@ int ndsv5_haltonreset(struct target *target, int enable)
 	}
 
 	r->current_hartid = hartid_bak;
+	riscv013_select_current_hart(target);
 	return ERROR_OK;
 }
 
