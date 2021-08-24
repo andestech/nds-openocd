@@ -234,16 +234,41 @@ static int ndsv5_profile_probe_pc(void *priv)
 	if (riscv_debug_buffer_size(target) >= 6) {
 		LOG_DEBUG("quick access probe_pc");
 		uint64_t reg_pc_value = 0;
-		if (ndsv5_probe_pc_quick_access(target, &reg_pc_value) != ERROR_OK) {
-			LOG_DEBUG("probe_pc_quick FAIL");
-			return ERROR_FAIL;
-		}
-		NDS_INFO("reg_pc_value: 0x%lx", (long unsigned int)reg_pc_value);
-		nds32->prof_samples[nds32->prof_num_samples] = reg_pc_value;
-		nds32->prof_num_samples++;
-		if (nds32->prof_num_samples >= NDS32_MAX_PROFILE_SAMPLES) {
-			LOG_ERROR("prof_num_samples overflow: %x", nds32->prof_num_samples);
-			nds32->prof_num_samples--;
+
+		if (riscv_rtos_enabled(target)) {
+			/* For all SMP hart */
+			for (int i = 0; i < riscv_count_harts(target); ++i) {
+				if (riscv_set_current_hartid(target, i) != ERROR_OK) {
+					LOG_DEBUG("set_current_hartid FAIL");
+					return ERROR_FAIL;
+				}
+
+				if (ndsv5_probe_pc_quick_access(target, &reg_pc_value) != ERROR_OK) {
+					LOG_DEBUG("probe_pc_quick FAIL");
+					return ERROR_FAIL;
+				}
+
+				/* NDS_INFO("reg_pc_value: 0x%lx", (long unsigned int)reg_pc_value); */
+				nds32->prof_samples[nds32->prof_num_samples] = reg_pc_value;
+				nds32->prof_num_samples++;
+				if (nds32->prof_num_samples >= NDS32_MAX_PROFILE_SAMPLES) {
+					LOG_ERROR("prof_num_samples overflow: %x", nds32->prof_num_samples);
+					nds32->prof_num_samples--;
+				}
+
+			}
+		} else {
+			if (ndsv5_probe_pc_quick_access(target, &reg_pc_value) != ERROR_OK) {
+				LOG_DEBUG("probe_pc_quick FAIL");
+				return ERROR_FAIL;
+			}
+			NDS_INFO("reg_pc_value: 0x%lx", (long unsigned int)reg_pc_value);
+			nds32->prof_samples[nds32->prof_num_samples] = reg_pc_value;
+			nds32->prof_num_samples++;
+			if (nds32->prof_num_samples >= NDS32_MAX_PROFILE_SAMPLES) {
+				LOG_ERROR("prof_num_samples overflow: %x", nds32->prof_num_samples);
+				nds32->prof_num_samples--;
+			}
 		}
 		return ERROR_OK;
 	}
