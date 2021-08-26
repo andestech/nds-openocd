@@ -2737,21 +2737,23 @@ static void write_to_buf(uint8_t *buffer, uint64_t value, unsigned size)
 #if _NDS_V5_ONLY_
 static int execute_fence_i(struct target *target)
 {
-	LOG_DEBUG("EXECUTE FENCE.I");
+	LOG_DEBUG("EXECUTE FENCE.I on [%s]", target->tap->dotted_name);
 	int old_hartid = riscv_current_hartid(target);
 
-	{
-		struct riscv_program program;
-		riscv_program_init(&program, target);
-		riscv_program_fence_i(&program);
-		struct nds32_v5 *nds32 = target_to_nds32_v5(target);
-		if (nds32->nds_do_fencei == true) {
-			if (riscv_program_exec(&program, target) != ERROR_OK)
-				LOG_ERROR("Unable to execute pre-fence.i");
-			nds32->nds_do_fencei = false;
-		} else
-			LOG_DEBUG("Skip to execute pre-fence.i");
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	if (nds32->nds_do_fencei == false) {
+		LOG_DEBUG("Skip to execute pre-fence.i on hart[%d]", old_hartid);
+		return ERROR_OK;
 	}
+
+
+
+	struct riscv_program program;
+	riscv_program_init(&program, target);
+	riscv_program_fence_i(&program);
+	if (riscv_program_exec(&program, target) != ERROR_OK)
+		LOG_ERROR("Unable to execute pre-fence.i on hart[%d]", old_hartid);
+	LOG_DEBUG("Execute fence.i on hart[%d]", old_hartid);
 
 
 	for (int i = 0; i < riscv_count_harts(target); ++i) {
@@ -2763,21 +2765,17 @@ static int execute_fence_i(struct target *target)
 			continue;
 
 		riscv_set_current_hartid(target, i);
-
-		struct riscv_program program;
 		riscv_program_init(&program, target);
 		riscv_program_fence_i(&program);
-		struct nds32_v5 *nds32 = target_to_nds32_v5(target);
-		if (nds32->nds_do_fencei == true) {
-			if (riscv_program_exec(&program, target) != ERROR_OK)
-				LOG_ERROR("Unable to execute fence.i on hart %d", i);
-			nds32->nds_do_fencei = false;
-		} else
-			LOG_DEBUG("Skip to execute fence.i");
+		if (riscv_program_exec(&program, target) != ERROR_OK)
+			LOG_ERROR("Unable to execute fence.i on hart[%d]", i);
+
+		LOG_DEBUG("Execute fence.i on hart[%d]", i);
 	}
 
 	riscv_set_current_hartid(target, old_hartid);
 	LOG_DEBUG("EXECUTE FENCE.I(DONE)");
+	nds32->nds_do_fencei = false;
 
 	return ERROR_OK;
 }
