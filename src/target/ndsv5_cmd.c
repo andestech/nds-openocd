@@ -234,6 +234,11 @@ __COMMAND_HANDLER(handle_ndsv5_query_capability_command)
 	if (riscv_debug_buffer_size(target) >= 7)
 		q_access_mode = 1;
 
+	/* check l2c before access */
+	uint64_t tmp;
+	if (ndsv5_l2c_support == 1)
+		ndsv5_check_l2cache_exist(target, &tmp);
+
 	command_print(CMD, "tracer:%d;"
 			   "profiling:%d;"
 			   "disbus:%d;"
@@ -241,7 +246,8 @@ __COMMAND_HANDLER(handle_ndsv5_query_capability_command)
 			   "targetburn:%d;"
 			   "pwr:%d;"
 			   "q_access_mode:%d;"
-			   "sysbusaccess:%d",
+			   "sysbusaccess:%d;"
+			   "l2c_support:%d",
 				if_tracer,
 				if_profiling,
 				disable_busmode,
@@ -249,7 +255,8 @@ __COMMAND_HANDLER(handle_ndsv5_query_capability_command)
 				if_targetburn,
 				if_pwr_sample,
 				q_access_mode,
-				system_bus_access);
+				system_bus_access,
+				ndsv5_l2c_support);
 	return ERROR_OK;
 }
 
@@ -604,6 +611,11 @@ __COMMAND_HANDLER(handle_ndsv5_configure_command)
 			COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], vector_length);
 			nds32->nds_vector_length = vector_length;
 		}
+	} else if (strcmp(CMD_ARGV[0], "l2c_base") == 0) {
+		if (CMD_ARGC > 1)
+			COMMAND_PARSE_NUMBER(u64, CMD_ARGV[1], L2C_BASE);
+		ndsv5_l2c_support = 1;
+		command_print(CMD, "configure: %s = 0x%lx", CMD_ARGV[0], L2C_BASE);
 	} else {
 		command_print(CMD, "configure: property '%s' unknown!", CMD_ARGV[0]);
 		NDS32_LOG("<-- configure: property '%s' unknown! -->", CMD_ARGV[0]);
@@ -702,7 +714,6 @@ int ndsv5cmd_set_reset_halt_as_examine(struct target *target, bool reset_halt_as
 	return ERROR_OK;
 }
 
-
 COMMAND_HANDLER(ndsv5_handle_playground)
 {
 	/* struct target *target = get_current_target(CMD_CTX); */
@@ -716,6 +727,35 @@ COMMAND_HANDLER(ndsv5_handle_playground)
 		return ERROR_FAIL;
 	}
 	*/
+	return ERROR_OK;
+}
+
+COMMAND_HANDLER(ndsv5_handle_l2c_command)
+{
+	struct target *target = get_current_target(CMD_CTX);
+
+	if (CMD_ARGC > 0) {
+		if (strcmp(CMD_ARGV[0], "dump") == 0) {
+			if (ndsv5_l2c_support == 0) {
+				command_print(CMD, "%s: No L2 cache", target_name(target));
+				return ERROR_OK;
+			}
+
+			if (strcmp(CMD_ARGV[1], "va") == 0) {
+				uint64_t va;
+				COMMAND_PARSE_NUMBER(u64, CMD_ARGV[2], va);
+				return ndsv5_dump_l2cache_va(target, va);
+			} else {
+				command_print(CMD, "%s: No valid parameter", target_name(target));
+				command_print(CMD, "Usage: dump va <address>");
+				return ERROR_FAIL;
+			}
+		} else {
+			LOG_ERROR("No valid paramerter");
+			command_print(CMD, "%s: No valid parameter", target_name(target));
+		}
+	}
+
 	return ERROR_OK;
 }
 
@@ -1395,6 +1435,13 @@ static const struct command_registration ndsv5_exec_command_handlers[] = {
 		.mode = COMMAND_ANY,
 		.help = "playground command",
 		.usage = "nds test <PARAM>",
+	},
+	{
+		.name = "l2c",
+		.handler = &ndsv5_handle_l2c_command,
+		.mode = COMMAND_EXEC,
+		.help = "['dump']",
+		.usage = "l2 control",
 	},
 	{
 		.name = "count_to_check_dm",

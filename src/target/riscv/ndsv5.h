@@ -95,6 +95,8 @@ uint32_t nds_dmi_quick_access;
 uint32_t nds_dmi_abstractcs;
 uint32_t nds_dmi_quick_access_ena;
 #endif /* _NDS_MEM_Q_ACCESS_ */
+
+uint32_t ndsv5_l2c_support;
 /********************************************************************/
 
 
@@ -120,6 +122,7 @@ uint32_t ndsv5_local_memory_slave_port;
 uint32_t ndsv5_check_idlm_capability_before;
 uint64_t ndsv5_backup_mstatus;
 uint64_t MSTATUS_VS;
+uint64_t L2C_BASE;
 /********************************************************************/
 
 
@@ -377,6 +380,8 @@ extern int ndsv5_write_buffer(struct target *target, target_addr_t address, uint
 extern int ndsv5_init_cache(struct target *target);
 extern int ndsv5_dump_cache(struct target *target, unsigned int cache_type, const char* filename);
 extern int ndsv5_dump_cache_va(struct target *target, unsigned int cache_type, uint64_t va);
+extern int ndsv5_dump_l2cache_va(struct target *target, uint64_t va);
+extern int ndsv5_check_l2cache_exist(struct target *target, uint64_t *config);
 extern int ndsv5_enableornot_cache(struct target *target, unsigned int cache_type, const char* enableornot);
 extern int ndsv5_dcache_wb(struct target *target);
 extern int ndsv5_dcache_invalidate(struct target *target);
