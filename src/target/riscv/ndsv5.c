@@ -42,6 +42,7 @@ uint64_t LM_BASE = 0xa0000000;
 uint32_t ndsv5_dis_cache_busmode = 1;
 uint32_t ndsv5_dmi_busy_retry_times = 100;
 uint64_t MSTATUS_VS = 0x01800000;
+uint64_t L2C_BASE = (uint64_t)-1;
 /********************************************************************/
 
 
@@ -1528,6 +1529,335 @@ int ndsv5_dump_cache_va(struct target *target, unsigned int cache_type, uint64_t
 				ces[way].dirty,
 				ces[way].lock);
 		}
+
+		for (i = 0; i < word_num; i++)
+			LOG_INFO(fmt_str1, ces[way].cacheline[i]);
+		LOG_INFO("\n");
+	}
+
+	return ERROR_OK;
+}
+
+/*********************************/
+#define L2C_WAYS 16
+/* Default: L2C_BASE 0xe0500000 */
+#define L2C_CONFIG      (L2C_BASE + 0x00)
+#define L2C_M0_CCTL_CMD (L2C_BASE + 0x40)
+#define L2C_M0_CCTL_ACC (L2C_BASE + 0x48)
+#define L2C_STATUS      (L2C_BASE + 0x80)
+#define L2C_TGT_DATA_0  (L2C_BASE + 0x90)
+
+
+
+/* L2C Configuration Register: 0x0000 */
+#define L2C_CONFIG_SIZE_OFFSET          (7)
+#define L2C_CONFIG_SIZE                 (0x1FU << L2C_CONFIG_SIZE_OFFSET)
+#define L2C_CONFIG_VERSION_OFFSET       (24)
+#define L2C_CONFIG_VERSION              (0xFFU << L2C_CONFIG_VERSION_OFFSET)
+#define L2C_CONFIG_VER_DEFAULT          (0x1)
+
+
+
+/* L2 CCTL Command Register: 0x0040 */
+#define L2C_CCTL_CMD_OFFSET             (0)
+#define L2C_CCTL_CMD			(0x1FU << L2C_CCTL_CMD_OFFSET)
+
+#define L2C_CCTL_CMD_L2_TGT_READ	(0x11)
+#define L2C_CCTL_CMD_L2_WBINVAL_ALL	(0x12)	/* Cache flush */
+
+
+/* L2 CCTL Access Line Register(TGT Format): 0x0048 */
+#define L2C_CCTL_ACC_TGT_SET_OFFSET     (5)
+#define L2C_CCTL_ACC_TGT_SET            (0x7FFFU << L2C_CCTL_ACC_TGT_SET_OFFSET)
+#define L2C_CCTL_ACC_TGT_RAMID_OFFSET   (26)
+#define L2C_CCTL_ACC_TGT_RAMID          (0x3U << L2C_CCTL_ACC_TGT_RAMID_OFFSET)
+#define L2C_CCTL_ACC_TGT_WAY_OFFSET     (28)
+#define L2C_CCTL_ACC_TGT_WAY            (0xFU << L2C_CCTL_ACC_TGT_WAY_OFFSET)
+
+/* L2 CCTL Status Register: 0x0080 */
+#define L2C_STATUS_STATUS0_OFFSET 0
+#define L2C_STATUS_STATUS0 (0xFU << L2C_STATUS_STATUS0_OFFSET)
+
+
+
+static int ndsv5_l2c_status_idle(struct target *target)
+{
+	uint64_t l2c_status;
+
+	while (1) {
+		if (target_read_memory(target, L2C_STATUS, 8, 1, (uint8_t *)&l2c_status) != ERROR_OK) {
+			LOG_ERROR("Unable to read L2C STATUS");
+			return ERROR_FAIL;
+		}
+
+		/* [ERROR!!!!] assume only use CCTL M0 */
+		int status0 = get_field(l2c_status, L2C_STATUS_STATUS0);
+
+		switch (status0) {
+			case 0x0: /* Idle */
+				return ERROR_OK;
+
+			case 0x1: /* still running */
+				LOG_INFO("L2C CCTL M0 still running!");
+				continue;
+
+			case 0x2: /* illegal CCTL operation */
+				LOG_ERROR("Illegal CCTL operation");
+				return ERROR_FAIL;
+			default:
+				LOG_ERROR("Illegal Status");
+				return ERROR_FAIL;
+		};
+	}
+}
+
+static int ndsv5_l2c_get_reg(struct target *target, uint64_t addr, uint64_t *data)
+{
+	ndsv5_l2c_status_idle(target);
+
+	if (target_read_memory(target, addr, 8, 1, (uint8_t *)data) != ERROR_OK) {
+		LOG_ERROR("Unable to read L2C reg 0x%llx", addr);
+		return ERROR_FAIL;
+	}
+	LOG_DEBUG("L2C get reg 0x%llx data 0x%llx", addr, *data);
+
+	return ERROR_OK;
+}
+
+static int ndsv5_l2c_set_reg(struct target *target, uint64_t addr, uint64_t data)
+{
+	LOG_DEBUG("L2C set reg: 0x%llx, data: 0x%llx", addr, data);
+
+	/* Get & Check version */
+	ndsv5_l2c_status_idle(target);
+	if (target_write_memory(target, addr, 8, 1, (uint8_t *)&data) != ERROR_OK) {
+		LOG_ERROR("Unable to write L2C reg 0x%llx", addr);
+		return ERROR_FAIL;
+	}
+
+	/* Wait command complete */
+	return ndsv5_l2c_status_idle(target);
+}
+
+static int ndsv5_get_palen(struct target *target, uint64_t *palen)
+{
+	uint64_t tmp;
+	uint64_t satp_bak;
+	uint64_t tmp_palen;
+
+	/* If S-mode support, use satp to get palen */
+	if (target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SATP].exist == true) {
+		riscv_get_register(target, &satp_bak, GDB_REGNO_SATP);
+
+		/* Check MMU exist */
+		riscv_set_register(target, GDB_REGNO_SATP, 0x1);
+		riscv_get_register(target, &tmp, GDB_REGNO_SATP);
+		if (tmp != 0) {
+			int xlen = riscv_xlen(target);
+			if (xlen == 64)
+				tmp = 0xFFFFFFFFFFF;
+			else
+				tmp = 0x3FFFFF;
+
+			riscv_set_register(target, GDB_REGNO_SATP, tmp);
+			riscv_get_register(target, &tmp, GDB_REGNO_SATP);
+			for (tmp_palen = 0; (tmp&0x1) != 0; tmp_palen++)
+				tmp >>= 1;
+
+			*palen = tmp_palen + 12;
+			riscv_set_register(target, GDB_REGNO_SATP, satp_bak);
+			return ERROR_OK;
+		}
+	}
+
+	/* Use mepc to test palen */
+	uint64_t mepc_bak;
+	riscv_get_register(target, &mepc_bak, GDB_REGNO_MEPC);
+	riscv_set_register(target, GDB_REGNO_MEPC, (uint64_t)-1);
+	riscv_get_register(target, &tmp, GDB_REGNO_MEPC);
+	for (tmp_palen = 0; (tmp&0x1) != 0; tmp_palen++)
+		tmp >>= 1;
+	riscv_set_register(target, GDB_REGNO_MEPC, mepc_bak);
+	*palen = tmp_palen;
+
+	return ERROR_OK;
+}
+
+int ndsv5_check_l2cache_exist(struct target *target, uint64_t *config)
+{
+	LOG_DEBUG("Check L2C exist");
+
+	if (ndsv5_l2c_support == 0) {
+		LOG_DEBUG("L2C_Support == 0");
+		return ERROR_FAIL;
+	}
+
+	riscv_select_current_hart(target);
+	static uint64_t l2c_config = (uint64_t)-1;
+
+	/* Get & Check version */
+	if (l2c_config == (uint64_t)-1) {
+		ndsv5_l2c_get_reg(target, L2C_CONFIG, &l2c_config);
+
+		if (ndsv5_init_cache(target) != ERROR_OK) {
+			ndsv5_l2c_support = 0;
+			LOG_ERROR("Unable to init L1 cache, unsupport L2C!");
+			return ERROR_FAIL;
+		}
+	}
+
+	int version = get_field(l2c_config, L2C_CONFIG_VERSION);
+	int size    = get_field(l2c_config, L2C_CONFIG_SIZE);
+	if (version != L2C_CONFIG_VER_DEFAULT) {
+		ndsv5_l2c_support = 0;
+		LOG_ERROR("L2C doesn't exist");
+		return ERROR_FAIL;
+	}
+	LOG_DEBUG("L2C version: 0x%x", version);
+	LOG_DEBUG("L2C size: %d KB", size*128);
+	ndsv5_l2c_support = 1;
+	*config = l2c_config;
+
+	return ERROR_OK;
+}
+
+int ndsv5_dump_l2cache_va(struct target *target, uint64_t va)
+{
+	LOG_DEBUG("Dump L2 Cache va=0x%llx", va);
+
+	riscv_select_current_hart(target);
+
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	uint64_t idx, way, ra, tag, i, maskTAG;
+	uint64_t sets, ways, line_size, line_bits, set_bits;
+	uint64_t word_num, word_size;
+	struct nds32_v5_cache *cache;
+	struct cache_element ces[L2C_WAYS];
+	uint64_t xlen, shift_bit, tag_dw;
+	static uint64_t palen = (uint64_t)-1;
+	static uint64_t l2c_config = (uint64_t)-1;
+
+	if (l2c_config == (uint64_t)-1) {
+		if (ndsv5_check_l2cache_exist(target, &l2c_config) != ERROR_OK)
+			return ERROR_FAIL;
+	}
+	int size = get_field(l2c_config, L2C_CONFIG_SIZE);
+	LOG_DEBUG("L2C size: %d KB", size*128);
+
+	/* Init L1 to get info */
+	cache = &nds32->memory.dcache;
+
+	ways = L2C_WAYS;			/* The L2 cache implements a 16-way set-associative design */
+	line_size = cache->line_size;		/* L2 and L1 has the same cache line size */
+	line_bits = cache->log2_line_size;
+
+	/* Read sets */
+	sets = (size * 128 * 1024) / line_size / ways;
+	int tmp_sets = sets;
+	set_bits = 0;
+	while (tmp_sets > 1) {
+		tmp_sets >>= 1;
+		set_bits++;
+	}
+	LOG_DEBUG("L2C sets: %d", sets);
+
+	/* Get palen (Only get it once) */
+	if (palen == (uint64_t)-1) {
+		if (ndsv5_get_palen(target, &palen) == ERROR_FAIL) {
+			LOG_ERROR("Unable get palen");
+			return ERROR_FAIL;
+		}
+	}
+	LOG_DEBUG("L2 Palen = %lu", palen);
+	tag_dw = palen - set_bits - line_bits;
+	maskTAG = (1ULL << tag_dw) - 1;
+
+	uint64_t pa = va;
+	ndsv5_get_physical_address(target, va, &pa);
+	LOG_DEBUG("physical address:0x%llx", pa);
+
+	/* dcache use pa to index */
+	idx = (pa & (((1ULL << set_bits) - 1) << line_bits)) >> line_bits;
+	LOG_DEBUG("Way:%lld, Set:%lld, Line Size:%lld, idx:%llx", ways, sets, line_size, idx);
+	shift_bit = set_bits + line_bits;
+
+	/* Index Example Format for CCTL Index Type Operation for 64bit icache
+	 * same with 32bit i/dcache(from Roger email) */
+	xlen = riscv_xlen(target);
+	word_size = xlen / 8;
+	word_num = line_size / word_size;
+
+	for (way = 0; way < ways; way++) {
+		ra = 0;
+		ra = set_field(ra, L2C_CCTL_ACC_TGT_SET, idx);
+		ra = set_field(ra, L2C_CCTL_ACC_TGT_RAMID, 0);
+		ra = set_field(ra, L2C_CCTL_ACC_TGT_WAY, way);
+
+		/* Write TGT-type address (RAMID=0x0) */
+		ndsv5_l2c_set_reg(target, L2C_M0_CCTL_ACC, ra);
+
+		/* Issue L2_TGT_READ command */
+		ndsv5_l2c_set_reg(target, L2C_M0_CCTL_CMD,
+				set_field(0, L2C_CCTL_CMD, L2C_CCTL_CMD_L2_TGT_READ));
+
+		/* Read TAG */
+		ndsv5_l2c_get_reg(target, L2C_TGT_DATA_0, &tag);
+
+		ces[way].valid = (uint8_t)((tag >> tag_dw) & 0x1);
+		ces[way].dirty = (uint8_t)((tag >> (tag_dw+1)) & 0x1);
+		ces[way].pa = ((tag & maskTAG) << shift_bit) | (idx << line_bits);
+
+		/* Read cache line */
+		ra = set_field(ra, L2C_CCTL_ACC_TGT_RAMID, 1);
+
+		/* Write TGT-type address (RAMID=0x1) */
+		ndsv5_l2c_set_reg(target, L2C_M0_CCTL_ACC, ra);
+
+		/* Issue L2_TGT_READ command */
+		ndsv5_l2c_set_reg(target, L2C_M0_CCTL_CMD,
+				set_field(0, L2C_CCTL_CMD, L2C_CCTL_CMD_L2_TGT_READ));
+
+		for (i = 0; i < word_num; i++) {
+			/* Read TGTDATA0 + offset */
+			ndsv5_l2c_get_reg(target,
+					(L2C_TGT_DATA_0 + i * word_size),
+					&ces[way].cacheline[i]);
+
+			LOG_DEBUG("\tTGT_DATA: 0x%llx", ces[way].cacheline[i]);
+		}
+	}
+
+	char *fmt_str = " %8llx";
+	char *fmt_str1 = "%08llx ";
+	char *fmt_str2 = "%8s %4s %4s %1s %1s";
+	char *fmt_str3 = "%08llx %04llx %04llx %01x %01x ";
+	if (xlen == 64) {
+		fmt_str = " %16llx";
+		fmt_str1 = "%016llx ";
+		fmt_str2 = "%16s %4s %4s %1s %1s";
+		fmt_str3 = "%016llx %04llx %04llx %01x %01x ";
+	}
+
+	NDS32_LOG_LF("Dump L2\n");
+	NDS32_LOG_LF(fmt_str2, "ADDRESS", "SET", "WAY", "V", "D");
+	for (i = 0; i < word_num; i++)
+		NDS32_LOG_LF(fmt_str, (i * word_size));
+	NDS32_LOG_LF("\n");
+	for (way = 0; way < ways; way++) {
+		NDS32_LOG_LF(fmt_str3, ces[way].pa, idx, way, ces[way].valid, ces[way].dirty);
+
+		for (i = 0; i < word_num; i++)
+			NDS32_LOG_LF(fmt_str1, ces[way].cacheline[i]);
+		NDS32_LOG_LF("\n");
+	}
+
+	LOG_INFO("Dump L2\n");
+	LOG_INFO(fmt_str2, "ADDRESS", "SET", "WAY", "V", "D");
+	for (i = 0; i < word_num; i++)
+		LOG_INFO(fmt_str, (i * word_size));
+	LOG_INFO("\n");
+	for (way = 0; way < ways; way++) {
+		LOG_INFO(fmt_str3, ces[way].pa, idx, way, ces[way].valid, ces[way].dirty);
 
 		for (i = 0; i < word_num; i++)
 			LOG_INFO(fmt_str1, ces[way].cacheline[i]);
