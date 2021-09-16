@@ -702,6 +702,23 @@ int ndsv5cmd_set_reset_halt_as_examine(struct target *target, bool reset_halt_as
 	return ERROR_OK;
 }
 
+
+COMMAND_HANDLER(ndsv5_handle_playground)
+{
+	/* struct target *target = get_current_target(CMD_CTX); */
+
+	/* Below is playground */
+	/*
+	if (CMD_ARGC > 0) {
+
+	} else {
+		LOG_ERROR("ARGC failed!");
+		return ERROR_FAIL;
+	}
+	*/
+	return ERROR_OK;
+}
+
 COMMAND_HANDLER(nds32_handle_count_to_check_dm_command)
 {
 	char c;
@@ -1371,6 +1388,13 @@ extern const struct command_registration nds32_exec_command_handlers[];
 static const struct command_registration ndsv5_exec_command_handlers[] = {
 	{
 		.chain = nds32_exec_command_handlers,
+	},
+	{
+		.name = "test",
+		.handler = &ndsv5_handle_playground,
+		.mode = COMMAND_ANY,
+		.help = "playground command",
+		.usage = "nds test <PARAM>",
 	},
 	{
 		.name = "count_to_check_dm",
