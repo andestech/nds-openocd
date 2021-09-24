@@ -15,6 +15,8 @@
 #define CSR_MCRASH_STATESAVE	0xFC8
 #define CSR_MSTATUS_CRASHSAVE	0xFC9
 #define CSR_MVEC_CFG		0xFC7
+#define CSR_ML2C_CTL_BASE       0xFCF
+#define CSR_MRVARCH_CFG         0xFCA
 
 
 /* AndeStar V5 Machine Mode - 9.3. Memory and Miscellaneous CSRs */
@@ -185,6 +187,8 @@ DECLARE_CSR(mmsc_cfg2, CSR_MMSC_CFG2)
 DECLARE_CSR(mcrash_statesave, CSR_MCRASH_STATESAVE)
 DECLARE_CSR(mstatus_crashsave, CSR_MSTATUS_CRASHSAVE)
 DECLARE_CSR(mvec_cfg, CSR_MVEC_CFG)
+DECLARE_CSR(ml2c_ctl_base, CSR_ML2C_CTL_BASE)
+DECLARE_CSR(mrvarch_cfg, CSR_MRVARCH_CFG)
 
 DECLARE_CSR(milmb, CSR_MILMB)
 DECLARE_CSR(mdlmb, CSR_MDLMB)
