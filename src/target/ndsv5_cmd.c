@@ -2171,6 +2171,14 @@ static int ndsv5_init_option_reg(struct target *target)
 				NDS_INFO("disable CSR_MCLK_CTL register");
 				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MCLK_CTL].exist = false;
 			}
+
+			/* if RV32 mmsc_cfg2.L2CMP_CFG == 1 */
+			NDS_INFO("disable CSR_ML2C_CTL_BASE register");
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_ML2C_CTL_BASE].exist = false;
+
+			/* if RV32 mmsc_cfg2.RVARCH == 1 */
+			NDS_INFO("disable CSR_MRVARCH_CFG register");
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG].exist = false;
 		} else {
 			/* mmsc_cfg2 exist */
 			reg_name = ndsv5_get_CSR_name(target, CSR_MMSC_CFG2);
@@ -2196,6 +2204,18 @@ static int ndsv5_init_option_reg(struct target *target)
 				NDS_INFO("disable CSR_MVEC_CFG register");
 				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MVEC_CFG].exist = false;
 			}
+
+			/* if RV32 mmsc_cfg2.L2CMP_CFG == 1 */
+			if ((reg_mmsc_cfg2_value & 0x2000) == 0) {
+				NDS_INFO("disable CSR_ML2C_CTL_BASE register");
+				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_ML2C_CTL_BASE].exist = false;
+			}
+
+			/* if RV32 mmsc_cfg2.RVARCH == 1 */
+			if ((reg_mmsc_cfg2_value & 0x100000) == 0) {
+				NDS_INFO("disable CSR_MRVARCH_CFG register");
+				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG].exist = false;
+			}
 		}
 	}
 
@@ -2218,6 +2238,19 @@ static int ndsv5_init_option_reg(struct target *target)
 		if ((reg_misa_value & 0x200000) == 0 || ((reg_mmsc_cfg_value & 0x1000000000) == 0)) {
 			NDS_INFO("disable CSR_MVEC_CFG register");
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MVEC_CFG].exist = false;
+		}
+
+
+		/* if RV64 mmsc_cfg.L2CMP_CFG == 1 */
+		if ((reg_mmsc_cfg_value & 0x200000000000) == 0) {
+			NDS_INFO("disable CSR_ML2C_CTL_BASE register");
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_ML2C_CTL_BASE].exist = false;
+		}
+
+		/* if RV64 mmsc_cfg.RVARCH == 1 */
+		if ((reg_mmsc_cfg_value & 0x10000000000000) == 0) {
+			NDS_INFO("disable CSR_MRVARCH_CFG register");
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG].exist = false;
 		}
 	}
 
