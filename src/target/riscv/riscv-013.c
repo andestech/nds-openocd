@@ -702,10 +702,17 @@ static int dmi_op(struct target *target, uint32_t *data_in,
 	int result = dmi_op_timeout(target, data_in, dmi_busy_encountered, dmi_op,
 			address, data_out, riscv_command_timeout_sec, exec, ensure_success);
 	if (result == ERROR_TIMEOUT_REACHED) {
+#if _NDS_V5_ONLY_
+		LOG_ERROR("DMI operation didn't complete in %d seconds. The target was "
+				"either too slow or broken. You could increase the "
+				"timeout with riscv set_command_timeout_sec.",
+				riscv_command_timeout_sec);
+#else
 		LOG_ERROR("DMI operation didn't complete in %d seconds. The target is "
 				"either really slow or broken. You could increase the "
 				"timeout with riscv set_command_timeout_sec.",
 				riscv_command_timeout_sec);
+#endif /* _NDS_V5_ONLY_ */
 		return ERROR_FAIL;
 	}
 	return result;
@@ -814,10 +821,17 @@ static int wait_for_idle(struct target *target, uint32_t *abstractcs)
 						errors[info->cmderr], *abstractcs);
 			}
 
+#if _NDS_V5_ONLY_
+			LOG_ERROR("Timed out after %ds waiting for \"busy\" to go low (abstractcs=0x%x). "
+					"Increase the timeout with riscv set_command_timeout_sec.",
+					riscv_command_timeout_sec,
+					*abstractcs);
+#else
 			LOG_ERROR("Timed out after %ds waiting for busy to go low (abstractcs=0x%x). "
 					"Increase the timeout with riscv set_command_timeout_sec.",
 					riscv_command_timeout_sec,
 					*abstractcs);
+#endif /* _NDS_V5_ONLY_ */
 			return ERROR_FAIL;
 		}
 	}
@@ -2949,9 +2963,15 @@ static int read_sbcs_nonbusy(struct target *target, uint32_t *sbcs)
 		if (!get_field(*sbcs, DMI_SBCS_SBBUSY))
 			return ERROR_OK;
 		if (time(NULL) - start > riscv_command_timeout_sec) {
+#if _NDS_V5_ONLY_
+			LOG_ERROR("Timed out after %ds waiting for \"sbbusy\" to go low (sbcs=0x%x). "
+					"Increase the timeout with riscv set_command_timeout_sec.",
+					riscv_command_timeout_sec, *sbcs);
+#else
 			LOG_ERROR("Timed out after %ds waiting for sbbusy to go low (sbcs=0x%x). "
 					"Increase the timeout with riscv set_command_timeout_sec.",
 					riscv_command_timeout_sec, *sbcs);
+#endif /* _NDS_V5_ONLY_  */
 			return ERROR_FAIL;
 		}
 	}
@@ -3974,9 +3994,15 @@ static int write_memory_bus_v1(struct target *target, target_addr_t address,
 		bool dmi_busy = dmi_busy_encountered;
 		while (get_field(sbcs, DMI_SBCS_SBBUSY) || dmi_busy) {
 			if (time(NULL) - start > riscv_command_timeout_sec) {
+#if _NDS_V5_ONLY_
+				LOG_ERROR("Timed out after %ds waiting for \"sbbusy\" to go low (sbcs=0x%x). "
+					  "Increase the timeout with riscv set_command_timeout_sec.",
+					  riscv_command_timeout_sec, sbcs);
+#else
 				LOG_ERROR("Timed out after %ds waiting for sbbusy to go low (sbcs=0x%x). "
 					  "Increase the timeout with riscv set_command_timeout_sec.",
 					  riscv_command_timeout_sec, sbcs);
+#endif /* _NDS_V5_ONLY_ */
 				return ERROR_FAIL;
 			}
 
@@ -4395,7 +4421,8 @@ static int riscv013_select_current_hart(struct target *target)
 		return ERROR_FAIL;
 #if _NDS_V5_ONLY_
 	if( !get_field(dmcontrol, DMI_DMCONTROL_DMACTIVE) ) {
-		NDS32_LOG("<-- TARGET WARNING! DMACTIVE has been pulse to low, turn-on DM again. -->");
+		LOG_INFO("TARGET WARNING! Debug Module was not become active (dmcontrol=0x%x), forced turn on!",
+				dmcontrol);
 		dmcontrol = set_field(dmcontrol, DMI_DMCONTROL_DMACTIVE, 1);
 	}
 #endif /* _NDS_V5_ONLY_ */
