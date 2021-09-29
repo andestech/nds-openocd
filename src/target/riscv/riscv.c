@@ -898,13 +898,11 @@ int riscv_add_breakpoint(struct target *target, struct breakpoint *breakpoint)
 
 #if _NDS_V5_ONLY_
 		/* Read back to check write successful!? */
-		uint8_t *instr = malloc(4);
+		uint8_t instr[4];
 		target_read_memory(target, breakpoint->address, breakpoint->length, 1,
 				instr);
-		if (memcmp(breakpoint->orig_instr, instr, breakpoint->length) == 0) {
-			free(instr);
+		if (memcmp(breakpoint->orig_instr, instr, breakpoint->length) == 0)
 			return ERROR_FAIL;
-		}
 #endif /* _NDS_V5_ONLY_ */
 
 	} else if (breakpoint->type == BKPT_HARD) {
