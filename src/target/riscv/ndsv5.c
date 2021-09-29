@@ -1687,8 +1687,24 @@ int ndsv5_check_l2cache_exist(struct target *target, uint64_t *config)
 {
 	LOG_DEBUG("Check L2C exist");
 
+	/* After AndeStar V5 SPA v1.5.29 */
+	if (target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_ML2C_CTL_BASE].exist) {
+		uint64_t ml2c_ctl_base;
+		if (riscv_get_register(target, &ml2c_ctl_base,
+					GDB_REGNO_CSR0 + CSR_ML2C_CTL_BASE) == ERROR_OK) {
+
+			if (L2C_BASE != (uint64_t)-1 && L2C_BASE != ml2c_ctl_base)
+				LOG_INFO("L2C_BASE(0x%lx) mismatch with ml2c_ctl_base(0x%lx)",
+						L2C_BASE, ml2c_ctl_base);
+
+			L2C_BASE = ml2c_ctl_base;
+			ndsv5_l2c_support = 1;
+		}
+	}
+
 	if (ndsv5_l2c_support == 0) {
-		LOG_DEBUG("L2C_Support == 0");
+		ndsv5_l2c_support = 0;
+		LOG_DEBUG("Unsupport L2C");
 		return ERROR_FAIL;
 	}
 
@@ -1698,7 +1714,6 @@ int ndsv5_check_l2cache_exist(struct target *target, uint64_t *config)
 	/* Get & Check version */
 	if (l2c_config == (uint64_t)-1) {
 		ndsv5_l2c_get_reg(target, L2C_CONFIG, &l2c_config);
-
 		if (ndsv5_init_cache(target) != ERROR_OK) {
 			ndsv5_l2c_support = 0;
 			LOG_ERROR("Unable to init L1 cache, unsupport L2C!");
