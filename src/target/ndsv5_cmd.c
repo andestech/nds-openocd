@@ -236,8 +236,7 @@ __COMMAND_HANDLER(handle_ndsv5_query_capability_command)
 
 	/* check l2c before access */
 	uint64_t tmp;
-	if (ndsv5_l2c_support == 1)
-		ndsv5_check_l2cache_exist(target, &tmp);
+	ndsv5_check_l2cache_exist(target, &tmp);
 
 	command_print(CMD, "tracer:%d;"
 			   "profiling:%d;"
