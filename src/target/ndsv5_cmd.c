@@ -2031,7 +2031,8 @@ static int ndsv5_init_option_reg(struct target *target)
 	/* (misa[18]==1) */
 	if ((reg_misa_value & 0x40000) == 0) {
 		LOG_DEBUG("disable CSR_SCOUNTEREN, CSR_SDCAUSE, CSR_SSTATUS, CSR_SIE, CSR_SIP, CSR_STVEC, "
-			  "CSR_SEPC, CSR_SCAUSE, CSR_STVAL, CSR_SSCRATCH, CSR_SATP registers");
+			  "CSR_SEPC, CSR_SCAUSE, CSR_STVAL, CSR_SSCRATCH, CSR_SATP, CSR_MSLIDELEG, "
+			  "CSR_SLIE, CSR_SLIP, CSR_SEDELEG, CSR_SIDELEG registers");
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SCOUNTEREN].exist = false;
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SDCAUSE].exist = false;
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SSTATUS].exist = false;
@@ -2046,6 +2047,8 @@ static int ndsv5_init_option_reg(struct target *target)
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MSLIDELEG].exist = false;
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SLIE].exist = false;
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SLIP].exist = false;
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SEDELEG].exist = false;
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SIDELEG].exist = false;
 	}
 
 	/* (misa[18]==1) | (misa[13]==1), enable CSR_MEDELEG, CSR_MIDELEG registers */
@@ -2071,7 +2074,7 @@ static int ndsv5_init_option_reg(struct target *target)
 	/* (misa[13]==1) */
 	if ((reg_misa_value & 0x2000) == 0) {
 		NDS_INFO("disable CSR_USTATUS,CSR_UIE, CSR_UIP, CSR_UTVEC, CSR_UEPC, "
-			 "CSR_UCAUSE, CSR_UTVAL, CSR_USCRATCH, CSR_UDCAUSE registers");
+			 "CSR_UCAUSE, CSR_UTVAL, CSR_USCRATCH, CSR_UDCAUSE, CSR_SIDELEG, CSR_SEDELEG registers");
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_USTATUS].exist = false;
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_UIE].exist = false;
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_UIP].exist = false;
@@ -2081,6 +2084,8 @@ static int ndsv5_init_option_reg(struct target *target)
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_UTVAL].exist = false;
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_USCRATCH].exist = false;
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_UDCAUSE].exist = false;
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SIDELEG].exist = false;
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SEDELEG].exist = false;
 	}
 
 	/* ax45/nx45 and version < 0x100, the bitmap supports BF16,
@@ -2118,6 +2123,14 @@ static int ndsv5_init_option_reg(struct target *target)
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MCRASH_STATESAVE].exist = false;
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MSTATUS_CRASHSAVE].exist = false;
 
+			/* if mmsc_cfg.EXCSLVL > 0 | mmsc_cfg2.CRASHSAVE == 1*/
+			if ((reg_mmsc_cfg_value & 0x300000) == 0) {
+				NDS_INFO("disable CSR_MSAVEEPC1 CSR_MSAVECAUSE1 CSR_MSAVEDCAUSE1 registers");
+				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MSAVEEPC1].exist = false;
+				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MSAVECAUSE1].exist = false;
+				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MSAVEDCAUSE1].exist = false;
+			}
+
 			/* misa.V[21] == 1 && if RV32 mmsc_cfg2.veccfg == 1 */
 			NDS_INFO("disable CSR_MVEC_CFG register");
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MVEC_CFG].exist = false;
@@ -2147,6 +2160,14 @@ static int ndsv5_init_option_reg(struct target *target)
 				NDS_INFO("disable CSR_MCRASH_STATESAVE, CSR_MSTATUS_CRASHSAVE registers");
 				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MCRASH_STATESAVE].exist = false;
 				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MSTATUS_CRASHSAVE].exist = false;
+			}
+
+			/* if mmsc_cfg.EXCSLVL > 0 | mmsc_cfg2.CRASHSAVE == 1*/
+			if (((reg_mmsc_cfg_value & 0x300000) == 0) && ((reg_mmsc_cfg2_value & 0x8) == 0)) {
+				NDS_INFO("disable CSR_MSAVEEPC1 CSR_MSAVECAUSE1 CSR_MSAVEDCAUSE1 registers");
+				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MSAVEEPC1].exist = false;
+				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MSAVECAUSE1].exist = false;
+				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MSAVEDCAUSE1].exist = false;
 			}
 
 			/* misa.V[21] == 1 | if RV32 mmsc_cfg2.BF16CVT == 1 */
@@ -2182,6 +2203,14 @@ static int ndsv5_init_option_reg(struct target *target)
 			NDS_INFO("disable CSR_MCRASH_STATESAVE, CSR_MSTATUS_CRASHSAVE registers");
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MCRASH_STATESAVE].exist = false;
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MSTATUS_CRASHSAVE].exist = false;
+		}
+
+		/* if mmsc_cfg.EXCSLVL > 0 | mmsc_cfg2.CRASHSAVE == 1*/
+		if ((reg_mmsc_cfg_value & 0x300000) == 0 && ((reg_mmsc_cfg_value & 0x800000000) == 0)) {
+			NDS_INFO("disable CSR_MSAVEEPC1 CSR_MSAVECAUSE1 CSR_MSAVEDCAUSE1 registers");
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MSAVEEPC1].exist = false;
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MSAVECAUSE1].exist = false;
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MSAVEDCAUSE1].exist = false;
 		}
 
 		/* misa.V[21] == 1 | if RV64 mmsc_cfg.BF16CVT == 1 */
@@ -2318,11 +2347,8 @@ static int ndsv5_init_option_reg(struct target *target)
 
 	/* mmsc_cfg.EXCSLVL > 0 */
 	if ((reg_mmsc_cfg_value & 0x300000) == 0) {
-		NDS_INFO("disable CSR_MSAVESTATUS CSR_MSAVEEPC1 CSR_MSAVECAUSE1 CSR_MSAVEDCAUSE1 registers");
+		NDS_INFO("disable CSR_MSAVESTATUS registers");
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MSAVESTATUS].exist = false;
-		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MSAVEEPC1].exist = false;
-		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MSAVECAUSE1].exist = false;
-		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MSAVEDCAUSE1].exist = false;
 	}
 
 	/* mmsc_cfg.EXCSLVL > 1 */
@@ -2369,7 +2395,7 @@ static int ndsv5_init_option_reg(struct target *target)
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_UCODE].exist = false;
 	}
 
-	/* mmsc_cfg.DPMA == 1 */
+	/* mmsc_cfg.PPMA == 1 */
 	if ((reg_mmsc_cfg_value & 0x40000000) == 0) {
 		NDS_INFO("disable CSR_PMACFG0-3 CSR_PMAADDR0-15");
 		for (i = (GDB_REGNO_CSR0 + CSR_PMACFG0); i <= (GDB_REGNO_CSR0 + CSR_PMACFG3); i++)
