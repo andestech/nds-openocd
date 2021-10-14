@@ -1688,16 +1688,16 @@ int ndsv5_check_l2cache_exist(struct target *target, uint64_t *config)
 	LOG_DEBUG("Check L2C exist");
 
 	/* After AndeStar V5 SPA v1.5.29 */
-	if (target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_ML2C_CTL_BASE].exist) {
-		uint64_t ml2c_ctl_base;
-		if (riscv_get_register(target, &ml2c_ctl_base,
-					GDB_REGNO_CSR0 + CSR_ML2C_CTL_BASE) == ERROR_OK) {
+	if (target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MCCACHE_CTL_BASE].exist) {
+		uint64_t mccache_ctl_base;
+		if (riscv_get_register(target, &mccache_ctl_base,
+					GDB_REGNO_CSR0 + CSR_MCCACHE_CTL_BASE) == ERROR_OK) {
 
-			if (L2C_BASE != (uint64_t)-1 && L2C_BASE != ml2c_ctl_base)
-				LOG_INFO("L2C_BASE(0x%lx) mismatch with ml2c_ctl_base(0x%lx)",
-						L2C_BASE, ml2c_ctl_base);
+			if (L2C_BASE != (uint64_t)-1 && L2C_BASE != mccache_ctl_base)
+				LOG_INFO("L2C_BASE(0x%lx) mismatch with mccache_ctl_base(0x%lx)",
+						L2C_BASE, mccache_ctl_base);
 
-			L2C_BASE = ml2c_ctl_base;
+			L2C_BASE = mccache_ctl_base;
 			ndsv5_l2c_support = 1;
 		}
 	}
