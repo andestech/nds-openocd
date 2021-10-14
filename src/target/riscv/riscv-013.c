@@ -1810,13 +1810,11 @@ static int examine(struct target *target)
 				ndsv5_reset_halt_as_examine(target);
 
 			NDS32_LOG(NDS32_MSG_HW_RESET_HOLD);
-
-			/* reset info->dmi_busy_delay=info->dtmcontrol_idle
-			   if info->dmi_busy_delay was incease by the 1st dmi_scan*/
-			info->dmi_busy_delay = v5_dmi_busy_delay_count;
 		}
 	}
 
+	/* Forced reset dmi_busy_dealy to v5_dmi_busy_dealy_count */
+	info->dmi_busy_delay = v5_dmi_busy_delay_count;
 	LOG_DEBUG("info->dmi_busy_delay: 0x%08x", info->dmi_busy_delay);
 #endif /* _NDS_V5_ONLY_ */
 
