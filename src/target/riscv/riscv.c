@@ -821,17 +821,24 @@ int riscv_add_breakpoint(struct target *target, struct breakpoint *breakpoint)
 
 		uint8_t buff[4];
 		buf_set_u32(buff, 0, breakpoint->length * CHAR_BIT, breakpoint->length == 4 ? ebreak() : ebreak_c());
-#if _NDS_V5_ONLY_
-		int retval = target_write_memory(target, breakpoint->address, 2, breakpoint->length / 2, buff);
-#else /* _NDS_V5_ONLY_ */
 		int const retval = target_write_memory(target, breakpoint->address, 2, breakpoint->length / 2, buff);
-#endif /* _NDS_V5_ONLY_ */
 
 		if (retval != ERROR_OK) {
 			LOG_ERROR("Failed to write %d-byte breakpoint instruction at 0x%"
 					TARGET_PRIxADDR, breakpoint->length, breakpoint->address);
+#if _NDS_V5_ONLY_
+#else
+			return ERROR_FAIL;
+#endif /* _NDS_V5_ONLY_ */
+		}
 
 #if _NDS_V5_ONLY_
+		/* Read back to check write successful!? */
+		uint8_t instr[4] = {0};
+		target_read_memory(target, breakpoint->address, 2, breakpoint->length/2,
+				instr);
+		if ((retval != ERROR_OK) || (memcmp(breakpoint->orig_instr, instr, breakpoint->length) == 0)) {
+			LOG_ERROR("Failed to add SW bp, trying convert to HW bp");
 			/* auto convert to hardware breakpoint if failed */
 			struct nds32_v5 *nds32 = target_to_nds32_v5(target);
 			if (nds32->auto_convert_hw_bp) {
@@ -839,21 +846,8 @@ int riscv_add_breakpoint(struct target *target, struct breakpoint *breakpoint)
 				breakpoint->type = BKPT_HARD;
 				return riscv_add_breakpoint(target, breakpoint);
 			}
-#endif /* _NDS_V5_ONLY_ */
-
-			return ERROR_FAIL;
 		}
-
-#if _NDS_V5_ONLY_
-		/* Read back to check write successful!? */
-		uint8_t *instr = malloc(4);
-		target_read_memory(target, breakpoint->address, breakpoint->length, 1,
-				instr);
-		if(memcmp(breakpoint->orig_instr, instr, breakpoint->length) == 0 )
-			retval = ERROR_FAIL;
-		free(instr);
 #endif /* _NDS_V5_ONLY_ */
-
 	} else if (breakpoint->type == BKPT_HARD) {
 		struct trigger trigger;
 		trigger_from_breakpoint(&trigger, breakpoint);
