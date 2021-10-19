@@ -882,8 +882,8 @@ int riscv_add_breakpoint(struct target *target, struct breakpoint *breakpoint)
 		if (riscv_write_by_any_size(target, breakpoint->address, breakpoint->length, buff) != ERROR_OK) {
 			LOG_ERROR("Failed to write %d-byte breakpoint instruction at 0x%"
 					TARGET_PRIxADDR, breakpoint->length, breakpoint->address);
-
 #if _NDS_V5_ONLY_
+			LOG_ERROR("Failed to add SW bp, trying convert to HW bp");
 			/* auto convert to hardware breakpoint if failed */
 			struct nds32_v5 *nds32 = target_to_nds32_v5(target);
 			if (nds32->auto_convert_hw_bp) {
@@ -892,19 +892,25 @@ int riscv_add_breakpoint(struct target *target, struct breakpoint *breakpoint)
 				return riscv_add_breakpoint(target, breakpoint);
 			}
 #endif /* _NDS_V5_ONLY_ */
-
 			return ERROR_FAIL;
 		}
 
 #if _NDS_V5_ONLY_
 		/* Read back to check write successful!? */
-		uint8_t instr[4];
-		target_read_memory(target, breakpoint->address, breakpoint->length, 1,
+		uint8_t instr[4] = {0};
+		target_read_memory(target, breakpoint->address, 2, breakpoint->length/2,
 				instr);
-		if (memcmp(breakpoint->orig_instr, instr, breakpoint->length) == 0)
-			return ERROR_FAIL;
+		if (memcmp(breakpoint->orig_instr, instr, breakpoint->length) == 0) {
+			LOG_ERROR("Failed to add SW bp, trying convert to HW bp");
+			/* auto convert to hardware breakpoint if failed */
+			struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+			if (nds32->auto_convert_hw_bp) {
+				LOG_INFO("auto_convert to hw bp at 0x%" TARGET_PRIxADDR, breakpoint->address);
+				breakpoint->type = BKPT_HARD;
+				return riscv_add_breakpoint(target, breakpoint);
+			}
+		}
 #endif /* _NDS_V5_ONLY_ */
-
 	} else if (breakpoint->type == BKPT_HARD) {
 		struct trigger trigger;
 		trigger_from_breakpoint(&trigger, breakpoint);
