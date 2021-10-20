@@ -2178,21 +2178,12 @@ static int examine(struct target *target)
 	LOG_INFO("Examined RISC-V core; found %d harts",
 			riscv_count_harts(target));
 	for (int i = 0; i < riscv_count_harts(target); ++i) {
-#if _NDS_V5_ONLY_
-		if (riscv_hart_enabled(target, i)) {
-			LOG_INFO(" [%s] hart %d: XLEN=%d, %d triggers", target->tap->dotted_name, i, r->xlen[i],
-					r->trigger_count[i]);
-		} else {
-			LOG_INFO(" [%s] hart %d: currently disabled", target->tap->dotted_name, i);
-		}
-#else /* _NDS_V5_ONLY_ */
 		if (riscv_hart_enabled(target, i)) {
 			LOG_INFO(" hart %d: XLEN=%d, misa=0x%" PRIx64, i, r->xlen[i],
 					r->misa[i]);
 		} else {
 			LOG_INFO(" hart %d: currently disabled", i);
 		}
-#endif /* _NDS_V5_ONLY_ */
 	}
 	return ERROR_OK;
 }
