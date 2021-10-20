@@ -381,6 +381,7 @@ extern int ndsv5_init_cache(struct target *target);
 extern int ndsv5_dump_cache(struct target *target, unsigned int cache_type, const char* filename);
 extern int ndsv5_dump_cache_va(struct target *target, unsigned int cache_type, uint64_t va);
 extern int ndsv5_dump_l2cache_va(struct target *target, uint64_t va);
+extern int ndsv5_query_l2cache(struct target *target, const char* unit);
 extern int ndsv5_check_l2cache_exist(struct target *target, uint64_t *config);
 extern int ndsv5_enableornot_cache(struct target *target, unsigned int cache_type, const char* enableornot);
 extern int ndsv5_dcache_wb(struct target *target);
