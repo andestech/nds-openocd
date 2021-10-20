@@ -1882,6 +1882,35 @@ int ndsv5_dump_l2cache_va(struct target *target, uint64_t va)
 	return ERROR_OK;
 }
 
+int ndsv5_query_l2cache_config(struct target *target)
+{
+	LOG_DEBUG("Query L2 Cache config");
+
+	riscv_select_current_hart(target);
+
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	struct nds32_v5_cache *cache;
+	uint64_t sets, ways, line_size, size;
+	static uint64_t l2c_config = (uint64_t)-1;
+
+	if (l2c_config == (uint64_t)-1) {
+		if (ndsv5_check_l2cache_exist(target, &l2c_config) != ERROR_OK)
+			return ERROR_FAIL;
+	}
+
+	ways = L2C_WAYS;
+	size = get_field(l2c_config, L2C_CONFIG_SIZE);
+	size = size * 128;
+	cache = &nds32->memory.dcache;
+	line_size = cache->line_size;		/* L2 and L1 has the same cache line size */
+	sets = (size * 1024) / line_size / ways;
+
+	LOG_DEBUG("L2C sets: %lld, ways: %lld, size: %lld KB ", sets, ways, size);
+	LOG_INFO("%lld %lld %lld", sets, ways, size);
+
+	return ERROR_OK;
+}
+
 int ndsv5_enableornot_cache(struct target *target, unsigned int cache_type, const char* enableornot)
 {
 	LOG_DEBUG("Enable or Disable Cache");
