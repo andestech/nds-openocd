@@ -1881,9 +1881,9 @@ int ndsv5_dump_l2cache_va(struct target *target, uint64_t va)
 	return ERROR_OK;
 }
 
-int ndsv5_query_l2cache(struct target *target, const char* unit)
+int ndsv5_query_l2cache_config(struct target *target)
 {
-	LOG_DEBUG("Query L2 Cache %s", unit);
+	LOG_DEBUG("Query L2 Cache config");
 
 	riscv_select_current_hart(target);
 
@@ -1899,19 +1899,13 @@ int ndsv5_query_l2cache(struct target *target, const char* unit)
 
 	ways = L2C_WAYS;
 	size = get_field(l2c_config, L2C_CONFIG_SIZE);
+	size = size * 128;
 	cache = &nds32->memory.dcache;
 	line_size = cache->line_size;		/* L2 and L1 has the same cache line size */
-	if (strcmp(unit, "size") == 0) {
-		LOG_DEBUG("L2C size: %lu KB", size*128);
-		LOG_INFO("%lu KB\n", size*128);
-	} else if (strcmp(unit, "way") == 0) {
-		LOG_DEBUG("L2C way: %lu", ways);
-		LOG_INFO("%lu\n", ways);
-	} else if (strcmp(unit, "set") == 0) {
-		sets = (size * 128 * 1024) / line_size / ways;
-		LOG_DEBUG("L2C set: %lu", sets);
-		LOG_INFO("%lu\n", sets);
-	}
+	sets = (size * 1024) / line_size / ways;
+
+	LOG_DEBUG("L2C sets: %lu, ways: %lu, size: %lu KB ", sets, ways, size);
+	LOG_INFO("%lu %lu %lu", sets, ways, size);
 
 	return ERROR_OK;
 }

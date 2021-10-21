@@ -755,13 +755,11 @@ COMMAND_HANDLER(ndsv5_handle_l2c_command)
 				return ERROR_OK;
 			}
 
-			if (strcmp(CMD_ARGV[1], "set") == 0 ||
-			    strcmp(CMD_ARGV[1], "way") == 0 ||
-			    strcmp(CMD_ARGV[1], "size") == 0) {
-				return ndsv5_query_l2cache(target, CMD_ARGV[1]);
+			if (strcmp(CMD_ARGV[1], "config") == 0) {
+				return ndsv5_query_l2cache_config(target);
 			} else {
 				command_print(CMD, "%s: No valid parameter", target_name(target));
-				command_print(CMD, "Usage: query set/way/size");
+				command_print(CMD, "Usage: query config");
 				return ERROR_FAIL;
 			}
 		} else {
