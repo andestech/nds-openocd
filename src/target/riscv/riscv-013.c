@@ -516,7 +516,11 @@ static dmi_status_t dmi_scan(struct target *target, uint32_t *address_in,
 	if (r->reset_delays_wait >= 0) {
 		r->reset_delays_wait--;
 		if (r->reset_delays_wait < 0) {
+#if _NDS_V5_ONLY_
+			info->dmi_busy_delay = v5_dmi_busy_delay_count;
+#else
 			info->dmi_busy_delay = 0;
+#endif
 			info->ac_busy_delay = 0;
 		}
 	}
