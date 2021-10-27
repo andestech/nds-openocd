@@ -614,7 +614,7 @@ __COMMAND_HANDLER(handle_ndsv5_configure_command)
 		if (CMD_ARGC > 1)
 			COMMAND_PARSE_NUMBER(u64, CMD_ARGV[1], L2C_BASE);
 		ndsv5_l2c_support = 1;
-		command_print(CMD, "configure: %s = 0x%lx", CMD_ARGV[0], L2C_BASE);
+		command_print(CMD, "configure: %s = 0x%llx", CMD_ARGV[0], L2C_BASE);
 	} else {
 		command_print(CMD, "configure: property '%s' unknown!", CMD_ARGV[0]);
 		NDS32_LOG("<-- configure: property '%s' unknown! -->", CMD_ARGV[0]);
@@ -724,10 +724,19 @@ COMMAND_HANDLER(ndsv5_handle_l2c_command)
 				return ERROR_OK;
 			}
 
-			if (strcmp(CMD_ARGV[1], "va") == 0) {
+			if (CMD_ARGC < 3) {
+				LOG_ERROR("Usage: dump va <address>");
+				return ERROR_FAIL;
+			} else if (strcmp(CMD_ARGV[1], "va") == 0) {
 				uint64_t va;
 				COMMAND_PARSE_NUMBER(u64, CMD_ARGV[2], va);
-				return ndsv5_dump_l2cache_va(target, va);
+
+				if (CMD_ARGC == 3)
+					return ndsv5_dump_l2cache_va(target, va);
+
+				uint64_t way;
+				COMMAND_PARSE_NUMBER(u64, CMD_ARGV[3], way);
+				return ndsv5_dump_l2cache_va_way(target, va, way);
 			} else {
 				command_print(CMD, "%s: No valid parameter", target_name(target));
 				command_print(CMD, "Usage: dump va <address>");
@@ -739,13 +748,23 @@ COMMAND_HANDLER(ndsv5_handle_l2c_command)
 				return ERROR_OK;
 			}
 
-			if (strcmp(CMD_ARGV[1], "config") == 0)
+			if (CMD_ARGC != 2) {
+				LOG_ERROR("Usage: Usage: query config");
+				return ERROR_FAIL;
+			} else if (strcmp(CMD_ARGV[1], "config") == 0)
 				return ndsv5_query_l2cache_config(target);
 			else {
 				command_print(CMD, "%s: No valid parameter", target_name(target));
 				command_print(CMD, "Usage: query config");
 				return ERROR_FAIL;
 			}
+		} else if (strcmp(CMD_ARGV[0], "writeback_invalidate") == 0) {
+			if (ndsv5_l2c_support == 0) {
+				command_print(CMD, "%s: No L2 cache", target_name(target));
+				return ERROR_OK;
+			}
+
+			return ndsv5_l2cache_wb_invalidate(target);
 		} else {
 			LOG_ERROR("No valid paramerter");
 			command_print(CMD, "%s: No valid parameter", target_name(target));

@@ -1562,6 +1562,7 @@ int ndsv5_dump_cache_va(struct target *target, unsigned int cache_type, uint64_t
 #define L2C_CCTL_CMD_OFFSET             (0)
 #define L2C_CCTL_CMD			(0x1FU << L2C_CCTL_CMD_OFFSET)
 
+#define L2C_CCTL_CMD_L2_IX_WBINVAL	(0x2)
 #define L2C_CCTL_CMD_L2_TGT_READ	(0x11)
 #define L2C_CCTL_CMD_L2_WBINVAL_ALL	(0x12)	/* Cache flush */
 
@@ -1693,9 +1694,10 @@ int ndsv5_check_l2cache_exist(struct target *target, uint64_t *config)
 		if (riscv_get_register(target, &mccache_ctl_base,
 					GDB_REGNO_CSR0 + CSR_MCCACHE_CTL_BASE) == ERROR_OK) {
 
-			if (L2C_BASE != (uint64_t)-1 && L2C_BASE != mccache_ctl_base)
-				LOG_INFO("L2C_BASE(0x%lx) mismatch with mccache_ctl_base(0x%lx)",
+			if (L2C_BASE != (uint64_t)-1 && L2C_BASE != mccache_ctl_base) {
+				LOG_INFO("L2C_BASE(0x%llx) mismatch with mccache_ctl_base(0x%llx)",
 						L2C_BASE, mccache_ctl_base);
+			}
 
 			L2C_BASE = mccache_ctl_base;
 			ndsv5_l2c_support = 1;
@@ -1774,7 +1776,7 @@ int ndsv5_dump_l2cache_va(struct target *target, uint64_t va)
 		tmp_sets >>= 1;
 		set_bits++;
 	}
-	LOG_DEBUG("L2C sets: %d", sets);
+	LOG_DEBUG("L2C sets: %lld", sets);
 
 	/* Get palen (Only get it once) */
 	if (palen == (uint64_t)-1) {
@@ -1783,7 +1785,7 @@ int ndsv5_dump_l2cache_va(struct target *target, uint64_t va)
 			return ERROR_FAIL;
 		}
 	}
-	LOG_DEBUG("L2 Palen = %lu", palen);
+	LOG_DEBUG("L2 Palen = %llu", palen);
 	tag_dw = palen - set_bits - line_bits;
 	maskTAG = (1ULL << tag_dw) - 1;
 
@@ -1882,6 +1884,152 @@ int ndsv5_dump_l2cache_va(struct target *target, uint64_t va)
 	return ERROR_OK;
 }
 
+/* only for IDE: print one header + one way */
+int ndsv5_dump_l2cache_va_way(struct target *target, uint64_t va, uint64_t way)
+{
+	LOG_DEBUG("Dump L2 Cache va=0x%llx, cache line number=%lld", va, way);
+	if (way >= L2C_WAYS) {
+		LOG_ERROR("the number of L2 Cache line must between 0 ~ %d", L2C_WAYS - 1);
+		return ERROR_FAIL;
+	}
+	riscv_select_current_hart(target);
+
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	uint64_t idx, ra, tag, i, maskTAG;
+	uint64_t sets, ways, line_size, line_bits, set_bits;
+	uint64_t word_num, word_size;
+	struct nds32_v5_cache *cache;
+	struct cache_element ces[1];
+	uint64_t xlen, shift_bit, tag_dw;
+	static uint64_t palen = (uint64_t)-1;
+	static uint64_t l2c_config = (uint64_t)-1;
+
+	if (l2c_config == (uint64_t)-1) {
+		if (ndsv5_check_l2cache_exist(target, &l2c_config) != ERROR_OK)
+			return ERROR_FAIL;
+	}
+	int size = get_field(l2c_config, L2C_CONFIG_SIZE);
+	LOG_DEBUG("L2C size: %d KB", size*128);
+
+	/* Init L1 to get info */
+	cache = &nds32->memory.dcache;
+
+	ways = L2C_WAYS;			/* The L2 cache implements a 16-way set-associative design */
+	line_size = cache->line_size;		/* L2 and L1 has the same cache line size */
+	line_bits = cache->log2_line_size;
+
+	/* Read sets */
+	sets = (size * 128 * 1024) / line_size / ways;
+	int tmp_sets = sets;
+	set_bits = 0;
+	while (tmp_sets > 1) {
+		tmp_sets >>= 1;
+		set_bits++;
+	}
+	LOG_DEBUG("L2C sets: %lld", sets);
+
+	/* Get palen (Only get it once) */
+	if (palen == (uint64_t)-1) {
+		if (ndsv5_get_palen(target, &palen) == ERROR_FAIL) {
+			LOG_ERROR("Unable get palen");
+			return ERROR_FAIL;
+		}
+	}
+	LOG_DEBUG("L2 Palen = %llu", palen);
+	tag_dw = palen - set_bits - line_bits;
+	maskTAG = (1ULL << tag_dw) - 1;
+
+	uint64_t pa = va;
+	ndsv5_get_physical_address(target, va, &pa);
+	LOG_DEBUG("physical address:0x%llx", pa);
+
+	/* dcache use pa to index */
+	idx = (pa & (((1ULL << set_bits) - 1) << line_bits)) >> line_bits;
+	LOG_DEBUG("Way:%lld, Set:%lld, Line Size:%lld, idx:%llx", ways, sets, line_size, idx);
+	shift_bit = set_bits + line_bits;
+
+	/* Index Example Format for CCTL Index Type Operation for 64bit icache
+	 * same with 32bit i/dcache(from Roger email) */
+	xlen = riscv_xlen(target);
+	word_size = xlen / 8;
+	word_num = line_size / word_size;
+
+	ra = 0;
+	ra = set_field(ra, L2C_CCTL_ACC_TGT_SET, idx);
+	ra = set_field(ra, L2C_CCTL_ACC_TGT_RAMID, 0);
+	ra = set_field(ra, L2C_CCTL_ACC_TGT_WAY, way);
+
+	/* Write TGT-type address (RAMID=0x0) */
+	ndsv5_l2c_set_reg(target, L2C_M0_CCTL_ACC, ra);
+
+	/* Issue L2_TGT_READ command */
+	ndsv5_l2c_set_reg(target, L2C_M0_CCTL_CMD,
+			set_field(0, L2C_CCTL_CMD, L2C_CCTL_CMD_L2_TGT_READ));
+
+	/* Read TAG */
+	ndsv5_l2c_get_reg(target, L2C_TGT_DATA_0, &tag);
+
+	ces[0].valid = (uint8_t)((tag >> tag_dw) & 0x1);
+	ces[0].dirty = (uint8_t)((tag >> (tag_dw+1)) & 0x1);
+	ces[0].pa = ((tag & maskTAG) << shift_bit) | (idx << line_bits);
+
+	/* Read cache line */
+	ra = set_field(ra, L2C_CCTL_ACC_TGT_RAMID, 1);
+
+	/* Write TGT-type address (RAMID=0x1) */
+	ndsv5_l2c_set_reg(target, L2C_M0_CCTL_ACC, ra);
+
+	/* Issue L2_TGT_READ command */
+	ndsv5_l2c_set_reg(target, L2C_M0_CCTL_CMD,
+			set_field(0, L2C_CCTL_CMD, L2C_CCTL_CMD_L2_TGT_READ));
+
+	for (i = 0; i < word_num; i++) {
+		/* Read TGTDATA0 + offset */
+		ndsv5_l2c_get_reg(target,
+				(L2C_TGT_DATA_0 + i * word_size),
+				&ces[0].cacheline[i]);
+
+		LOG_DEBUG("\tTGT_DATA: 0x%llx", ces[0].cacheline[i]);
+	}
+
+	char *fmt_str = " %8llx";
+	char *fmt_str2 = "%8s %4s %4s %1s %1s";
+	if (xlen == 64) {
+		fmt_str = " %16llx";
+		fmt_str2 = "%16s %4s %4s %1s %1s";
+	}
+
+	NDS32_LOG_LF("Dump L2\n");
+	NDS32_LOG_LF(fmt_str2, "ADDRESS", "SET", "WAY", "V", "D");
+	for (i = 0; i < word_num; i++)
+		NDS32_LOG_LF(fmt_str, (i * word_size));
+	NDS32_LOG_LF("\n");
+
+	LOG_INFO("Dump L2\n");
+	LOG_INFO(fmt_str2, "ADDRESS", "SET", "WAY", "V", "D");
+	for (i = 0; i < word_num; i++)
+		LOG_INFO(fmt_str, (i * word_size));
+	LOG_INFO("\n");
+
+	char *fmt_str1 = "%08llx ";
+	char *fmt_str3 = "%08llx %04llx %04llx %01x %01x ";
+	if (xlen == 64) {
+		fmt_str1 = "%016llx ";
+		fmt_str3 = "%016llx %04llx %04llx %01x %01x ";
+	}
+
+	NDS32_LOG_LF(fmt_str3, ces[0].pa, idx, way, ces[0].valid, ces[0].dirty);
+	LOG_INFO(fmt_str3, ces[0].pa, idx, way, ces[0].valid, ces[0].dirty);
+	for (i = 0; i < word_num; i++) {
+		NDS32_LOG_LF(fmt_str1, ces[0].cacheline[i]);
+		LOG_INFO(fmt_str1, ces[0].cacheline[i]);
+	}
+	NDS32_LOG_LF("\n");
+	LOG_INFO("\n");
+
+	return ERROR_OK;
+}
+
 int ndsv5_query_l2cache_config(struct target *target)
 {
 	LOG_DEBUG("Query L2 Cache config");
@@ -1907,6 +2055,102 @@ int ndsv5_query_l2cache_config(struct target *target)
 
 	LOG_DEBUG("L2C sets: %lld, ways: %lld, size: %lld KB ", sets, ways, size);
 	LOG_INFO("%lld %lld %lld", sets, ways, size);
+
+	return ERROR_OK;
+}
+
+int nds_register_read_direct(struct target *target, uint64_t *value, uint32_t number);
+int nds_register_write_direct(struct target *target, unsigned number, uint64_t value);
+int ndsv5_l2cache_wb_invalidate(struct target *target)
+{
+	LOG_DEBUG("writeback and invalidate all L2 Cache");
+
+	riscv_select_current_hart(target);
+
+	int result;
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	struct nds32_v5_cache *cache;
+	uint64_t sets, ways, line_size, size;
+	uint64_t s0, s1, a0, a1, t0, t1, t2;
+	static uint64_t l2c_config = (uint64_t)-1;
+
+	if (l2c_config == (uint64_t)-1) {
+		if (ndsv5_check_l2cache_exist(target, &l2c_config) != ERROR_OK)
+			return ERROR_FAIL;
+	}
+
+	ways = L2C_WAYS;
+	size = get_field(l2c_config, L2C_CONFIG_SIZE);
+	cache = &nds32->memory.dcache;
+	line_size = cache->line_size;		/* L2 and L1 has the same cache line size */
+
+	sets = (size * 128 * 1024) / line_size / ways;
+	LOG_DEBUG("L2C sets: %lld, ways: %lld, line size: %lld", sets, ways, line_size);
+
+	/* backup register value */
+	if (nds_register_read_direct(target, &s0, GDB_REGNO_S0) != ERROR_OK)
+		return ERROR_FAIL;
+	if (nds_register_read_direct(target, &s1, GDB_REGNO_S1) != ERROR_OK)
+		return ERROR_FAIL;
+	if (nds_register_read_direct(target, &a0, GDB_REGNO_A0) != ERROR_OK)
+		return ERROR_FAIL;
+	if (nds_register_read_direct(target, &a1, GDB_REGNO_A1) != ERROR_OK)
+		return ERROR_FAIL;
+	if (nds_register_read_direct(target, &t0, GDB_REGNO_T0) != ERROR_OK)
+		return ERROR_FAIL;
+	if (nds_register_read_direct(target, &t1, GDB_REGNO_T1) != ERROR_OK)
+		return ERROR_FAIL;
+	if (nds_register_read_direct(target, &t2, GDB_REGNO_T2) != ERROR_OK)
+		return ERROR_FAIL;
+
+	struct riscv_program program;
+	riscv_program_init(&program, target);
+
+	/* s0: total cache line number */
+	if (nds_register_write_direct(target, GDB_REGNO_S0, sets * ways) != ERROR_OK)
+		return ERROR_FAIL;
+	if (nds_register_write_direct(target, GDB_REGNO_S1, 0) != ERROR_OK)
+		return ERROR_FAIL;
+	if (nds_register_write_direct(target, GDB_REGNO_A1, L2C_BASE) != ERROR_OK)
+		return ERROR_FAIL;
+	if (nds_register_write_direct(target, GDB_REGNO_T0, 0) != ERROR_OK)
+		return ERROR_FAIL;
+	if (nds_register_write_direct(target, GDB_REGNO_T1, (1 << L2C_CCTL_ACC_TGT_WAY_OFFSET)) != ERROR_OK)
+		return ERROR_FAIL;
+	if (nds_register_write_direct(target, GDB_REGNO_T2, L2C_CCTL_CMD_L2_IX_WBINVAL) != ERROR_OK)
+		return ERROR_FAIL;
+
+	/* from (sets*ways-1)~0 execute L2_IX_WBINVAL command */
+	riscv_program_insert(&program, c_addi(GDB_REGNO_S0, -1) | (c_mv(GDB_REGNO_A0, GDB_REGNO_S0) << 16));
+	riscv_program_insert(&program, c_srli(GDB_REGNO_A0, 0x4) | (c_slli(GDB_REGNO_A0, 0x5) << 16));
+	riscv_program_insert(&program, or_r(GDB_REGNO_S1, GDB_REGNO_A0, GDB_REGNO_T0));
+	riscv_program_insert(&program, sw(GDB_REGNO_S1, GDB_REGNO_A1, 0x48));
+	riscv_program_insert(&program, sw(GDB_REGNO_T2, GDB_REGNO_A1, 0x40));
+	riscv_program_insert(&program, add(GDB_REGNO_T0, GDB_REGNO_T1, GDB_REGNO_T0));
+	riscv_program_insert(&program, bne(GDB_REGNO_S0, GDB_REGNO_ZERO, -24));
+
+	result = riscv_program_exec(&program, target);
+
+	/* restore register value */
+	if (nds_register_write_direct(target, GDB_REGNO_S0, s0) != ERROR_OK)
+		return ERROR_FAIL;
+	if (nds_register_write_direct(target, GDB_REGNO_S1, s1) != ERROR_OK)
+		return ERROR_FAIL;
+	if (nds_register_write_direct(target, GDB_REGNO_A0, a0) != ERROR_OK)
+		return ERROR_FAIL;
+	if (nds_register_write_direct(target, GDB_REGNO_A1, a1) != ERROR_OK)
+		return ERROR_FAIL;
+	if (nds_register_write_direct(target, GDB_REGNO_T0, t0) != ERROR_OK)
+		return ERROR_FAIL;
+	if (nds_register_write_direct(target, GDB_REGNO_T1, t1) != ERROR_OK)
+		return ERROR_FAIL;
+	if (nds_register_write_direct(target, GDB_REGNO_T2, t2) != ERROR_OK)
+		return ERROR_FAIL;
+
+	if (result != ERROR_OK) {
+		LOG_DEBUG("l2c writeback and invalidate all program buffer execute failed");
+		return ERROR_FAIL;
+	}
 
 	return ERROR_OK;
 }

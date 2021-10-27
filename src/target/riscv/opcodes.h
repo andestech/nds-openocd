@@ -357,6 +357,62 @@ static uint32_t vslide1down_vx(unsigned int vd, unsigned int vs2,
 		MATCH_VSLIDE1DOWN_VX;
 }
 
+static uint16_t c_addi(unsigned int dest, uint32_t imm) __attribute__ ((unused));
+static uint16_t c_addi(unsigned int dest, uint32_t imm)
+{
+	return (bits(imm, 4, 0) << 2) |
+		(dest << 7) |
+		(bit(imm, 5) << 12) |
+		MATCH_C_ADDI;
+}
+
+static uint16_t c_mv(unsigned int dest, unsigned int src) __attribute__ ((unused));
+static uint16_t c_mv(unsigned int dest, unsigned int src)
+{
+	return (src << 2) |
+		(dest << 7) |
+		MATCH_C_MV;
+}
+
+static uint16_t c_srli(unsigned int dest, uint8_t shamt) __attribute__ ((unused));
+static uint16_t c_srli(unsigned int dest, uint8_t shamt)
+{
+	return (bits(shamt, 4, 0) << 2) |
+		(dest << 7) |
+		(bit(shamt, 5) << 12) |
+		MATCH_C_SRLI;
+}
+
+static uint16_t c_slli(unsigned int dest, uint8_t shamt) __attribute__ ((unused));
+static uint16_t c_slli(unsigned int dest, uint8_t shamt)
+{
+	return (bits(shamt, 4, 0) << 2) |
+		(dest << 7) |
+		(bit(shamt, 5) << 12) |
+		MATCH_C_SLLI;
+}
+
+static uint32_t add(unsigned int dest, unsigned int src1, unsigned int src2) __attribute__ ((unused));
+static uint32_t add(unsigned int dest, unsigned int src1, unsigned int src2)
+{
+	return (src2 << 20) |
+		(src1 << 15) |
+		(dest << 7) |
+		MATCH_ADD;
+}
+
+static uint32_t bne(unsigned int src1, unsigned int src2, uint32_t imm) __attribute__ ((unused));
+static uint32_t bne(unsigned int src1, unsigned int src2, uint32_t imm)
+{
+	return (src2 << 20) |
+		(src1 << 15) |
+		(bit(imm, 12) << 31) |
+		(bits(imm, 10, 5) << 25) |
+		(bits(imm, 4, 1) << 8) |
+		(bit(imm, 11) << 7) |
+		MATCH_BNE;
+}
+
 #if _NDS_V5_ONLY_
 static uint32_t slli(unsigned int dest, unsigned int src, uint8_t shamt) __attribute__ ((unused));
 static uint32_t slli(unsigned int dest, unsigned int src, uint8_t shamt)
