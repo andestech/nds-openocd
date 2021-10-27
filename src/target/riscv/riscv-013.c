@@ -1665,6 +1665,18 @@ static int register_read_direct(struct target *target, uint64_t *value, uint32_t
 	return result;
 }
 
+#if _NDS_V5_ONLY_
+int nds_register_read_direct(struct target *target, uint64_t *value, uint32_t number)
+{
+	return register_read_direct(target, value, number);
+}
+
+int nds_register_write_direct(struct target *target, unsigned number, uint64_t value)
+{
+	return register_write_direct(target, number, value);
+}
+#endif
+
 static int wait_for_authbusy(struct target *target, uint32_t *dmstatus)
 {
 	time_t start = time(NULL);

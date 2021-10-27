@@ -1561,6 +1561,7 @@ int ndsv5_dump_cache_va(struct target *target, unsigned int cache_type, uint64_t
 #define L2C_CCTL_CMD_OFFSET             (0)
 #define L2C_CCTL_CMD			(0x1FU << L2C_CCTL_CMD_OFFSET)
 
+#define L2C_CCTL_CMD_L2_IX_WBINVAL	(0x2)
 #define L2C_CCTL_CMD_L2_TGT_READ	(0x11)
 #define L2C_CCTL_CMD_L2_WBINVAL_ALL	(0x12)	/* Cache flush */
 
@@ -1906,6 +1907,102 @@ int ndsv5_query_l2cache_config(struct target *target)
 
 	LOG_DEBUG("L2C sets: %lu, ways: %lu, size: %lu KB ", sets, ways, size);
 	LOG_INFO("%lu %lu %lu", sets, ways, size);
+
+	return ERROR_OK;
+}
+
+int nds_register_read_direct(struct target *target, uint64_t *value, uint32_t number);
+int nds_register_write_direct(struct target *target, unsigned number, uint64_t value);
+int ndsv5_l2cache_wb_invalidate(struct target *target)
+{
+	LOG_DEBUG("writeback and invalidate all L2 Cache");
+
+	riscv_select_current_hart(target);
+
+	int result;
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	struct nds32_v5_cache *cache;
+	uint64_t sets, ways, line_size, size;
+	uint64_t s0, s1, a0, a1, t0, t1, t2;
+	static uint64_t l2c_config = (uint64_t)-1;
+
+	if (l2c_config == (uint64_t)-1) {
+		if (ndsv5_check_l2cache_exist(target, &l2c_config) != ERROR_OK)
+			return ERROR_FAIL;
+	}
+
+	ways = L2C_WAYS;
+	size = get_field(l2c_config, L2C_CONFIG_SIZE);
+	cache = &nds32->memory.dcache;
+	line_size = cache->line_size;		/* L2 and L1 has the same cache line size */
+
+	sets = (size * 128 * 1024) / line_size / ways;
+	LOG_DEBUG("L2C sets: %lu, ways: %lu, line size: %lu", sets, ways, line_size);
+
+	/* backup register value */
+	if (nds_register_read_direct(target, &s0, GDB_REGNO_S0) != ERROR_OK)
+		return ERROR_FAIL;
+	if (nds_register_read_direct(target, &s1, GDB_REGNO_S1) != ERROR_OK)
+		return ERROR_FAIL;
+	if (nds_register_read_direct(target, &a0, GDB_REGNO_A0) != ERROR_OK)
+		return ERROR_FAIL;
+	if (nds_register_read_direct(target, &a1, GDB_REGNO_A1) != ERROR_OK)
+		return ERROR_FAIL;
+	if (nds_register_read_direct(target, &t0, GDB_REGNO_T0) != ERROR_OK)
+		return ERROR_FAIL;
+	if (nds_register_read_direct(target, &t1, GDB_REGNO_T1) != ERROR_OK)
+		return ERROR_FAIL;
+	if (nds_register_read_direct(target, &t2, GDB_REGNO_T2) != ERROR_OK)
+		return ERROR_FAIL;
+
+	struct riscv_program program;
+	riscv_program_init(&program, target);
+
+	/* s0: total cache line number */
+	if (nds_register_write_direct(target, GDB_REGNO_S0, sets * ways) != ERROR_OK)
+		return ERROR_FAIL;
+	if (nds_register_write_direct(target, GDB_REGNO_S1, 0) != ERROR_OK)
+		return ERROR_FAIL;
+	if (nds_register_write_direct(target, GDB_REGNO_A1, L2C_BASE) != ERROR_OK)
+		return ERROR_FAIL;
+	if (nds_register_write_direct(target, GDB_REGNO_T0, 0) != ERROR_OK)
+		return ERROR_FAIL;
+	if (nds_register_write_direct(target, GDB_REGNO_T1, (1 << L2C_CCTL_ACC_TGT_WAY_OFFSET)) != ERROR_OK)
+		return ERROR_FAIL;
+	if (nds_register_write_direct(target, GDB_REGNO_T2, L2C_CCTL_CMD_L2_IX_WBINVAL) != ERROR_OK)
+		return ERROR_FAIL;
+
+	/* from (sets*ways-1)~0 execute L2_IX_WBINVAL command */
+	riscv_program_insert(&program, c_addi(GDB_REGNO_S0, -1) | (c_mv(GDB_REGNO_A0, GDB_REGNO_S0) << 16));
+	riscv_program_insert(&program, c_srli(GDB_REGNO_A0, 0x4) | (c_slli(GDB_REGNO_A0, 0x5) << 16));
+	riscv_program_insert(&program, or_r(GDB_REGNO_S1, GDB_REGNO_A0, GDB_REGNO_T0));
+	riscv_program_insert(&program, sw(GDB_REGNO_S1, GDB_REGNO_A1, 0x48));
+	riscv_program_insert(&program, sw(GDB_REGNO_T2, GDB_REGNO_A1, 0x40));
+	riscv_program_insert(&program, add(GDB_REGNO_T0, GDB_REGNO_T1, GDB_REGNO_T0));
+	riscv_program_insert(&program, bne(GDB_REGNO_S0, GDB_REGNO_ZERO, -24));
+
+	result = riscv_program_exec(&program, target);
+
+	/* restore register value */
+	if (nds_register_write_direct(target, GDB_REGNO_S0, s0) != ERROR_OK)
+		return ERROR_FAIL;
+	if (nds_register_write_direct(target, GDB_REGNO_S1, s1) != ERROR_OK)
+		return ERROR_FAIL;
+	if (nds_register_write_direct(target, GDB_REGNO_A0, a0) != ERROR_OK)
+		return ERROR_FAIL;
+	if (nds_register_write_direct(target, GDB_REGNO_A1, a1) != ERROR_OK)
+		return ERROR_FAIL;
+	if (nds_register_write_direct(target, GDB_REGNO_T0, t0) != ERROR_OK)
+		return ERROR_FAIL;
+	if (nds_register_write_direct(target, GDB_REGNO_T1, t1) != ERROR_OK)
+		return ERROR_FAIL;
+	if (nds_register_write_direct(target, GDB_REGNO_T2, t2) != ERROR_OK)
+		return ERROR_FAIL;
+
+	if (result != ERROR_OK) {
+		LOG_DEBUG("l2c writeback and invalidate all program buffer execute failed");
+		return ERROR_FAIL;
+	}
 
 	return ERROR_OK;
 }

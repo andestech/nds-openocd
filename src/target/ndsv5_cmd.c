@@ -762,6 +762,13 @@ COMMAND_HANDLER(ndsv5_handle_l2c_command)
 				command_print(CMD, "Usage: query config");
 				return ERROR_FAIL;
 			}
+		} else if (strcmp(CMD_ARGV[0], "writeback_invalidate") == 0) {
+			if (ndsv5_l2c_support == 0) {
+				command_print(CMD, "%s: No L2 cache", target_name(target));
+				return ERROR_OK;
+			}
+
+			return ndsv5_l2cache_wb_invalidate(target);
 		} else {
 			LOG_ERROR("No valid paramerter");
 			command_print(CMD, "%s: No valid parameter", target_name(target));
