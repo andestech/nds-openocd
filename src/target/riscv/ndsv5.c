@@ -1882,6 +1882,152 @@ int ndsv5_dump_l2cache_va(struct target *target, uint64_t va)
 	return ERROR_OK;
 }
 
+/* only for IDE: print one header + one way */
+int ndsv5_dump_l2cache_va_way(struct target *target, uint64_t va, uint64_t way)
+{
+	LOG_DEBUG("Dump L2 Cache va=0x%lx, cache line number=%lu", va, way);
+	if (way >= L2C_WAYS) {
+		LOG_ERROR("the number of L2 Cache line must between 0 ~ %d", L2C_WAYS - 1);
+		return ERROR_FAIL;
+	}
+	riscv_select_current_hart(target);
+
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	uint64_t idx, ra, tag, i, maskTAG;
+	uint64_t sets, ways, line_size, line_bits, set_bits;
+	uint64_t word_num, word_size;
+	struct nds32_v5_cache *cache;
+	struct cache_element ces[1];
+	uint64_t xlen, shift_bit, tag_dw;
+	static uint64_t palen = (uint64_t)-1;
+	static uint64_t l2c_config = (uint64_t)-1;
+
+	if (l2c_config == (uint64_t)-1) {
+		if (ndsv5_check_l2cache_exist(target, &l2c_config) != ERROR_OK)
+			return ERROR_FAIL;
+	}
+	int size = get_field(l2c_config, L2C_CONFIG_SIZE);
+	LOG_DEBUG("L2C size: %d KB", size*128);
+
+	/* Init L1 to get info */
+	cache = &nds32->memory.dcache;
+
+	ways = L2C_WAYS;			/* The L2 cache implements a 16-way set-associative design */
+	line_size = cache->line_size;		/* L2 and L1 has the same cache line size */
+	line_bits = cache->log2_line_size;
+
+	/* Read sets */
+	sets = (size * 128 * 1024) / line_size / ways;
+	int tmp_sets = sets;
+	set_bits = 0;
+	while (tmp_sets > 1) {
+		tmp_sets >>= 1;
+		set_bits++;
+	}
+	LOG_DEBUG("L2C sets: %lu", sets);
+
+	/* Get palen (Only get it once) */
+	if (palen == (uint64_t)-1) {
+		if (ndsv5_get_palen(target, &palen) == ERROR_FAIL) {
+			LOG_ERROR("Unable get palen");
+			return ERROR_FAIL;
+		}
+	}
+	LOG_DEBUG("L2 Palen = %lu", palen);
+	tag_dw = palen - set_bits - line_bits;
+	maskTAG = (1ULL << tag_dw) - 1;
+
+	uint64_t pa = va;
+	ndsv5_get_physical_address(target, va, &pa);
+	LOG_DEBUG("physical address:0x%lx", pa);
+
+	/* dcache use pa to index */
+	idx = (pa & (((1ULL << set_bits) - 1) << line_bits)) >> line_bits;
+	LOG_DEBUG("Way:%lu, Set:%lu, Line Size:%lu, idx:%lx", ways, sets, line_size, idx);
+	shift_bit = set_bits + line_bits;
+
+	/* Index Example Format for CCTL Index Type Operation for 64bit icache
+	 * same with 32bit i/dcache(from Roger email) */
+	xlen = riscv_xlen(target);
+	word_size = xlen / 8;
+	word_num = line_size / word_size;
+
+	ra = 0;
+	ra = set_field(ra, L2C_CCTL_ACC_TGT_SET, idx);
+	ra = set_field(ra, L2C_CCTL_ACC_TGT_RAMID, 0);
+	ra = set_field(ra, L2C_CCTL_ACC_TGT_WAY, way);
+
+	/* Write TGT-type address (RAMID=0x0) */
+	ndsv5_l2c_set_reg(target, L2C_M0_CCTL_ACC, ra);
+
+	/* Issue L2_TGT_READ command */
+	ndsv5_l2c_set_reg(target, L2C_M0_CCTL_CMD,
+			set_field(0, L2C_CCTL_CMD, L2C_CCTL_CMD_L2_TGT_READ));
+
+	/* Read TAG */
+	ndsv5_l2c_get_reg(target, L2C_TGT_DATA_0, &tag);
+
+	ces[0].valid = (uint8_t)((tag >> tag_dw) & 0x1);
+	ces[0].dirty = (uint8_t)((tag >> (tag_dw+1)) & 0x1);
+	ces[0].pa = ((tag & maskTAG) << shift_bit) | (idx << line_bits);
+
+	/* Read cache line */
+	ra = set_field(ra, L2C_CCTL_ACC_TGT_RAMID, 1);
+
+	/* Write TGT-type address (RAMID=0x1) */
+	ndsv5_l2c_set_reg(target, L2C_M0_CCTL_ACC, ra);
+
+	/* Issue L2_TGT_READ command */
+	ndsv5_l2c_set_reg(target, L2C_M0_CCTL_CMD,
+			set_field(0, L2C_CCTL_CMD, L2C_CCTL_CMD_L2_TGT_READ));
+
+	for (i = 0; i < word_num; i++) {
+		/* Read TGTDATA0 + offset */
+		ndsv5_l2c_get_reg(target,
+				(L2C_TGT_DATA_0 + i * word_size),
+				&ces[0].cacheline[i]);
+
+		LOG_DEBUG("\tTGT_DATA: 0x%lx", ces[0].cacheline[i]);
+	}
+
+	char *fmt_str = " %8llx";
+	char *fmt_str2 = "%8s %4s %4s %1s %1s";
+	if (xlen == 64) {
+		fmt_str = " %16llx";
+		fmt_str2 = "%16s %4s %4s %1s %1s";
+	}
+
+	NDS32_LOG_LF("Dump L2\n");
+	NDS32_LOG_LF(fmt_str2, "ADDRESS", "SET", "WAY", "V", "D");
+	for (i = 0; i < word_num; i++)
+		NDS32_LOG_LF(fmt_str, (i * word_size));
+	NDS32_LOG_LF("\n");
+
+	LOG_INFO("Dump L2\n");
+	LOG_INFO(fmt_str2, "ADDRESS", "SET", "WAY", "V", "D");
+	for (i = 0; i < word_num; i++)
+		LOG_INFO(fmt_str, (i * word_size));
+	LOG_INFO("\n");
+
+	char *fmt_str1 = "%08llx ";
+	char *fmt_str3 = "%08llx %04llx %04llx %01x %01x ";
+	if (xlen == 64) {
+		fmt_str1 = "%016llx ";
+		fmt_str3 = "%016llx %04llx %04llx %01x %01x ";
+	}
+
+	NDS32_LOG_LF(fmt_str3, ces[0].pa, idx, way, ces[0].valid, ces[0].dirty);
+	LOG_INFO(fmt_str3, ces[0].pa, idx, way, ces[0].valid, ces[0].dirty);
+	for (i = 0; i < word_num; i++) {
+		NDS32_LOG_LF(fmt_str1, ces[0].cacheline[i]);
+		LOG_INFO(fmt_str1, ces[0].cacheline[i]);
+	}
+	NDS32_LOG_LF("\n");
+	LOG_INFO("\n");
+
+	return ERROR_OK;
+}
+
 int ndsv5_query_l2cache_config(struct target *target)
 {
 	LOG_DEBUG("Query L2 Cache config");
