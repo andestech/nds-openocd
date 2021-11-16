@@ -1612,14 +1612,16 @@ static int ndsv5_l2c_status_idle(struct target *target)
 	}
 }
 
-static int ndsv5_l2c_get_reg(struct target *target, uint64_t addr, uint64_t *data)
+static int ndsv5_l2c_get_reg(struct target *target, uint64_t addr, uint64_t *data, uint64_t size)
 {
 	ndsv5_l2c_status_idle(target);
 
-	if (target_read_memory(target, addr, 8, 1, (uint8_t *)data) != ERROR_OK) {
+	if (target_read_memory(target, addr, size, 1, (uint8_t *)data) != ERROR_OK) {
 		LOG_ERROR("Unable to read L2C reg 0x%llx", addr);
 		return ERROR_FAIL;
 	}
+	if (size == 4)
+		*data =  *data & 0xffffffff;
 	LOG_DEBUG("L2C get reg 0x%llx data 0x%llx", addr, *data);
 
 	return ERROR_OK;
@@ -1715,7 +1717,7 @@ int ndsv5_check_l2cache_exist(struct target *target, uint64_t *config)
 
 	/* Get & Check version */
 	if (l2c_config == (uint64_t)-1) {
-		ndsv5_l2c_get_reg(target, L2C_CONFIG, &l2c_config);
+		ndsv5_l2c_get_reg(target, L2C_CONFIG, &l2c_config, 8);
 		if (ndsv5_init_cache(target) != ERROR_OK) {
 			ndsv5_l2c_support = 0;
 			LOG_ERROR("Unable to init L1 cache, unsupport L2C!");
@@ -1818,7 +1820,7 @@ int ndsv5_dump_l2cache_va(struct target *target, uint64_t va)
 				set_field(0, L2C_CCTL_CMD, L2C_CCTL_CMD_L2_TGT_READ));
 
 		/* Read TAG */
-		ndsv5_l2c_get_reg(target, L2C_TGT_DATA_0, &tag);
+		ndsv5_l2c_get_reg(target, L2C_TGT_DATA_0, &tag, 8);
 
 		ces[way].valid = (uint8_t)((tag >> tag_dw) & 0x1);
 		ces[way].dirty = (uint8_t)((tag >> (tag_dw+1)) & 0x1);
@@ -1838,7 +1840,7 @@ int ndsv5_dump_l2cache_va(struct target *target, uint64_t va)
 			/* Read TGTDATA0 + offset */
 			ndsv5_l2c_get_reg(target,
 					(L2C_TGT_DATA_0 + i * word_size),
-					&ces[way].cacheline[i]);
+					&ces[way].cacheline[i], word_size);
 
 			LOG_DEBUG("\tTGT_DATA: 0x%llx", ces[way].cacheline[i]);
 		}
@@ -1967,7 +1969,7 @@ int ndsv5_dump_l2cache_va_way(struct target *target, uint64_t va, uint64_t way)
 			set_field(0, L2C_CCTL_CMD, L2C_CCTL_CMD_L2_TGT_READ));
 
 	/* Read TAG */
-	ndsv5_l2c_get_reg(target, L2C_TGT_DATA_0, &tag);
+	ndsv5_l2c_get_reg(target, L2C_TGT_DATA_0, &tag, 8);
 
 	ces[0].valid = (uint8_t)((tag >> tag_dw) & 0x1);
 	ces[0].dirty = (uint8_t)((tag >> (tag_dw+1)) & 0x1);
@@ -1987,7 +1989,7 @@ int ndsv5_dump_l2cache_va_way(struct target *target, uint64_t va, uint64_t way)
 		/* Read TGTDATA0 + offset */
 		ndsv5_l2c_get_reg(target,
 				(L2C_TGT_DATA_0 + i * word_size),
-				&ces[0].cacheline[i]);
+				&ces[0].cacheline[i], word_size);
 
 		LOG_DEBUG("\tTGT_DATA: 0x%llx", ces[0].cacheline[i]);
 	}
