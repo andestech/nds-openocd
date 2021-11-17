@@ -2124,7 +2124,7 @@ int ndsv5_l2cache_wb_invalidate(struct target *target)
 
 	/* from (sets*ways-1)~0 execute L2_IX_WBINVAL command */
 	riscv_program_insert(&program, c_addi(GDB_REGNO_S0, -1) | (c_mv(GDB_REGNO_A0, GDB_REGNO_S0) << 16));
-	riscv_program_insert(&program, c_srli(GDB_REGNO_A0, 0x4) | (c_slli(GDB_REGNO_A0, 0x5) << 16));
+	riscv_program_insert(&program, c_srli(GDB_REGNO_A0, 0x4) | (c_slli(GDB_REGNO_A0, 0x6) << 16));
 	riscv_program_insert(&program, or_r(GDB_REGNO_S1, GDB_REGNO_A0, GDB_REGNO_T0));
 	riscv_program_insert(&program, sw(GDB_REGNO_S1, GDB_REGNO_A1, 0x48));
 	riscv_program_insert(&program, sw(GDB_REGNO_T2, GDB_REGNO_A1, 0x40));
