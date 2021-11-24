@@ -4416,9 +4416,17 @@ static int riscv013_select_current_hart(struct target *target)
 #if _NDS_V5_ONLY_
 	LOG_DEBUG("[%s] r->current_hartid: %d", target->tap->dotted_name, r->current_hartid);
 	LOG_DEBUG("[%s] dm->current_hartid: %d", target->tap->dotted_name, dm->current_hartid);
-#endif
+
+	static struct jtag_tap *current_tap;
+	if (current_tap == target->tap) {
+		if (r->current_hartid == dm->current_hartid)
+			return ERROR_OK;
+	} else
+		current_tap = target->tap;
+#else
 	if (r->current_hartid == dm->current_hartid)
 		return ERROR_OK;
+#endif
 
 	uint32_t dmcontrol;
 	/* TODO: can't we just "dmcontrol = DMI_DMACTIVE"? */
