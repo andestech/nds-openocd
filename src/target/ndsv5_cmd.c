@@ -1895,19 +1895,19 @@ struct reg_arch_type ndsv5_reg_arch_type = {
 char gNDSVectorRegBuf[32][512/8];
 static int ndsv5_register_vector_get(struct reg *reg)
 {
-	/* //struct target *target = (struct target *) reg->arch_info; */
+	riscv_reg_info_t *reg_info = reg->arch_info;
+	struct target *target = reg_info->target;
+	LOG_DEBUG("Get vectore reg[%s] on [%s] hart %d", reg->name, target->tap->dotted_name, target->coreid);
+
 	char *pVectorData = (char *)&gNDSVectorRegBuf[reg->number - GDB_REGNO_V0][0];
 	for (unsigned i = 0; i < (reg->size/8); i++)
 		*pVectorData++ = 0xFF;
-
 
 	pVectorData = (char *)&gNDSVectorRegBuf[reg->number - GDB_REGNO_V0][0];
 	char *pRegValue = (char *)reg->value;
 	LOG_DEBUG("reg->number=%d, reg->size=%d ", reg->number, reg->size);
 
-	struct target *target = (struct target *) reg->arch_info;
 	ndsv5_get_vector_register(target, reg->number, pVectorData);
-
 	for (unsigned i = 0; i < (reg->size/8); i++) {
 		LOG_DEBUG("*pVectorData = 0x%x ", *pVectorData);
 		*pRegValue++ = *pVectorData++;
@@ -1917,7 +1917,9 @@ static int ndsv5_register_vector_get(struct reg *reg)
 
 static int ndsv5_register_vector_set(struct reg *reg, uint8_t *buf)
 {
-	/* //struct target *target = (struct target *) reg->arch_info; */
+	riscv_reg_info_t *reg_info = reg->arch_info;
+	struct target *target = reg_info->target;
+	LOG_DEBUG("Set vectore reg[%s] on [%s] hart %d", reg->name, target->tap->dotted_name, target->coreid);
 	char *pVectorData = (char *)&gNDSVectorRegBuf[reg->number - GDB_REGNO_V0][0];
 	char *pRegValue = (char *)reg->value;
 	char *pSrc = (char *)buf;
@@ -1935,7 +1937,6 @@ static int ndsv5_register_vector_set(struct reg *reg, uint8_t *buf)
 	}
 
 	pVectorData = (char *)&gNDSVectorRegBuf[reg->number - GDB_REGNO_V0][0];
-	struct target *target = (struct target *) reg->arch_info;
 	ndsv5_set_vector_register(target, reg->number, pVectorData);
 
 	return ERROR_OK;

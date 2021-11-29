@@ -6914,7 +6914,8 @@ int nds_ace_enable(struct target *target)
 
 int nds_ace_get_reg(struct reg *reg)
 {
-	struct target *target = (struct target *) reg->arch_info;
+	riscv_reg_info_t *reg_info = reg->arch_info;
+	struct target *target = reg_info->target;
 	bool is_rv64 = (64 == riscv_xlen(target)) ? true : false;
 	uint32_t reg_bytes = is_rv64 ? 8ul : 4ul;
 
@@ -7037,7 +7038,8 @@ int nds_ace_get_reg(struct reg *reg)
 int nds_ace_set_reg(struct reg *reg, unsigned char *val)
 {
 	int exec_out;
-	struct target *target = (struct target *) reg->arch_info;
+	riscv_reg_info_t *reg_info = reg->arch_info;
+	struct target *target = reg_info->target;
 	bool is_rv64 = (64 == riscv_xlen(target)) ? true : false;
 	uint32_t reg_bytes = is_rv64 ? 8ul : 4ul;
 
