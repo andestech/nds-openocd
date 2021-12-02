@@ -776,7 +776,7 @@ AC_DEFINE([_NDS32_ONLY_],[1], [nds32 only])
 AC_DEFINE([_NDS_V5_ONLY_],[1], [ndsv5 only])
 
 # set default gcc warnings
-GCC_WARNINGS="-Wall -Wstrict-prototypes -Wformat-security -Wshadow"
+GCC_WARNINGS="-Wall -Wstrict-prototypes -Wformat-security -Wshadow -fcommon"
 AS_IF([test "x${gcc_wextra}" = "xyes"], [
   GCC_WARNINGS="${GCC_WARNINGS} -Wextra -Wno-unused-parameter"
   GCC_WARNINGS="${GCC_WARNINGS} -Wbad-function-cast"
