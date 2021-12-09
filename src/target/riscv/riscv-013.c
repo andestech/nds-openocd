@@ -761,6 +761,9 @@ int dmstatus_read_timeout(struct target *target, uint32_t *dmstatus,
 				"%d (dmstatus=0x%x). This error might be caused by a JTAG "
 				"signal issue. Try reducing the JTAG clock speed.",
 				get_field(*dmstatus, DM_DMSTATUS_VERSION), *dmstatus);
+#if _NDS_V5_ONLY_
+		assert(0);
+#endif /* _NDS_V5_ONLY_ */
 	} else if (authenticated && !get_field(*dmstatus, DM_DMSTATUS_AUTHENTICATED)) {
 		LOG_ERROR("Debugger is not authenticated to target Debug Module. "
 				"(dmstatus=0x%x). Use `riscv authdata_read` and "
