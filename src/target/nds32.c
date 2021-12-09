@@ -1584,7 +1584,10 @@ int nds32_arch_state(struct target *target)
 
 	/* save pc value to pseudo register pc */
 	struct reg *reg = register_get_by_name(target->reg_cache, "pc", 1);
-	buf_set_u32(reg->value, 0, 32, value_pc);
+	if (reg)
+		buf_set_u32(reg->value, 0, 32, value_pc);
+	else
+		LOG_DEBUG("pc not exist!");
 
 	return ERROR_OK;
 }

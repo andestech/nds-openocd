@@ -50,7 +50,7 @@ extern uint32_t aice_default_use_sdm;
 extern int nds_sdm_idcode_scan(struct jtag_tap *tap, uint8_t *idcode_buffer, uint32_t max_count);
 extern char *custom_initial_script;
 extern char *custom_restart_script;
-extern FILE *nds_script_custom_initial;
+extern char *ndsv5_script_custom_initial;
 #endif
 
 /** The number of JTAG queue flushes (for profiling and debugging purposes). */
@@ -971,7 +971,7 @@ static bool jtag_examine_chain_check(uint8_t *idcodes, unsigned count)
 		if (nds_scan_retry_times == 0) {
 			if ((custom_initial_script != NULL) ||
 			    (custom_restart_script != NULL) ||
-			    (nds_script_custom_initial != NULL)) {
+			    (ndsv5_script_custom_initial != NULL)) {
 				fprintf(stderr, "<-- JTAG scan chain interrogation failed: all %s -->\n",
 						(zero_check == 0x00) ? "zeroes" : "ones");
 				fprintf(stderr, "<-- Check JTAG interface, timings, target power, etc. -->\n");

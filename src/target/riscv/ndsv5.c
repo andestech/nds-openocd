@@ -245,11 +245,12 @@ extern struct jtag_interface *jtag_interface;
 int ndsv5_examine(struct target *target)
 {
 	LOG_DEBUG("%s", __func__);
-	if (nds_script_custom_initial != NULL) {
+	if (ndsv5_script_custom_initial != NULL) {
 		LOG_DEBUG("doing custom_initial_script...");
-		if (ndsv5_script_do_custom_reset(target, nds_script_custom_initial) != ERROR_OK)
+		if (ndsv5_script_do_custom_reset(target, ndsv5_script_custom_initial) != ERROR_OK)
 			return ERROR_FAIL;
-		nds_script_custom_initial = NULL;
+		free(ndsv5_script_custom_initial);
+		ndsv5_script_custom_initial = NULL;
 		LOG_DEBUG("custom_initial_script finish");
 	}
 

@@ -53,10 +53,6 @@ FILE *nds_script_reg_set;
 FILE *nds_script_dmi_read;
 FILE *nds_script_dmi_write;
 
-FILE *nds_script_custom_reset;
-FILE *nds_script_custom_reset_halt;
-FILE *nds_script_custom_initial;
-
 uint64_t ndsv5_reg_misa_value;
 uint32_t ndsv5_cur_script_status;
 uint32_t ndsv5_cur_reg_number;
@@ -543,36 +539,40 @@ __COMMAND_HANDLER(handle_ndsv5_configure_command)
 		CMD_CTX->current_target = use_target;
 		command_print(CMD, "configure: %s = 0x%08x", CMD_ARGV[0], nds_targetburn_targetnum);
 	} else if (strcmp(CMD_ARGV[0], "custom_srst_script") == 0) {
-		char *script_path;
 		if (CMD_ARGC > 1) {
-			script_path = strdup(CMD_ARGV[1]);
-			FILE *script_fd = fopen(script_path, "r");
-			nds_script_custom_reset = script_fd;
-			command_print(CMD, "configure: %s: %s", CMD_ARGV[0], script_path);
+			if (ndsv5_script_custom_reset) {
+				free(ndsv5_script_custom_reset);
+				ndsv5_script_custom_reset = NULL;
+			}
+			ndsv5_script_custom_reset = strdup(CMD_ARGV[1]);
+			command_print(CMD, "configure: %s: %s", CMD_ARGV[0], ndsv5_script_custom_reset);
 		}
 	} else if (strcmp(CMD_ARGV[0], "custom_trst_script") == 0) {
-		char *script_path;
 		if (CMD_ARGC > 1) {
-			script_path = strdup(CMD_ARGV[1]);
-			FILE *script_fd = fopen(script_path, "r");
-			nds_script_custom_reset = script_fd;
-			command_print(CMD, "configure: %s: %s", CMD_ARGV[0], script_path);
+			if (ndsv5_script_custom_reset) {
+				free(ndsv5_script_custom_reset);
+				ndsv5_script_custom_reset = NULL;
+			}
+			ndsv5_script_custom_reset = strdup(CMD_ARGV[1]);
+			command_print(CMD, "configure: %s: %s", CMD_ARGV[0], ndsv5_script_custom_reset);
 		}
 	} else if (strcmp(CMD_ARGV[0], "custom_restart_script") == 0) {
-		char *script_path;
 		if (CMD_ARGC > 1) {
-			script_path = strdup(CMD_ARGV[1]);
-			FILE *script_fd = fopen(script_path, "r");
-			nds_script_custom_reset_halt = script_fd;
-			command_print(CMD, "configure: %s: %s", CMD_ARGV[0], script_path);
+			if (ndsv5_script_custom_reset_halt) {
+				free(ndsv5_script_custom_reset_halt);
+				ndsv5_script_custom_reset_halt = NULL;
+			}
+			ndsv5_script_custom_reset_halt = strdup(CMD_ARGV[1]);
+			command_print(CMD, "configure: %s: %s", CMD_ARGV[0], ndsv5_script_custom_reset_halt);
 		}
 	} else if (strcmp(CMD_ARGV[0], "custom_initial_script") == 0) {
-		char *script_path;
 		if (CMD_ARGC > 1) {
-			script_path = strdup(CMD_ARGV[1]);
-			FILE *script_fd = fopen(script_path, "r");
-			nds_script_custom_initial = script_fd;
-			command_print(CMD, "configure: %s: %s", CMD_ARGV[0], script_path);
+			if (ndsv5_script_custom_initial) {
+				free(ndsv5_script_custom_initial);
+				ndsv5_script_custom_initial = NULL;
+			}
+			ndsv5_script_custom_initial = strdup(CMD_ARGV[1]);
+			command_print(CMD, "configure: %s: %s", CMD_ARGV[0], ndsv5_script_custom_initial);
 		}
 	} else if (strcmp(CMD_ARGV[0], "dmi_busy_retry_times") == 0) {
 		if (CMD_ARGC > 1)
@@ -1682,7 +1682,7 @@ int ndsv5_handle_resume(struct target *target)
 }
 
 #define MAX_SCRIPT_LENGTH 2100
-int ndsv5_script_do_custom_reset(struct target *target, FILE *script_fd)
+int ndsv5_script_do_custom_reset(struct target *target, const char *script)
 {
 	char line_buffer[MAX_SCRIPT_LENGTH];
 	struct command_context *cmd_ctx = global_cmd_ctx;
@@ -1693,12 +1693,15 @@ int ndsv5_script_do_custom_reset(struct target *target, FILE *script_fd)
 	char tmp_buffer[MAX_SCRIPT_LENGTH];
 	compare_str = "set_current_target";
 
+	FILE *script_fd;
+	script_fd = fopen(script, "r");
 	if (script_fd == NULL)
 		return ERROR_FAIL;
 
 	nds_skip_dmi = 1;
 	fseek(script_fd, 0, SEEK_SET);
 	while (fgets(line_buffer, MAX_SCRIPT_LENGTH, script_fd) != NULL) {
+		LOG_DEBUG("script: %s", line_buffer);
 		if ((line_buffer[0] == '#') || (line_buffer[0] == '\r'))
 			continue;
 
@@ -1722,6 +1725,7 @@ int ndsv5_script_do_custom_reset(struct target *target, FILE *script_fd)
 			NDS_INFO("cmd: %s", line_buffer);
 			command_run_line(cmd_ctx, line_buffer);
 		}
+		LOG_DEBUG("script: DONE!");
 	}
 	nds_skip_dmi = 0;
 	fclose(script_fd);

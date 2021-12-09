@@ -755,6 +755,9 @@ int dmstatus_read_timeout(struct target *target, uint32_t *dmstatus,
 				"%d (dmstatus=0x%x). This error might be caused by a JTAG "
 				"signal issue. Try reducing the JTAG clock speed.",
 				get_field(*dmstatus, DMI_DMSTATUS_VERSION), *dmstatus);
+#if _NDS_V5_ONLY_
+		assert(0);
+#endif /* _NDS_V5_ONLY_ */
 	} else if (authenticated && !get_field(*dmstatus, DMI_DMSTATUS_AUTHENTICATED)) {
 		LOG_ERROR("Debugger is not authenticated to target Debug Module. "
 				"(dmstatus=0x%x). Use `riscv authdata_read` and "
@@ -1899,11 +1902,10 @@ static int examine(struct target *target)
 	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
 	if (!target_was_examined(target)) {
 		if (nds32->reset_halt_as_examine) {
-			if (nds_script_custom_reset_halt) {
-				ndsv5_script_do_custom_reset(target, nds_script_custom_reset_halt);
-			} else if (!reset_halt){
+			if (ndsv5_script_custom_reset_halt)
+				ndsv5_script_do_custom_reset(target, ndsv5_script_custom_reset_halt);
+			else if (!reset_halt)
 				ndsv5_reset_halt_as_examine(target);
-			}
 			NDS32_LOG(NDS32_MSG_HW_RESET_HOLD);
 		}
 	}
@@ -2500,11 +2502,11 @@ static int assert_reset(struct target *target)
 	if ((nds_halt_on_reset == 1) && (target->reset_halt == 0))
 		ndsv5_haltonreset(target, 0);
 
-	if ((nds_script_custom_reset_halt) && (target->reset_halt == 1)) {
-		ndsv5_script_do_custom_reset(target, nds_script_custom_reset_halt);
+	if ((ndsv5_script_custom_reset_halt) && (target->reset_halt == 1)) {
+		ndsv5_script_do_custom_reset(target, ndsv5_script_custom_reset_halt);
 		return ERROR_OK;
-	} else if ((nds_script_custom_reset) && (target->reset_halt == 0)) {
-		ndsv5_script_do_custom_reset(target, nds_script_custom_reset);
+	} else if ((ndsv5_script_custom_reset) && (target->reset_halt == 0)) {
+		ndsv5_script_do_custom_reset(target, ndsv5_script_custom_reset);
 		return ERROR_OK;
 	}
 #endif /* _NDS_V5_ONLY_ */
@@ -4418,7 +4420,7 @@ static int riscv013_select_current_hart(struct target *target)
 	LOG_DEBUG("[%s] dm->current_hartid: %d", target->tap->dotted_name, dm->current_hartid);
 
 	static struct jtag_tap *current_tap;
-	if (current_tap == target->tap) {
+	if (current_tap == target->tap && nds_mixed_mode_checking != 0x3) {
 		if (r->current_hartid == dm->current_hartid)
 			return ERROR_OK;
 	} else
