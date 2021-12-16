@@ -114,6 +114,7 @@ extern unsigned *global_acr_type_count_v5;
 extern ACR_INFO_T_V5 *acr_info_list_v5;
 extern struct reg_arch_type nds_ace_reg_access_type;
 extern int nds_targetburn_corenum;
+extern unsigned int nds_mixed_mode_checking;
 
 uint64_t ndsv5_ilm_bpa, ndsv5_ilm_lmsz;
 uint64_t ndsv5_dlm_bpa, ndsv5_dlm_lmsz;
@@ -331,9 +332,9 @@ struct nds32_v5 {
 	bool nds_do_fencei;
 };
 
-extern FILE *nds_script_custom_reset;
-extern FILE *nds_script_custom_reset_halt;
-extern FILE *nds_script_custom_initial;
+char *ndsv5_script_custom_reset;
+char *ndsv5_script_custom_reset_halt;
+char *ndsv5_script_custom_initial;
 
 extern struct target_type *get_target_type(struct target *target);
 /* when polling target halted, do NOT announce gdb */
@@ -363,7 +364,7 @@ extern int ndsv5_get_ebreak_length(struct target *target, uint64_t reg_pc_value)
 extern char *ndsv5_get_CSR_name(struct target *target, uint32_t csr_id);
 extern int ndsv5_reset_target(struct target *target, enum target_reset_mode reset_mode);
 
-extern int ndsv5_script_do_custom_reset(struct target *target, FILE *script_fd);
+extern int ndsv5_script_do_custom_reset(struct target *target, const char *script);
 extern int ndsv5_script_dmi_read(uint16_t address, uint64_t *dmi_read_data);
 extern int ndsv5_script_dmi_write(uint16_t address, uint64_t value);
 extern int ndsv5_script_reg_read(uint64_t *value, uint32_t number);
