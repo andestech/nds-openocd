@@ -268,6 +268,9 @@ static bool open_matching_device(struct mpsse_ctx *ctx, const uint16_t *vid, con
 			continue;
 		}
 
+		if (libusb_kernel_driver_active(ctx->usb_dev, 0) == 1)
+			LOG_DEBUG("USB Kernel Driver Active");
+
 		/* Try to detach ftdi_sio kernel module */
 		err = libusb_detach_kernel_driver(ctx->usb_dev, 0);
 		if (err != LIBUSB_SUCCESS && err != LIBUSB_ERROR_NOT_FOUND
@@ -421,7 +424,14 @@ error:
 struct mpsse_ctx *mpsse_open(const uint16_t *vid, const uint16_t *pid, const char *description,
 	const char *serial, const char *location, int channel)
 {
+#if _NDS_V5_ONLY_
+	static struct mpsse_ctx *ctx;
+	if (ctx)
+		mpsse_close(ctx);
+	ctx = calloc(1, sizeof(*ctx));
+#else
 	struct mpsse_ctx *ctx = calloc(1, sizeof(*ctx));
+#endif
 	int err;
 
 	if (!ctx)

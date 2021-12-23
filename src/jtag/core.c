@@ -1136,6 +1136,7 @@ static bool jtag_examine_chain_check(uint8_t *idcodes, unsigned count)
 			return false;
 		}
 #endif /* _NDS_V5_ONLY_ */
+
 		LOG_ERROR("JTAG scan chain interrogation failed: all %s",
 			(zero_check == 0x00) ? "zeroes" : "ones");
 		LOG_ERROR("Check JTAG interface, timings, target power, etc.");
@@ -1177,14 +1178,7 @@ static bool jtag_examine_chain_check(uint8_t *idcodes, unsigned count)
 					fprintf(stderr, "<-- Check JTAG interface, timings, target power, etc. -->\n");
 					exit(-1);
 				}
-				LOG_DEBUG("Use two wire configuration to restart INICEman");
-				/* aice_micro : zero_check and one_check = 0x00
-				 * aice_mini+ : zero_check and one_check = 0xff
-				 */
-				if (zero_check == 0x00)
-					exit(8);
-				else
-					exit(9);
+				return false;
 			}
 		} else
 			nds_scan_retry_times--;
