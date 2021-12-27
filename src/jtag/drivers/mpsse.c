@@ -512,6 +512,9 @@ struct mpsse_ctx *mpsse_open(const uint16_t *vid, const uint16_t *pid, const cha
 	return ctx;
 error:
 	mpsse_close(ctx);
+#if _NDS_V5_ONLY_
+	ctx = NULL;
+#endif
 	return 0;
 }
 
@@ -527,6 +530,9 @@ void mpsse_close(struct mpsse_ctx *ctx)
 	free(ctx->read_buffer);
 	free(ctx->read_chunk);
 	free(ctx);
+#if _NDS_V5_ONLY_
+	ctx = NULL;
+#endif
 }
 
 bool mpsse_is_high_speed(struct mpsse_ctx *ctx)
