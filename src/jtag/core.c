@@ -1105,6 +1105,7 @@ static int jtag_examine_chain_execute(uint8_t *idcode_buffer, unsigned num_idcod
 int count_retry_2wire;
 unsigned int auto_detect_2wire;
 extern struct command_context *global_cmd_ctx;
+extern uint32_t nds_ftdi_devices;
 #endif
 static bool jtag_examine_chain_check(uint8_t *idcodes, unsigned count)
 {
@@ -1159,17 +1160,17 @@ static bool jtag_examine_chain_check(uint8_t *idcodes, unsigned count)
 				}
 				LOG_DEBUG("Use two wire configuration to retry");
 				count_retry_2wire++;
-				if (zero_check == 0x00) {
-					/* zero_check = 0 : aice-micro 2wire mode,
+				if (nds_ftdi_devices == 1) {
+					/* aice-mini+ 2wire mode,
+					 * use 2wire config(reference aice_sdp.cfg) and reinit adapter(jtag) */
+					command_run_line(cmd_ctx, "ftdi_vid_pid 0x1cfc 0x0001");
+					command_run_line(cmd_ctx, "ftdi_layout_init 0x0888 0x0a1b");
+				} else {
+					/* aice-micro 2wire mode,
 					 * use 2wire config(reference aice_micro_sdp.cfg) and reinit adapter(jtag) */
 					command_run_line(cmd_ctx, "ftdi_two_wire_mode");
 					command_run_line(cmd_ctx, "ftdi_vid_pid 0x0403 0x6010");
 					command_run_line(cmd_ctx, "ftdi_layout_init 0x4d08 0x4f1b");
-				} else {
-					/* zero_check = 1 : aice-mini+ 2wire mode,
-					 * use 2wire config(reference aice_sdp.cfg) and reinit adapter(jtag) */
-					command_run_line(cmd_ctx, "ftdi_vid_pid 0x1cfc 0x0001");
-					command_run_line(cmd_ctx, "ftdi_layout_init 0x0888 0x0a1b");
 				}
 				adapter_deinitialized();
 				if (adapter_init(cmd_ctx) != ERROR_OK) {
