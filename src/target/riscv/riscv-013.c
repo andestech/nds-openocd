@@ -2020,15 +2020,7 @@ static int examine(struct target *target)
 
 	/* Before doing anything else we must first enumerate the harts. */
 	if (dm->hart_count < 0) {
-#if _NDS_V5_ONLY_
-		int user_def_hart_count = (int)target->corenums;
-		if (user_def_hart_count == 0)
-			user_def_hart_count = RISCV_MAX_HARTS;
-		LOG_DEBUG("user_def_hart_count = 0x%x", (int)user_def_hart_count);
-		for (int i = 0; i < user_def_hart_count; ++i) {
-#else /* _NDS_V5_ONLY_ */
 		for (int i = 0; i < MIN(RISCV_MAX_HARTS, 1 << info->hartsellen); ++i) {
-#endif /* _NDS_V5_ONLY_ */
 			r->current_hartid = i;
 			if (riscv013_select_current_hart(target) != ERROR_OK)
 				return ERROR_FAIL;
