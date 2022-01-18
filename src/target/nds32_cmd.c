@@ -1254,8 +1254,6 @@ COMMAND_HANDLER(handle_nds32_word_access_mem_command)
 COMMAND_HANDLER(handle_nds32_write_buffer_command)
 {
 	struct target *target = get_current_target(CMD_CTX);
-	uint32_t addr;
-	uint32_t count;
 	uint8_t *data;
 	uint32_t i;
 	int result;
@@ -1266,17 +1264,18 @@ COMMAND_HANDLER(handle_nds32_write_buffer_command)
 		return ERROR_FAIL;
 	}
 
-	COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
+	target_addr_t addr;
+	COMMAND_PARSE_ADDRESS(CMD_ARGV[0], addr);
+
+	uint32_t count = 1;
 	COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], count);
 
-	data = malloc (count);
+	data = malloc(count);
 
-	for (i = 0; i < count; i++) {
+	for (i = 0; i < count; i++)
 		COMMAND_PARSE_NUMBER(u8, CMD_ARGV[2 + i], data[i]);
-	}
 
 	result = target_write_buffer(target, addr, count, data);
-
 	free (data);
 
 	return result;
@@ -1285,8 +1284,6 @@ COMMAND_HANDLER(handle_nds32_write_buffer_command)
 COMMAND_HANDLER(handle_nds32_read_buffer_command)
 {
 	struct target *target = get_current_target(CMD_CTX);
-	uint32_t addr;
-	uint32_t count;
 	uint8_t *data;
 	uint32_t i;
 	int result;
@@ -1297,16 +1294,19 @@ COMMAND_HANDLER(handle_nds32_read_buffer_command)
 		return ERROR_FAIL;
 	}
 
-	COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], addr);
+	target_addr_t addr;
+	COMMAND_PARSE_ADDRESS(CMD_ARGV[0], addr);
+
+	uint32_t count = 1;
 	COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], count);
 
-	data = malloc (count);
+	data = malloc(count);
 
 	result = target_read_buffer(target, addr, count, data);
 
 	for (i = 0; i < count; i++) {
 		if ((i & 0xF) == 0)
-			command_print_sameline(CMD, "0x%08x: ", (int)(addr + i));
+			command_print_sameline(CMD, TARGET_ADDR_FMT ": ", (addr + i));
 
 		command_print_sameline(CMD, "%02x ", data[i]);
 
