@@ -66,6 +66,7 @@ extern unsigned long nds32_tracer_on;
 extern uint32_t nds_dis_condition_break;
 static unsigned int nds32_output_tdesc_xml = 1;
 uint32_t nds_skip_print;
+extern char *nds_workspace_folder;
 #endif /* _NDS32_ONLY_ */
 
 
@@ -2695,7 +2696,7 @@ int nds32_append_bit_field(FILE *fp_out, char *gpFeatureString)
 	return 0;
 }
 
-int nds32_merge_target_descript(FILE *fp_desc, FILE *fp_out)
+static int nds32_merge_target_descript(FILE *fp_desc, FILE *fp_out)
 {
 	char line_buf1[LINEBUF_SIZE];
 	char *pline_buf1 = (char *)&line_buf1[0];
@@ -2704,15 +2705,10 @@ int nds32_merge_target_descript(FILE *fp_desc, FILE *fp_out)
 	unsigned int bit_reg_hit = 0, i, cmp_cnt;
 	unsigned int copy_tdesc = 0;
 
-	if ((fp_desc == NULL) || (fp_out == NULL)) {
-		LOG_DEBUG("merge_target_descript NULL");
-		return -1;
-	}
-
 	gpBitBufStart = (char *)malloc(BITBUF_SIZE);
 	if (gpBitBufStart == NULL) {
 		LOG_DEBUG("\n Can't malloc\n");
-		return -1;
+		return ERROR_FAIL;
 	}
 	gpBitTmpBuf = gpBitBufStart;
 	gpBitBufEnd = gpBitBufStart;
@@ -2769,9 +2765,7 @@ int nds32_merge_target_descript(FILE *fp_desc, FILE *fp_out)
 	}
 
 	free(gpBitBufStart);
-	fclose(fp_desc);
-	fclose(fp_out);
-	return 0;
+	return ERROR_OK;
 }
 #endif /* _NDS32_ONLY_ */
 
@@ -2800,17 +2794,34 @@ static int gdb_get_target_description_chunk(struct target *target, struct target
 			FILE *fp_tdesc, *fp_out;
 			char *p_tdesc = (char *)FILE_TARGET_DESC;
 			char *p_out = (char *)FILE_OUTPUT;
-			char filename_tdesc[128];
-			char filename_out[128];
+			char filename_tdesc[2048] = {0};
+			char filename_out[2048] = {0};
 
-			memset(filename_tdesc, 0, sizeof(filename_tdesc));
-			memset(filename_out, 0, sizeof(filename_out));
-			strncpy(filename_tdesc, p_tdesc, strlen(p_tdesc));
-			strncpy(filename_out, p_out, strlen(p_out));
+			if (nds_workspace_folder) {
+				char tmp_s[2048] = {0};
 
-			sprintf(&filename_tdesc[11], "%02d.xml", target->coreid);
-			sprintf(&filename_out[15], "%02d.xml", target->coreid);
-			LOG_DEBUG("%s", filename_out);
+				/* Add workspae path as prefix to filename_tdesc */
+				strncpy(tmp_s, p_tdesc, strlen(p_tdesc));
+				sprintf(&tmp_s[11], "%02d.xml", target->coreid);
+				strncpy(filename_tdesc, nds_workspace_folder, strlen(nds_workspace_folder));
+				strcat(filename_tdesc, tmp_s);
+
+				/* Reset tmp_s */
+				memset(tmp_s, 0, sizeof(tmp_s));
+
+				/* Add workspace path as prefix to filename_out */
+				strncpy(tmp_s, p_out, strlen(p_out));
+				sprintf(&tmp_s[15], "%02d.xml", target->coreid);
+				strncpy(filename_out, nds_workspace_folder, strlen(nds_workspace_folder));
+				strcat(filename_out, tmp_s);
+			} else {
+				strncpy(filename_tdesc, p_tdesc, strlen(p_tdesc));
+				sprintf(&filename_tdesc[11], "%02d.xml", target->coreid);
+				strncpy(filename_out, p_out, strlen(p_out));
+				sprintf(&filename_out[15], "%02d.xml", target->coreid);
+			}
+			LOG_DEBUG("filename_tdesc: %s", filename_tdesc);
+			LOG_DEBUG("filename_out: %s", filename_out);
 
 			/* store as nds32_tdesc.xml */
 			fp_tdesc = fopen(filename_tdesc, "wb");
@@ -2820,8 +2831,12 @@ static int gdb_get_target_description_chunk(struct target *target, struct target
 
 				fp_tdesc = fopen(filename_tdesc, "r");
 				fp_out = fopen(filename_out, "wb");
-				if ((fp_tdesc != NULL) && (fp_out != NULL))
+				if ((fp_tdesc != NULL) && (fp_out != NULL)) {
 					nds32_merge_target_descript(fp_tdesc, fp_out);
+					fclose(fp_tdesc);
+					fclose(fp_out);
+				} else
+					LOG_ERROR("Unable to write tdesc/out");
 			}
 
 			/* change tdesc & tdesc_length (reference from nds32_tdesc_out.xml) */
@@ -2834,7 +2849,8 @@ static int gdb_get_target_description_chunk(struct target *target, struct target
 				tdesc_length = read_size;
 				LOG_DEBUG("tdesc_length = 0x%x", tdesc_length);
 				fclose(fp_out);
-			}
+			} else
+				LOG_ERROR("Unable to read tdesc");
 		}
 #endif /* _NDS32_ONLY_ */
 	}
