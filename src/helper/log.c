@@ -53,6 +53,7 @@ char *p_nds_bak_debug_buffer_end;
 uint32_t nds_bak_debug_file_nums = 16;
 uint32_t nds_bak_debug_buffer_overwrite;
 char *log_output_path;
+char *nds_workspace_folder;
 #endif /* _NDS32_ONLY_ */
 
 static FILE *log_output;
@@ -307,10 +308,14 @@ COMMAND_HANDLER(handle_log_output_command)
 		fputs(log_output_path, log_output);
 		fputs("\n", log_output);
 		fflush(log_output);
-#endif /* _NDS32_ONLY_ */
 
-		LOG_DEBUG("set log_output to \"%s\"", CMD_ARGV[0]);
-		return ERROR_OK;
+		char name_tmp[2048] = {0};
+		strncpy(name_tmp, log_output_path, strlen(log_output_path));
+		char *c = strstr(name_tmp, "iceman_debug0.log");
+		if (c)
+			*c = '\0';
+		nds_workspace_folder = strdup(name_tmp);
+#endif /* _NDS32_ONLY_ */
 	}
 
 	return ERROR_COMMAND_SYNTAX_ERROR;
