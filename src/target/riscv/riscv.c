@@ -5404,7 +5404,7 @@ int riscv_init_registers(struct target *target)
 			r->valid = false;
 			r->exist = true;
 			r->type = &nds_ace_reg_access_type;
-			r->arch_info = target;
+			r->arch_info = shared_reg_info;
 			r->size = acr_width;
 			r->group = "ace";
 			/* ByteSize = ceil(reg->size / 8) */
