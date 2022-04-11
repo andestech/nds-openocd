@@ -614,7 +614,51 @@ __COMMAND_HANDLER(handle_ndsv5_configure_command)
 		if (CMD_ARGC > 1)
 			COMMAND_PARSE_NUMBER(u64, CMD_ARGV[1], L2C_BASE);
 		ndsv5_l2c_support = 1;
-		command_print(CMD, "configure: %s = 0x%lx", CMD_ARGV[0], L2C_BASE);
+		command_print(CMD, "configure: %s = 0x%" PRIx64, CMD_ARGV[0], L2C_BASE);
+	} else if (strcmp(CMD_ARGV[0], "suppressed_hsp_exception") == 0) {
+		bool option;
+		if (CMD_ARGC > 1)
+			COMMAND_PARSE_ON_OFF(CMD_ARGV[1], option);
+
+		command_print(CMD, "configure: %s = 0x%08x", CMD_ARGV[0], option);
+
+		/* Enable/Disalbe $mhsp_ctl.OVF_EN */
+		riscv_reg_t mhsp_ctl;
+		if (option)
+			mhsp_ctl = MHSP_CTL_OVF_EN | MHSP_CTL_U | MHSP_CTL_S | MHSP_CTL_M;
+		else
+			mhsp_ctl = 0;
+		struct reg *reg_mhsp_ctl = &target->reg_cache->reg_list[CSR_MHSP_CTL + GDB_REGNO_CSR0];
+		if (reg_mhsp_ctl && reg_mhsp_ctl->exist) {
+			if (ERROR_FAIL == riscv_set_register(target, CSR_MHSP_CTL + GDB_REGNO_CSR0, mhsp_ctl)) {
+				LOG_ERROR("Set $mhsp_ctl failed!");
+				return ERROR_FAIL;
+			}
+			NDS_INFO("Set $mhsp_ctl: 0x%" PRIx64, mhsp_ctl);
+		} else {
+			LOG_ERROR("$mhsp_ctl not supported!");
+			return ERROR_FAIL;
+		}
+
+		/* Enable/Disable Exception Redirection Register */
+		riscv_reg_t dexc2dbg;
+		struct reg *reg_dexc2dbg = &target->reg_cache->reg_list[CSR_DEXC2DBG + GDB_REGNO_CSR0];
+		if (ERROR_FAIL == riscv_get_register(target, &dexc2dbg, CSR_DEXC2DBG + GDB_REGNO_CSR0)) {
+			LOG_ERROR("Get $dex2dbg failed!");
+			return ERROR_FAIL;
+		}
+
+		if (option)
+			dexc2dbg |= 0x1000;
+		else
+			dexc2dbg &= ~0x1000;
+		NDS_INFO("Set $dexc2dbg: 0x%" PRIx64, dexc2dbg);
+		if (ERROR_FAIL == riscv_set_register(target, CSR_DEXC2DBG + GDB_REGNO_CSR0, dexc2dbg)) {
+				LOG_ERROR("Set $dexc2dbg failed!");
+				return ERROR_FAIL;
+		}
+		NDS_INFO("Set $dexc2dbg: 0x%" PRIx64, dexc2dbg);
+		nds32->suppressed_hsp_exception = option;
 	} else {
 		command_print(CMD, "configure: property '%s' unknown!", CMD_ARGV[0]);
 		NDS32_LOG("<-- configure: property '%s' unknown! -->", CMD_ARGV[0]);
@@ -3025,7 +3069,29 @@ int ndsv5_virtual_hosting_check(struct target *target)
 	uint32_t reg_ddcause_maintype = (reg_ddcause_value & REG_DDCAUSE_MASK);
 	NDS_INFO("reg_ddcause_value = 0x%" PRIx64, reg_ddcause_value);
 	NDS_INFO("reg_ddcause_maintype = 0x%" PRIx32, reg_ddcause_maintype);
-	if (reg_ddcause_maintype != REG_DDCAUSE_EBREAK) {
+	if (reg_ddcause_maintype == REG_DDCAUSE_STACK_OVERFLOW && nds32->suppressed_hsp_exception) {
+		/* current pc, addr = 0, do not handle breakpoints, not debugging */
+		strict_step(target, false);
+
+		/* Get $sp */
+		struct reg *reg_sp = register_get_by_name(target->reg_cache, "sp", 1);
+		reg_sp->type->get(reg_sp);
+		uint64_t reg_sp_value = buf_get_u64(reg_sp->value, 0, reg_sp->size);
+		LOG_DEBUG("strict_step (after) $sp: 0x%lx", (long unsigned int)reg_sp_value);
+
+		/* Set $msp_bound */
+		struct reg *msp_bound = ndsv5_get_reg_by_CSR(target, CSR_MSP_BOUND);
+		uint64_t msp_value = ndsv5_get_register_value(msp_bound);
+		LOG_DEBUG("msp_bound = 0x%" PRIx64, msp_value);
+		ndsv5_set_register_value(msp_bound, reg_sp_value);
+		LOG_DEBUG("set $msp_bound = 0x%" PRIx64, reg_sp_value);
+
+		/* Enable OVF_EN again */
+		struct reg *mhsp_ctl = ndsv5_get_reg_by_CSR(target, CSR_MHSP_CTL);
+		ndsv5_set_register_value(mhsp_ctl, MHSP_CTL_OVF_EN | MHSP_CTL_U | MHSP_CTL_S | MHSP_CTL_M);
+
+		return ERROR_FAIL;
+	} else if (reg_ddcause_maintype != REG_DDCAUSE_EBREAK) {
 		nds32->ddcause_maintype = reg_ddcause_maintype;
 		target->debug_reason = DBG_REASON_HIT_EXCEPTIONS;
 		return ERROR_OK;

@@ -54,6 +54,19 @@
 #define CSR_MSP_BASE		0x7C8
 
 
+#define MHSP_CTL_OVF_EN_OFFSET  0
+#define MHSP_CTL_OVF_EN         (0x1U << MHSP_CTL_OVF_EN_OFFSET)
+
+#define MHSP_CTL_U_OFFSET       3
+#define MHSP_CTL_U              (0x1U << MHSP_CTL_U_OFFSET)
+
+#define MHSP_CTL_S_OFFSET       4
+#define MHSP_CTL_S              (0x1U << MHSP_CTL_S_OFFSET)
+
+#define MHSP_CTL_M_OFFSET       5
+#define MHSP_CTL_M              (0x1U << MHSP_CTL_M_OFFSET)
+
+
 /* AndeStar V5 Machine Mode - 9.6. Counter Related CSRs */
 #define CSR_MCOUNTERWEN		0x7CE
 #define CSR_MCOUNTERMASK_M	0x7D1

@@ -137,15 +137,27 @@ int ndsv5_handle_triggered(struct target *target)
 	uint64_t reg_pc_value = buf_get_u64(reg_pc->value, 0, reg_pc->size);
 	LOG_DEBUG("halt at 0x%lx", (long unsigned int)reg_pc_value);
 
+	/* step and watchpoint, record */
+	if (target->debug_reason == DBG_REASON_SINGLESTEP)
+		single_step_cmd = 1;
+
 	switch (cause) {
 		case DCSR_CAUSE_SWBP:
-			ndsv5_virtual_hosting_check(target);
+			if (ndsv5_virtual_hosting_check(target) == ERROR_OK) {
+				LOG_DEBUG("virtual hosting");
+				return ERROR_OK;
+			} else {
+				if (single_step_cmd == 1) {
+					target->debug_reason = DBG_REASON_SINGLESTEP;
+					LOG_DEBUG("single step and suppressed hsp exception");
+					return ERROR_OK;
+				}
+
+				riscv_resume(target, 1, 0, 0, 0, false);
+				return ERROR_FAIL;
+			}
 			break;
 		case DCSR_CAUSE_HWBP:
-			/* step and watchpoint, record */
-			if (target->debug_reason == DBG_REASON_SINGLESTEP)
-				single_step_cmd = 1;
-
 			target->debug_reason = DBG_REASON_WPTANDBKPT;
 			/* If we halted because of a data trigger, gdb doesn't know to do
 			 * the disable-breakpoints-step-enable-breakpoints dance. */

@@ -142,6 +142,7 @@ uint64_t L2C_BASE;
 #define REG_DDCAUSE_SEC     10 /* S-mode Environment Call (SEC)      */
 #define REG_DDCAUSE_HEC     11 /* H-mode Environment Call (HEC)      */
 #define REG_DDCAUSE_MEC     12 /* M-mode Environment Call (MEC)      */
+#define REG_DDCAUSE_STACK_OVERFLOW 32 /* Stack overflow exception           */
 
 #define REG_DDCAUSE_II_II           0  /* Illegal instruction    */
 #define REG_DDCAUSE_II_PRIV_INST    1  /* Privileged instruction */
@@ -330,6 +331,8 @@ struct nds32_v5 {
 
 	/** do fence.i if use CPU mode write memory */
 	bool nds_do_fencei;
+
+	bool suppressed_hsp_exception;
 };
 
 char *ndsv5_script_custom_reset;
