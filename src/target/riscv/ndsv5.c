@@ -2744,3 +2744,52 @@ char *ndsv5_base64_decode(const char *data, int input_length, int *output_length
 	return decoded_data;
 }
 
+int ndsv5_suppressed_hsp_exception(struct target *target, bool option)
+{
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	if (nds32 == NULL) {
+		LOG_ERROR("gpnds32_v5 is NULL");
+		return ERROR_FAIL;
+	}
+
+	/* Enable/Disalbe $mhsp_ctl.OVF_EN */
+	riscv_reg_t mhsp_ctl;
+	if (option)
+		mhsp_ctl = MHSP_CTL_OVF_EN | MHSP_CTL_U | MHSP_CTL_S | MHSP_CTL_M;
+	else
+		mhsp_ctl = 0;
+	struct reg *reg_mhsp_ctl = &target->reg_cache->reg_list[CSR_MHSP_CTL + GDB_REGNO_CSR0];
+	if (reg_mhsp_ctl && reg_mhsp_ctl->exist) {
+		if (ERROR_FAIL == riscv_set_register(target, CSR_MHSP_CTL + GDB_REGNO_CSR0, mhsp_ctl)) {
+			LOG_ERROR("Set $mhsp_ctl failed!");
+			return ERROR_FAIL;
+		}
+		NDS_INFO("Set $mhsp_ctl: 0x%" PRIx64, mhsp_ctl);
+	} else {
+		LOG_ERROR("$mhsp_ctl not supported!");
+		return ERROR_FAIL;
+	}
+
+	/* Enable/Disable Exception Redirection Register */
+	riscv_reg_t dexc2dbg;
+	struct reg *reg_dexc2dbg = &target->reg_cache->reg_list[CSR_DEXC2DBG + GDB_REGNO_CSR0];
+	if (ERROR_FAIL == riscv_get_register(target, &dexc2dbg, CSR_DEXC2DBG + GDB_REGNO_CSR0)) {
+		LOG_ERROR("Get $dex2dbg failed!");
+		return ERROR_FAIL;
+	}
+
+	if (option)
+		dexc2dbg |= 0x1000;
+	else
+		dexc2dbg &= ~0x1000;
+	NDS_INFO("Set $dexc2dbg: 0x%" PRIx64, dexc2dbg);
+	if (ERROR_FAIL == riscv_set_register(target, CSR_DEXC2DBG + GDB_REGNO_CSR0, dexc2dbg)) {
+		LOG_ERROR("Set $dexc2dbg failed!");
+		return ERROR_FAIL;
+	}
+	NDS_INFO("Set $dexc2dbg: 0x%" PRIx64, dexc2dbg);
+
+	NDS_INFO("ndsv5_suppressed_hsp_exception: %d", option);
+	return ERROR_OK;
+}
+

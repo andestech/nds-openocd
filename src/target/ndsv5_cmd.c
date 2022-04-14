@@ -621,44 +621,10 @@ __COMMAND_HANDLER(handle_ndsv5_configure_command)
 			COMMAND_PARSE_ON_OFF(CMD_ARGV[1], option);
 
 		command_print(CMD, "configure: %s = 0x%08x", CMD_ARGV[0], option);
-
-		/* Enable/Disalbe $mhsp_ctl.OVF_EN */
-		riscv_reg_t mhsp_ctl;
-		if (option)
-			mhsp_ctl = MHSP_CTL_OVF_EN | MHSP_CTL_U | MHSP_CTL_S | MHSP_CTL_M;
+		if (ndsv5_suppressed_hsp_exception(target, option) == ERROR_OK)
+			nds32->suppressed_hsp_exception = option;
 		else
-			mhsp_ctl = 0;
-		struct reg *reg_mhsp_ctl = &target->reg_cache->reg_list[CSR_MHSP_CTL + GDB_REGNO_CSR0];
-		if (reg_mhsp_ctl && reg_mhsp_ctl->exist) {
-			if (ERROR_FAIL == riscv_set_register(target, CSR_MHSP_CTL + GDB_REGNO_CSR0, mhsp_ctl)) {
-				LOG_ERROR("Set $mhsp_ctl failed!");
-				return ERROR_FAIL;
-			}
-			NDS_INFO("Set $mhsp_ctl: 0x%" PRIx64, mhsp_ctl);
-		} else {
-			LOG_ERROR("$mhsp_ctl not supported!");
 			return ERROR_FAIL;
-		}
-
-		/* Enable/Disable Exception Redirection Register */
-		riscv_reg_t dexc2dbg;
-		struct reg *reg_dexc2dbg = &target->reg_cache->reg_list[CSR_DEXC2DBG + GDB_REGNO_CSR0];
-		if (ERROR_FAIL == riscv_get_register(target, &dexc2dbg, CSR_DEXC2DBG + GDB_REGNO_CSR0)) {
-			LOG_ERROR("Get $dex2dbg failed!");
-			return ERROR_FAIL;
-		}
-
-		if (option)
-			dexc2dbg |= 0x1000;
-		else
-			dexc2dbg &= ~0x1000;
-		NDS_INFO("Set $dexc2dbg: 0x%" PRIx64, dexc2dbg);
-		if (ERROR_FAIL == riscv_set_register(target, CSR_DEXC2DBG + GDB_REGNO_CSR0, dexc2dbg)) {
-				LOG_ERROR("Set $dexc2dbg failed!");
-				return ERROR_FAIL;
-		}
-		NDS_INFO("Set $dexc2dbg: 0x%" PRIx64, dexc2dbg);
-		nds32->suppressed_hsp_exception = option;
 	} else {
 		command_print(CMD, "configure: property '%s' unknown!", CMD_ARGV[0]);
 		NDS32_LOG("<-- configure: property '%s' unknown! -->", CMD_ARGV[0]);
@@ -2751,6 +2717,13 @@ static int ndsv5_gdb_detach(struct target *target)
 		watchpoint_clear_target(nds32->target);
 
 		nds32->gdb_run_mode = RUN_MODE_DEBUG;
+
+		/* turn-off suppressed hsp exception */
+		if (nds32->suppressed_hsp_exception) {
+			ndsv5_suppressed_hsp_exception(target, false);
+			LOG_DEBUG("Disable suppressed hsp exception");
+			nds32->suppressed_hsp_exception = false;
+		}
 
 		/* Set attached to false before resume */
 		nds32->attached = false;

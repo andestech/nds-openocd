@@ -1724,6 +1724,13 @@ static void deinit_target(struct target *target)
 
 			nds32->gdb_run_mode = RUN_MODE_DEBUG;
 
+			/* turn-off suppressed hsp exception */
+			if (nds32->suppressed_hsp_exception) {
+				ndsv5_suppressed_hsp_exception(target, false);
+				LOG_DEBUG("Disable suppressed hsp exception");
+				nds32->suppressed_hsp_exception = false;
+			}
+
 			/* Set attached to false before resume */
 			nds32->attached = false;
 		}
