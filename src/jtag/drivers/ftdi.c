@@ -870,6 +870,26 @@ static int ftdi_initialize(void)
 					nds_jtag_max_scans = predict_jtag_max_scans;
 					LOG_INFO("Force set nds_jtag_max_scans to predict_jtag_max_scans");
 				}
+			} else if (ftdi_vid[i] == 0x0403 && ftdi_pid[i] == 0x6010) {
+				/* Initial first to get ID from AD*/
+				output = jtag_output_init;
+				direction = jtag_direction_init;
+				mpsse_set_data_bits_low_byte(mpsse_ctx, output & 0xff, direction & 0xff);
+				mpsse_set_data_bits_high_byte(mpsse_ctx, output >> 8, direction >> 8);
+				mpsse_flush(mpsse_ctx);
+
+				uint8_t data_low;
+				mpsse_read_data_bits_low_byte(mpsse_ctx, &data_low);
+				mpsse_flush(mpsse_ctx);
+
+				switch (data_low >> 6) {
+					case 0x2: /* AD7 = 1, AD6 = 0 */
+						NDS32_LOG("Andes AICE-MICRO H/W R1.1");
+						break;
+					case 0x3: /* AD7 = 1, AD6 = 1 */
+						NDS32_LOG("Andes AICE-MICRO H/W R1.0");
+						break;
+				};
 			}
 			break;
 		}
