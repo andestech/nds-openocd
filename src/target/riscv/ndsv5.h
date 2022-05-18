@@ -394,6 +394,7 @@ extern int ndsv5_dcache_wb(struct target *target);
 extern int ndsv5_dcache_invalidate(struct target *target);
 extern int ndsv5_dcache_wb_invalidate(struct target *target);
 extern int ndsv5_icache_invalidate(struct target *target);
+extern int ndsv5_query_l1cache_config(struct target *target, struct nds32_v5_cache *cache);
 
 #define NDSV5_COMMON_MAGIC (int)0xADE55555
 

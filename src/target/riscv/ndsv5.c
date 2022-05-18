@@ -2068,8 +2068,26 @@ int ndsv5_query_l2cache_config(struct target *target)
 	line_size = cache->line_size;		/* L2 and L1 has the same cache line size */
 	sets = (size * 1024) / line_size / ways;
 
-	LOG_DEBUG("L2C sets: %lu, ways: %lu, size: %lu KB ", sets, ways, size);
-	LOG_INFO("%lu %lu %lu", sets, ways, size);
+	LOG_DEBUG("L2C set: %" PRIu64 ", way: %" PRIu64 ", line_size: %" PRIu64 ", size: %" PRIu64 " KB",
+			sets, ways, line_size, size);
+	LOG_INFO("%" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64, sets, ways, line_size, size);
+
+	return ERROR_OK;
+}
+
+int ndsv5_query_l1cache_config(struct target *target, struct nds32_v5_cache *cache)
+{
+	uint64_t sets, ways, line_size, size;
+
+	sets = cache->set;
+	ways = cache->way;
+	line_size = cache->line_size;
+	size = (line_size * sets * ways) / 1024;
+
+	/* Format refer Bug-24447, (Set) (Way) (Line size Bytes) (Total Size KBytes) */
+	LOG_DEBUG("set: %" PRIu64 ", way: %" PRIu64 ", line_size: %" PRIu64 ", size: %" PRIu64 " KB",
+			sets, ways, line_size, size);
+	LOG_INFO("%" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64, sets, ways, line_size, size);
 
 	return ERROR_OK;
 }

@@ -1056,7 +1056,18 @@ __COMMAND_HANDLER(handle_ndsv5_icache_command)
 			result = ndsv5_enableornot_cache(target, ICACHE, CMD_ARGV[0]);
 		else if (strcmp(CMD_ARGV[0], "dump") == 0)
 			result = ndsv5_iord_cache_dump(target, ICACHE, CMD_ARGV, CMD_ARGC);
-		else
+		else if (strcmp(CMD_ARGV[0], "query") == 0) {
+			if (CMD_ARGC != 2) {
+				LOG_ERROR("Usage: Usage: query config");
+				return ERROR_FAIL;
+			} else if (strcmp(CMD_ARGV[1], "config") == 0) {
+				return ndsv5_query_l1cache_config(target, icache);
+			} else {
+				command_print(CMD, "%s: No valid parameter", target_name(target));
+				command_print(CMD, "Usage: query config");
+				return ERROR_FAIL;
+			}
+		} else
 			command_print(CMD, "%s: No valid parameter", target_name(target));
 	}
 
@@ -1117,7 +1128,18 @@ __COMMAND_HANDLER(handle_ndsv5_dcache_command)
 			result = ndsv5_enableornot_cache(target, DCACHE, CMD_ARGV[0]);
 		else if (strcmp(CMD_ARGV[0], "dump") == 0)
 			result = ndsv5_iord_cache_dump(target, DCACHE, CMD_ARGV, CMD_ARGC);
-		else
+		else if (strcmp(CMD_ARGV[0], "query") == 0) {
+			if (CMD_ARGC != 2) {
+				LOG_ERROR("Usage: Usage: query config");
+				return ERROR_FAIL;
+			} else if (strcmp(CMD_ARGV[1], "config") == 0) {
+				return ndsv5_query_l1cache_config(target, dcache);
+			} else {
+				command_print(CMD, "%s: No valid parameter", target_name(target));
+				command_print(CMD, "Usage: query config");
+				return ERROR_FAIL;
+			}
+		} else
 			command_print(CMD, "%s: No valid parameter", target_name(target));
 	}
 
