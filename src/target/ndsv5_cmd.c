@@ -230,9 +230,23 @@ __COMMAND_HANDLER(handle_ndsv5_query_capability_command)
 	if (riscv_debug_buffer_size(target) >= 7)
 		q_access_mode = 1;
 
+	/* Check L1  */
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	struct nds32_v5_cache *icache = NULL;
+	struct nds32_v5_cache *dcache = NULL;
+	if (nds32 != NULL && (ndsv5_init_cache(target) == ERROR_OK)) {
+		icache = &(nds32->memory.icache);
+		dcache = &(nds32->memory.dcache);
+	} else {
+		LOG_ERROR("gpnds32_v5 is NULL");
+		icache = NULL;
+		dcache = NULL;
+	}
+
 	/* check l2c before access */
 	uint64_t tmp;
 	ndsv5_check_l2cache_exist(target, &tmp);
+
 
 	command_print(CMD, "tracer:%d;"
 			   "profiling:%d;"
@@ -242,6 +256,8 @@ __COMMAND_HANDLER(handle_ndsv5_query_capability_command)
 			   "pwr:%d;"
 			   "q_access_mode:%d;"
 			   "sysbusaccess:%d;"
+			   "l1i_support:%d;"
+			   "l1d_support:%d;"
 			   "l2c_support:%d",
 				if_tracer,
 				if_profiling,
@@ -251,6 +267,8 @@ __COMMAND_HANDLER(handle_ndsv5_query_capability_command)
 				if_pwr_sample,
 				q_access_mode,
 				system_bus_access,
+				((icache != NULL && icache->line_size) ? 1 : 0),
+				((dcache != NULL && dcache->line_size) ? 1 : 0),
 				ndsv5_l2c_support);
 	return ERROR_OK;
 }
