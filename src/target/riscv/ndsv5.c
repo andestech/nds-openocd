@@ -45,6 +45,15 @@ uint64_t L2C_BASE = (uint64_t)-1;
 /********************************************************************/
 
 
+#ifndef min
+#define min(a,b) \
+	({ __typeof__ (a) _a = (a); \
+	 __typeof__ (b) _b = (b); \
+	 _a < _b ? _a : _b; })
+#endif
+static int ndsv5_get_palen(struct target *target, uint64_t *palen);
+
+
 
 
 int ndsv5_step(
@@ -1001,7 +1010,7 @@ struct cache_element ce[CACHE_SET_NUM][CACHE_WAY_NUM];
 #define NDS_PAGE_SHIFT 12		/* for PAGE_SIZE 4KB */
 #define NDS_PAGE_SIZE  (1UL << NDS_PAGE_SHIFT)
 
-/* palen : 34bit  TAG:PA[palen-1:10 */
+/* palen : 34bit  TAG:PA[palen-1:10] */
 #define CCTL_mskTAG_32 0xffffff
 
 /* palen : 64bit  TAG:PA[palen-1:10] */
@@ -1078,6 +1087,76 @@ int ndsv5_init_cache(struct target *target)
 	return ERROR_OK;
 }
 
+static void ndsv5_parse_tag(struct target *target, uint64_t tag, uint64_t idx, uint64_t way,
+		unsigned int cache_type, bool new_tagformat)
+{
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	uint64_t set_bits, line_bits;
+	uint64_t maskTAG;
+	struct nds32_v5_cache *cache;
+	int shift_bit;
+
+	int xlen = riscv_xlen(target);
+
+	if (cache_type == ICACHE)
+		cache = &nds32->memory.icache;
+	else if (cache_type == DCACHE)
+		cache = &nds32->memory.dcache;
+	else
+		return;
+
+	if (xlen == 32)
+		maskTAG = CCTL_mskTAG_32;
+	else
+		maskTAG = CCTL_mskTAG_64;
+
+	set_bits = cache->log2_set;
+	line_bits = cache->log2_line_size;
+
+	if (new_tagformat)
+		shift_bit = line_bits + set_bits;
+	else
+		shift_bit = 10;
+
+	if (new_tagformat) {
+		if (cache_type == DCACHE) {
+			int mesi = tag & 0x7;
+			mesi = tag & 0x7;
+			ce[idx][way].inval = (mesi == 0);
+			ce[idx][way].shared = (mesi == 1);
+			ce[idx][way].exclusive = (mesi == 3);
+			ce[idx][way].modified = (mesi == 7);
+
+			ce[idx][way].lock = (uint8_t)(tag & 0x8) >> 3;
+			ce[idx][way].pa = (tag >> 4) << shift_bit;
+		} else {
+			uint64_t palen = -1;
+			if (ndsv5_get_palen(target, &palen) == ERROR_FAIL) {
+				LOG_ERROR("Unable get palen");
+				return;
+			}
+
+			uint64_t A = min(12UL, set_bits);
+			uint64_t tag_bw = palen - A;
+			shift_bit = line_bits + set_bits;
+			maskTAG = (0x1UL << (palen - 10)) - 1;
+
+			LOG_DEBUG("PALEN: %" PRIu64 ", icache_tag_width: %" PRIu64 ", maksTAG: 0x%" PRIx64, palen, tag_bw, maskTAG);
+
+			ce[idx][way].valid = (uint8_t)(tag >> (xlen - 1)) & 0x1UL;
+			ce[idx][way].lock =  (uint8_t)(tag >> (xlen - 2)) & 0x1UL;
+			ce[idx][way].dirty = (uint8_t)(0);
+			ce[idx][way].pa = (tag & maskTAG) << (shift_bit-2); /* Why need to -2 ?! */
+
+		}
+	} else {
+		ce[idx][way].valid = (uint8_t)((tag & (1ULL << (xlen - 1))) >> (xlen - 1));
+		ce[idx][way].lock = (uint8_t)((tag & (1ULL << (xlen - 2))) >> (xlen - 2));
+		ce[idx][way].dirty = (uint8_t)((tag & (1ULL << (xlen - 3))) >> (xlen - 3));
+		ce[idx][way].pa = (tag & maskTAG) << shift_bit;
+	}
+}
+
 int ndsv5_dump_cache(struct target *target, unsigned int cache_type, const char* filename)
 {
 	LOG_DEBUG("Dump Cache");
@@ -1087,13 +1166,13 @@ int ndsv5_dump_cache(struct target *target, unsigned int cache_type, const char*
 	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
 	struct reg *reg_mcctlbeginaddr, *reg_mcctlcommand, *reg_mcctldata, *reg_mmsc_cfg, *reg_marchid;
 	FILE *pFile;
-	uint64_t idx, way, ra, tag, i, maskTAG, read_tag_cmd, read_data_cmd, reg_marchid_value;
+	uint64_t idx, way, ra, tag, i, read_tag_cmd, read_data_cmd, reg_marchid_value;
 	uint64_t sets, ways, line_size, set_bits, line_bits, way_offset;
 	uint64_t cache_index, word_num, word_size;
 	struct nds32_v5_cache *cache;
 	uint64_t total_cache;
 	uint64_t now_cache = 0;
-	int xlen, shift_bit, mesi;
+	int xlen;
 	bool idx_auto = false, new_tagformat = false;
 
 	pFile = fopen(filename, "w");
@@ -1119,14 +1198,6 @@ int ndsv5_dump_cache(struct target *target, unsigned int cache_type, const char*
 	}
 
 	xlen = riscv_xlen(target);
-	if (xlen == 32)
-		maskTAG = CCTL_mskTAG_32;
-	else if (xlen == 64)
-		maskTAG = CCTL_mskTAG_64;
-	else {
-		LOG_ERROR("%s not supported xlen:%d", __func__, xlen);
-		return ERROR_FAIL;
-	}
 
 	reg_mcctlbeginaddr = ndsv5_get_reg_by_CSR(target, CSR_MCCTLBEGINADDR);
 	reg_mcctlcommand = ndsv5_get_reg_by_CSR(target, CSR_MCCTLCOMMAND);
@@ -1156,11 +1227,8 @@ int ndsv5_dump_cache(struct target *target, unsigned int cache_type, const char*
 	 * others, shift bit = 10 */
 	reg_marchid = ndsv5_get_reg_by_CSR(target, CSR_MARCHID);
 	reg_marchid_value = ndsv5_get_register_value(reg_marchid);
-	if (((reg_marchid_value & 0xff) == 0x45) && (cache_type == DCACHE)) {
+	if ((reg_marchid_value & 0xff) == 0x45)
 		new_tagformat = true;
-		shift_bit = line_bits + set_bits;
-	} else
-		shift_bit = 10;
 
 	/* Index Example Format for CCTL Index Type Operation for 64bit icache
 	 * same with 32bit i/dcache(from Roger email) */
@@ -1176,35 +1244,12 @@ int ndsv5_dump_cache(struct target *target, unsigned int cache_type, const char*
 	if (idx_auto) {
 		/* READ TAG COMMAND */
 		ndsv5_set_register_value(reg_mcctlbeginaddr, 0);
-		if (new_tagformat) {
-			for (idx = 0; idx < sets; idx++) {
-				for (way = 0; way < ways; way++) {
-					ndsv5_set_register_value(reg_mcctlcommand, read_tag_cmd);
-					tag = ndsv5_get_register_value(reg_mcctldata);
-					LOG_DEBUG("idx_auto tag: %lx", tag);
-
-					mesi = tag & 0x7;
-					ce[idx][way].inval = (mesi == 0);
-					ce[idx][way].shared = (mesi == 1);
-					ce[idx][way].exclusive = (mesi == 3);
-					ce[idx][way].modified = (mesi == 7);
-
-					ce[idx][way].lock = (uint8_t)(tag & 0x8) >> 3;
-					ce[idx][way].pa = (tag >> 4) << shift_bit ;
-				}
-			}
-		} else {
-			for (idx = 0; idx < sets; idx++) {
-				for (way = 0; way < ways; way++) {
-					ndsv5_set_register_value(reg_mcctlcommand, read_tag_cmd);
-					tag = ndsv5_get_register_value(reg_mcctldata);
-					LOG_DEBUG("idx_auto tag: %lx", tag);
-
-					ce[idx][way].valid = (uint8_t)((tag & (1ULL << (xlen - 1))) >> (xlen - 1));
-					ce[idx][way].lock = (uint8_t)((tag & (1ULL << (xlen - 2))) >> (xlen - 2));
-					ce[idx][way].dirty = (uint8_t)((tag & (1ULL << (xlen - 3))) >> (xlen - 3));
-					ce[idx][way].pa = (tag & maskTAG) << shift_bit;
-				}
+		for (idx = 0; idx < sets; idx++) {
+			for (way = 0; way < ways; way++) {
+				ndsv5_set_register_value(reg_mcctlcommand, read_tag_cmd);
+				tag = ndsv5_get_register_value(reg_mcctldata);
+				LOG_DEBUG("idx_auto tag: %" PRIu64, tag);
+				ndsv5_parse_tag(target, tag, idx, way, cache_type, new_tagformat);
 			}
 		}
 
@@ -1230,21 +1275,7 @@ int ndsv5_dump_cache(struct target *target, unsigned int cache_type, const char*
 				tag = ndsv5_get_register_value(reg_mcctldata);
 				LOG_DEBUG("tag: %lx", tag);
 
-				if (new_tagformat) {
-					mesi = tag & 0x7;
-					ce[idx][way].inval = (mesi == 0);
-					ce[idx][way].shared = (mesi == 1);
-					ce[idx][way].exclusive = (mesi == 3);
-					ce[idx][way].modified = (mesi == 7);
-
-					ce[idx][way].lock = (uint8_t)(tag & 0x8) >> 3;
-					ce[idx][way].pa = (tag >> 4) << shift_bit ;
-				} else {
-					ce[idx][way].valid = (uint8_t)((tag & (1ULL << (xlen - 1))) >> (xlen - 1));
-					ce[idx][way].lock = (uint8_t)((tag & (1ULL << (xlen - 2))) >> (xlen - 2));
-					ce[idx][way].dirty = (uint8_t)((tag & (1ULL << (xlen - 3))) >> (xlen - 3));
-					ce[idx][way].pa = (tag & maskTAG) << shift_bit;
-				}
+				ndsv5_parse_tag(target, tag, idx, way, cache_type, new_tagformat);
 
 				/* READ DATA COMMAND */
 				for (i = 0; i < word_num; i++) {
@@ -1272,7 +1303,7 @@ int ndsv5_dump_cache(struct target *target, unsigned int cache_type, const char*
 		fmt_str2 = "%16s %4s %4s %1s %1s %1s";
 		fmt_str3 = "%016llx %04llx %04llx %01x %01x %01x ";
 	}
-	if (new_tagformat) {
+	if (new_tagformat && cache_type == DCACHE) {
 		fmt_str2 = "%8s %4s %4s %1s %1s %1s %1s %1s";
 		fmt_str3 = "%08llx %04llx %04llx %01x %01x %01x %01x %01x ";
 		if (xlen == 64) {
@@ -1282,7 +1313,7 @@ int ndsv5_dump_cache(struct target *target, unsigned int cache_type, const char*
 	}
 
 	fprintf(pFile, "dump %s\n", cache_type ? "DCACHE" : "ICACHE");
-	if (new_tagformat)
+	if (new_tagformat && cache_type == DCACHE)
 		fprintf(pFile, fmt_str2, "ADDRESS", "SET", "WAY", "I", "S", "E", "M", "L");
 	else
 		fprintf(pFile, fmt_str2, "ADDRESS", "SET", "WAY", "V", "D", "L");
@@ -1291,7 +1322,7 @@ int ndsv5_dump_cache(struct target *target, unsigned int cache_type, const char*
 	fprintf(pFile, "\n");
 	for (idx = 0; idx < sets; idx++) {
 		for (way = 0; way < ways; way++) {
-			if (new_tagformat) {
+			if (new_tagformat && cache_type == DCACHE) {
 				fprintf(pFile, fmt_str3,
 					ce[idx][way].pa | (idx * line_size),
 					idx,
@@ -1331,12 +1362,11 @@ int ndsv5_dump_cache_va(struct target *target, unsigned int cache_type, uint64_t
 
 	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
 	struct reg *reg_mcctlbeginaddr, *reg_mcctlcommand, *reg_mcctldata, *reg_marchid;
-	uint64_t idx, way, ra, tag, i, maskTAG, read_tag_cmd, read_data_cmd, reg_marchid_value;
+	uint64_t idx, way, ra, tag, i, read_tag_cmd, read_data_cmd, reg_marchid_value;
 	uint64_t sets, ways, line_size, line_bits, set_bits, way_offset;
 	uint64_t cache_index, word_num, word_size;
 	struct nds32_v5_cache *cache;
-	struct cache_element ces[8];    /* maximum mdicm_cfg.DWAY is 8 */
-	int xlen, shift_bit, mesi;
+	int xlen;
 	bool new_tagformat = false;
 
 	if (ndsv5_init_cache(target) != ERROR_OK)
@@ -1356,14 +1386,6 @@ int ndsv5_dump_cache_va(struct target *target, unsigned int cache_type, uint64_t
 	}
 
 	xlen = riscv_xlen(target);
-	if (xlen == 32)
-		maskTAG = CCTL_mskTAG_32;
-	else if (xlen == 64)
-		maskTAG = CCTL_mskTAG_64;
-	else {
-		LOG_ERROR("%s not supported xlen:%d", __func__, xlen);
-		return ERROR_FAIL;
-	}
 
 	ways = cache->way;
 	sets = cache->set;
@@ -1388,11 +1410,8 @@ int ndsv5_dump_cache_va(struct target *target, unsigned int cache_type, uint64_t
 	 * others, shift bit = 10 */
 	reg_marchid = ndsv5_get_reg_by_CSR(target, CSR_MARCHID);
 	reg_marchid_value = ndsv5_get_register_value(reg_marchid);
-	if (((reg_marchid_value & 0xff) == 0x45) && (cache_type == DCACHE)) {
+	if ((reg_marchid_value & 0xff) == 0x45)
 		new_tagformat = true;
-		shift_bit = line_bits + set_bits;
-	} else
-		shift_bit = 10;
 
 	/* Index Example Format for CCTL Index Type Operation for 64bit icache
 	 * same with 32bit i/dcache(from Roger email) */
@@ -1417,28 +1436,15 @@ int ndsv5_dump_cache_va(struct target *target, unsigned int cache_type, uint64_t
 		ndsv5_set_register_value(reg_mcctlbeginaddr, ra);
 		ndsv5_set_register_value(reg_mcctlcommand, read_tag_cmd);
 		tag = ndsv5_get_register_value(reg_mcctldata);
-		LOG_DEBUG("tag: %lx", tag);
-		if (new_tagformat) {
-			mesi = tag & 0x7;
-			ces[way].inval = (mesi == 0);
-			ces[way].shared = (mesi == 1);
-			ces[way].exclusive = (mesi == 3);
-			ces[way].modified = (mesi == 7);
+		LOG_DEBUG("tag: %" PRIx64, tag);
+		ndsv5_parse_tag(target, tag, 0, way, cache_type, new_tagformat);
 
-			ces[way].lock = (uint8_t)(tag & 0x8) >> 3;
-			ces[way].pa = (tag >> 4) << shift_bit ;
-		} else {
-			ces[way].valid = (uint8_t)((tag & (1ULL << (xlen - 1))) >> (xlen - 1));
-			ces[way].lock = (uint8_t)((tag & (1ULL << (xlen - 2))) >> (xlen - 2));
-			ces[way].dirty = (uint8_t)((tag & (1ULL << (xlen - 3))) >> (xlen - 3));
-			ces[way].pa = (tag & maskTAG) << shift_bit;
-		}
 		for (i = 0; i < word_num; i++) {
 			cache_index = (ra | (i * word_size));
 			/* Read DATA command */
 			ndsv5_set_register_value(reg_mcctlbeginaddr, cache_index);
 			ndsv5_set_register_value(reg_mcctlcommand, read_data_cmd);
-			ces[way].cacheline[i] = ndsv5_get_register_value(reg_mcctldata);
+			ce[0][way].cacheline[i] = ndsv5_get_register_value(reg_mcctldata);
 		}
 	}
 
@@ -1455,7 +1461,7 @@ int ndsv5_dump_cache_va(struct target *target, unsigned int cache_type, uint64_t
 		fmt_str2 = "%16s %4s %4s %1s %1s %1s";
 		fmt_str3 = "%016llx %04llx %04llx %01x %01x %01x ";
 	}
-	if (new_tagformat) {
+	if (new_tagformat && cache_type == DCACHE) {
 		fmt_str2 = "%8s %4s %4s %1s %1s %1s %1s %1s";
 		fmt_str3 = "%08llx %04llx %04llx %01x %01x %01x %01x %01x ";
 		if (xlen == 64) {
@@ -1465,7 +1471,7 @@ int ndsv5_dump_cache_va(struct target *target, unsigned int cache_type, uint64_t
 	}
 
 	NDS32_LOG_LF("dump %s\n", cache_type ? "DCACHE" : "ICACHE");
-	if (new_tagformat)
+	if (new_tagformat && cache_type == DCACHE)
 		NDS32_LOG_LF(fmt_str2, "ADDRESS", "SET", "WAY", "I", "S", "E", "M", "L");
 	else
 		NDS32_LOG_LF(fmt_str2, "ADDRESS", "SET", "WAY", "V", "D", "L");
@@ -1473,33 +1479,33 @@ int ndsv5_dump_cache_va(struct target *target, unsigned int cache_type, uint64_t
 		NDS32_LOG_LF(fmt_str, (i * word_size));
 	NDS32_LOG_LF("\n");
 	for (way = 0; way < ways; way++) {
-		if (new_tagformat) {
+		if (new_tagformat && cache_type == DCACHE) {
 			NDS32_LOG_LF(fmt_str3,
-				ces[way].pa | idx,
+				ce[0][way].pa | idx,
 				idx >> line_bits,
 				way,
-				ces[way].inval,
-				ces[way].shared,
-				ces[way].exclusive,
-				ces[way].modified,
-				ces[way].lock);
+				ce[0][way].inval,
+				ce[0][way].shared,
+				ce[0][way].exclusive,
+				ce[0][way].modified,
+				ce[0][way].lock);
 		} else {
 			NDS32_LOG_LF(fmt_str3,
-				ces[way].pa | idx,
+				ce[0][way].pa | idx,
 				idx >> line_bits,
 				way,
-				ces[way].valid,
-				ces[way].dirty,
-				ces[way].lock);
+				ce[0][way].valid,
+				ce[0][way].dirty,
+				ce[0][way].lock);
 		}
 
 		for (i = 0; i < word_num; i++)
-			NDS32_LOG_LF(fmt_str1, ces[way].cacheline[i]);
+			NDS32_LOG_LF(fmt_str1, ce[0][way].cacheline[i]);
 		NDS32_LOG_LF("\n");
 	}
 
 	LOG_INFO("dump %s\n", cache_type ? "DCACHE" : "ICACHE");
-	if (new_tagformat)
+	if (new_tagformat && cache_type == DCACHE)
 		LOG_INFO(fmt_str2, "ADDRESS", "SET", "WAY", "I", "S", "E", "M", "L");
 	else
 		LOG_INFO(fmt_str2, "ADDRESS", "SET", "WAY", "V", "D", "L");
@@ -1507,28 +1513,28 @@ int ndsv5_dump_cache_va(struct target *target, unsigned int cache_type, uint64_t
 		LOG_INFO(fmt_str, (i * word_size));
 	LOG_INFO("\n");
 	for (way = 0; way < ways; way++) {
-		if (new_tagformat) {
+		if (new_tagformat && cache_type == DCACHE) {
 			LOG_INFO(fmt_str3,
-				ces[way].pa | idx,
+				ce[0][way].pa | idx,
 				idx >> line_bits,
 				way,
-				ces[way].inval,
-				ces[way].shared,
-				ces[way].exclusive,
-				ces[way].modified,
-				ces[way].lock);
+				ce[0][way].inval,
+				ce[0][way].shared,
+				ce[0][way].exclusive,
+				ce[0][way].modified,
+				ce[0][way].lock);
 		} else {
 			LOG_INFO(fmt_str3,
-				ces[way].pa | idx,
+				ce[0][way].pa | idx,
 				idx >> line_bits,
 				way,
-				ces[way].valid,
-				ces[way].dirty,
-				ces[way].lock);
+				ce[0][way].valid,
+				ce[0][way].dirty,
+				ce[0][way].lock);
 		}
 
 		for (i = 0; i < word_num; i++)
-			LOG_INFO(fmt_str1, ces[way].cacheline[i]);
+			LOG_INFO(fmt_str1, ce[0][way].cacheline[i]);
 		LOG_INFO("\n");
 	}
 
