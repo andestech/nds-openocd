@@ -1442,6 +1442,21 @@ COMMAND_HANDLER(ftdi_handle_two_wire_mode)
 
 static int ftdi_handle_write_pins_command(Jim_Interp *interp, int argc, Jim_Obj *const *argv)
 {
+	/* Disable AICE-MICRO 2w mode */
+	uint8_t two_wire_mode_bak;
+	if (two_wire_mode) {
+		two_wire_mode_bak = two_wire_mode;
+		two_wire_mode = 0;
+
+		LOG_DEBUG("[OLD] out = 0x%x, dir = 0x%x", output, direction);
+
+		/* Set FT_nTRST(ACBUS0) and FT_TWO_WIRE(ACBUS7) to 0 */
+		output &= ~(0x4100);
+		direction &= ~(0x4000);
+
+		LOG_DEBUG("[NEW] out = 0x%x, dir = 0x%x", output, direction);
+	}
+
 	const char *tmp_str;
 	char Nibble;
 	char out_tck[2048] = {0};
@@ -1485,6 +1500,18 @@ static int ftdi_handle_write_pins_command(Jim_Interp *interp, int argc, Jim_Obj 
 		mpsse_set_data_bits_low_byte(mpsse_ctx, output & 0xff, direction & 0xff);
 		mpsse_set_data_bits_high_byte(mpsse_ctx, output >> 8, direction >> 8);
 	}
+
+	/* Restore AICE-MICRO 2w mode if needed */
+	if (two_wire_mode_bak) {
+		LOG_DEBUG("[Restore OLD] out = 0x%x, dir = 0x%x", output, direction);
+
+		two_wire_mode = 1;
+		output |= 0x4100;
+		direction |= 0x4000;
+
+		LOG_DEBUG("[Restore NEW] out = 0x%x, dir = 0x%x", output, direction);
+	}
+
 	mpsse_set_data_bits_low_byte(mpsse_ctx, old_output & 0xff, old_direction & 0xff);
 	mpsse_set_data_bits_high_byte(mpsse_ctx, old_output >> 8, old_direction >> 8);
 	mpsse_flush(mpsse_ctx);
