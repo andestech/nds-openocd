@@ -806,13 +806,12 @@ int ndsv5_read_memory(struct target *target, target_addr_t address,
 		uint32_t size, uint32_t count, uint8_t *buffer)
 {
 	LOG_DEBUG("addr=0x%" TARGET_PRIxADDR ", size=0x%x, count=0x%x", address, size, count);
-	struct target_type *tt = get_target_type(target);
-	riscv_info_t *info = (riscv_info_t *)target->arch_info;
+	RISCV_INFO(r);
 
 	/* check if 011, or  word_access/aligned_access disable */
-	if ((info->dtm_version == 0) ||
+	if ((r->dtm_version == 0) ||
 		((nds_force_word_access == 0) && (nds_force_aligned_access == 0))) {
-		return tt->read_memory(target, address, size, count, buffer);
+		return r->read_memory(target, address, size, count, buffer, size);
 	}
 	uint32_t i;
 	if ((nds_force_aligned_access == 1) && ((address % size) != 0)) {
@@ -822,8 +821,8 @@ int ndsv5_read_memory(struct target *target, target_addr_t address,
 
 		for (i = 0; i < count; i++) {
 			align_addr = (address & ~0x03);
-			tt->read_memory(target, align_addr, 4, 1, (uint8_t *)&data_val1);
-			tt->read_memory(target, align_addr+4, 4, 1, (uint8_t *)&data_val2);
+			r->read_memory(target, align_addr, 4, 1, (uint8_t *)&data_val1, 4);
+			r->read_memory(target, align_addr+4, 4, 1, (uint8_t *)&data_val2, 4);
 			LOG_DEBUG("addr=0x%" TARGET_PRIxADDR ", data_val1=0x%x, data_val2=0x%x", align_addr, data_val1, data_val2);
 			*buffer++ = (data_val1 >> 16) & 0xff;
 			*buffer++ = (data_val1 >> 24) & 0xff;
@@ -836,7 +835,7 @@ int ndsv5_read_memory(struct target *target, target_addr_t address,
 
 	if (nds_force_word_access == 1) {
 		for (i = 0; i < count; i++) {
-			tt->read_memory(target, address, size, 1, buffer);
+			r->read_memory(target, address, size, 1, buffer, size);
 			address += size;
 			buffer += size;
 		}
@@ -851,7 +850,7 @@ int ndsv5_read_memory(struct target *target, target_addr_t address,
 		access_size = size;
 		access_cnt = count;
 		LOG_DEBUG("path-I, access_size=0x%x, access_cnt=0x%x", access_size, access_cnt);
-		return tt->read_memory(target, address, access_size, access_cnt, buffer);
+		return r->read_memory(target, address, access_size, access_cnt, buffer, access_size);
 	}
 
 	while (total_size) {
@@ -859,7 +858,7 @@ int ndsv5_read_memory(struct target *target, target_addr_t address,
 		access_cnt = readsize/access_size;
 		LOG_DEBUG("path-II, access_size=0x%x, access_cnt=0x%x", access_size, access_cnt);
 
-		int retval = tt->read_memory(target, address, access_size, access_cnt, buffer);
+		int retval = r->read_memory(target, address, access_size, access_cnt, buffer, access_size);
 		if (retval != ERROR_OK)
 			return retval;
 		total_size -= (access_size * access_cnt);
