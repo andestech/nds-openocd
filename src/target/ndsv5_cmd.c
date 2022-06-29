@@ -2776,13 +2776,17 @@ static int ndsv5_gdb_detach(struct target *target)
 }
 
 static const char * const TARGET_EVENT_Name[] = {
-	"TARGET_EVENT_GDB_HALT",
+	"GDB_HALT",
 	"HALTED",
 	"RESUMED",
 	"RESUME_START",
 	"RESUME_END",
+	"STEP_START",
+	"STEP_END",
+
 	"GDB_START",
 	"GDB_END",
+
 	"RESET_START",
 	"RESET_ASSERT_PRE",
 	"RESET_ASSERT",
@@ -2791,16 +2795,22 @@ static const char * const TARGET_EVENT_Name[] = {
 	"RESET_DEASSERT_POST",
 	"RESET_INIT",
 	"RESET_END",
+
 	"DEBUG_HALTED",
 	"DEBUG_RESUMED",
+
 	"EXAMINE_START",
+	"EXAMINE_FAIL",
 	"EXAMINE_END",
+
 	"GDB_ATTACH",
 	"GDB_DETACH",
+
 	"GDB_FLASH_ERASE_START",
 	"GDB_FLASH_ERASE_END",
 	"GDB_FLASH_WRITE_START",
 	"GDB_FLASH_WRITE_END",
+
 	"TRACE_CONFIG",
 	"",
 };
