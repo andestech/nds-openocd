@@ -372,6 +372,10 @@ static struct target_type *get_target_type(struct target *target)
 
 static int riscv_create_target(struct target *target, Jim_Interp *interp)
 {
+#if _NDS_V5_ONLY_
+	ndsv5_target_create(target, interp);
+#endif
+
 	LOG_DEBUG("riscv_create_target()");
 	target->arch_info = calloc(1, sizeof(riscv_info_t));
 	if (!target->arch_info) {
@@ -5521,7 +5525,7 @@ struct target_type ndsv5_target = {
 	.data_bits = riscv_data_bits,
 
 	.commands = ndsv5_command_handlers,
-	.target_create = ndsv5_target_create,
+	.target_create = riscv_create_target,
 	.get_gdb_fileio_info = ndsv5_get_gdb_fileio_info,
 	.gdb_fileio_end = ndsv5_gdb_fileio_end,
 	.hit_watchpoint = ndsv5_hit_watchpoint,
