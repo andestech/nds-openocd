@@ -4012,7 +4012,9 @@ int ndsv5_watchpoint_count(struct target *target)
 	struct watchpoint *wp;
 	int watch_count = 0;
 
+	LOG_DEBUG("watched_addr = 0x%lx, watched_length = %d", watched_addr, watched_length);
 	for (wp = target->watchpoints; wp; wp = wp->next) {
+		LOG_DEBUG("wp->addr: 0x%lx, wp->length: %d", wp->address, wp->length);
 		if (((wp->address >= (watched_addr + watched_length)) ||
 		    ((wp->address + wp->length) <= watched_addr)) == false)
 			watch_count++;
@@ -4024,6 +4026,7 @@ int ndsv5_watchpoint_count(struct target *target)
 			break;
 		}
 	}
+	LOG_DEBUG("watch_count = %d", watch_count);
 	return ERROR_OK;
 }
 
@@ -4047,6 +4050,7 @@ int ndsv5_hit_watchpoint(struct target *target,
 	uint64_t watched_addr = nds32->watched_address;
 	uint32_t watched_length = nds32->watched_length;
 
+	LOG_DEBUG("watch_addr = 0x%lx, watched_length = %d", watched_addr, watched_length);
 	if (watched_addr == 0xFFFFFFFF)
 		return ERROR_FAIL;
 
@@ -4063,9 +4067,11 @@ int ndsv5_hit_watchpoint(struct target *target,
 	for (wp = target->watchpoints; wp; wp = wp->next) {
 		watchpoint_start = wp->address;
 		watchpoint_end = watchpoint_start + wp->length;
+		LOG_DEBUG("start: 0x%lx, end: 0x%lx", watchpoint_start, watchpoint_end);
 		if (((watchpoint_start >= (watched_addr + watched_length)) || (watchpoint_end <= watched_addr)) == false) {
 			*hit_watchpoint = wp;
 			NDS_INFO("hit watchpoints=0x%" TARGET_PRIxADDR, watched_addr);
+			LOG_DEBUG("hit watchpoints=0x%" TARGET_PRIxADDR, watched_addr);
 			return ERROR_OK;
 		}
 	}
