@@ -197,20 +197,7 @@ int ndsv5_poll(struct target *target)
 		LOG_ERROR("old_or_new_riscv_poll failed");
 		return ERROR_FAIL;
 	}
-	if (ndsv5_triggered_hart != -1) {
-		if (ndsv5_handle_triggered(target) != ERROR_OK) {
-			/* resume target */
-		} else {
-#if _NDS_SUPPORT_WITHOUT_ANNOUNCING_
-			if (ndsv5_without_announce) {
-				ndsv5_without_announce = 0;
-				LOG_DEBUG("ndsv5_without_announce");
-			} else {
-				target_call_event_callbacks(target, TARGET_EVENT_HALTED);
-			}
-#endif
-		}
-	}
+
 	return ndsv5_handle_poll(target);
 }
 

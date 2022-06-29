@@ -2555,6 +2555,9 @@ int riscv_openocd_poll(struct target *target)
 					return ERROR_FAIL;
 
 				if (halt_reason == RISCV_HALT_BREAKPOINT) {
+#if _NDS_V5_ONLY_
+					/* Disable semihosting support */
+#else
 					int retval;
 					switch (riscv_semihosting(t, &retval)) {
 					case SEMI_NONE:
@@ -2570,6 +2573,7 @@ int riscv_openocd_poll(struct target *target)
 					case SEMI_ERROR:
 						return retval;
 					}
+#endif
 				} else if (halt_reason != RISCV_HALT_GROUP) {
 					should_remain_halted++;
 				}
@@ -2625,7 +2629,16 @@ int riscv_openocd_poll(struct target *target)
 		target->state = TARGET_HALTED;
 	}
 
+#if _NDS_V5_ONLY_
+	if (target->debug_reason == DBG_REASON_BREAKPOINT ||
+	    target->debug_reason == DBG_REASON_WATCHPOINT) {
+#else
 	if (target->debug_reason == DBG_REASON_BREAKPOINT) {
+#endif
+
+#if _NDS_V5_ONLY_
+		/* Disable semihosting support */
+#else
 		int retval;
 		switch (riscv_semihosting(target, &retval)) {
 			case SEMI_NONE:
@@ -2638,6 +2651,19 @@ int riscv_openocd_poll(struct target *target)
 				break;
 			case SEMI_ERROR:
 				return retval;
+		}
+#endif
+
+		if (ndsv5_handle_triggered(target) != ERROR_OK) {
+			/* resume target */
+		} else {
+#if _NDS_SUPPORT_WITHOUT_ANNOUNCING_
+			if (ndsv5_without_announce) {
+				ndsv5_without_announce = 0;
+				LOG_DEBUG("ndsv5_without_announce");
+			} else
+				target_call_event_callbacks(target, TARGET_EVENT_HALTED);
+#endif
 		}
 	} else {
 		if (old_state == TARGET_DEBUG_RUNNING)
