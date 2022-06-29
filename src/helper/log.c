@@ -315,6 +315,7 @@ COMMAND_HANDLER(handle_log_output_command)
 		if (c)
 			*c = '\0';
 		nds_workspace_folder = strdup(name_tmp);
+		return ERROR_OK;
 #endif /* _NDS32_ONLY_ */
 	}
 
