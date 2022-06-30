@@ -105,7 +105,6 @@ uint32_t ndsv5_l2c_support;
 /********************************************************************/
 /* NDSV5 global Var. */
 /********************************************************************/
-int ndsv5_triggered_hart;
 extern uint64_t LM_BASE;
 extern uint32_t ndsv5_dis_cache_busmode;
 extern uint32_t ndsv5_dmi_busy_retry_times;

@@ -192,7 +192,6 @@ int ndsv5_poll(struct target *target)
 	if (nds_skip_dmi == 1)
 		return ERROR_OK;
 
-	ndsv5_triggered_hart = -1;
 	if (old_or_new_riscv_poll(target) != ERROR_OK) {
 		LOG_ERROR("old_or_new_riscv_poll failed");
 		return ERROR_FAIL;
@@ -2522,7 +2521,6 @@ int ndsv5_openocd_poll_one_hart(struct target *target, int hartid)
 	}
 
 	target->state = TARGET_HALTED;
-	ndsv5_triggered_hart = triggered_hart;
 
 #if (!_NDS_SUPPORT_WITHOUT_ANNOUNCING_)
 	target_call_event_callbacks(target, TARGET_EVENT_HALTED);
