@@ -2690,9 +2690,12 @@ int riscv_openocd_step(struct target *target, int current,
 	if (!current)
 		riscv_set_register(target, GDB_REGNO_PC, address);
 
+#if _NDS_V5_ONLY_
+#else
 	riscv_reg_t trigger_state[RISCV_MAX_HWBPS] = {0};
 	if (disable_triggers(target, trigger_state) != ERROR_OK)
 		return ERROR_FAIL;
+#endif /* _NDS_V5_ONLY_ */
 
 	bool success = true;
 	uint64_t current_mstatus;
@@ -2723,10 +2726,13 @@ int riscv_openocd_step(struct target *target, int current,
 		}
 
 _exit:
+#if _NDS_V5_ONLY_
+#else
 	if (enable_triggers(target, trigger_state) != ERROR_OK) {
 		success = false;
 		LOG_ERROR("unable to enable triggers");
 	}
+#endif /* _NDS_V5_ONLY_ */
 
 	if (success) {
 		target->state = TARGET_RUNNING;
