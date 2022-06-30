@@ -3994,53 +3994,53 @@ static int read_memory_progbuf(struct target *target, target_addr_t address,
 		riscv_program_csrrci(&program, GDB_REGNO_ZERO,  CSR_DCSR_MPRVEN, GDB_REGNO_DCSR);
 
 #if _NDS_V5_ONLY_
-struct nds32_v5 *nds32 = target_to_nds32_v5(target);
-if (nds32->nds_const_addr_mode == 0)
-	riscv_program_addi(&program, GDB_REGNO_S0, GDB_REGNO_S0, size);
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	if (nds32->nds_const_addr_mode == 0)
+		riscv_program_addi(&program, GDB_REGNO_S0, GDB_REGNO_S0, size);
 #else /* _NDS_V5_ONLY_ */
-if (increment == 0)
-	riscv_program_addi(&program, GDB_REGNO_S2, GDB_REGNO_S2, 1);
-else
-	riscv_program_addi(&program, GDB_REGNO_S0, GDB_REGNO_S0, increment);
+	if (increment == 0)
+		riscv_program_addi(&program, GDB_REGNO_S2, GDB_REGNO_S2, 1);
+	else
+		riscv_program_addi(&program, GDB_REGNO_S0, GDB_REGNO_S0, increment);
 #endif /* _NDS_V5_ONLY_ */
 
-if (riscv_program_ebreak(&program) != ERROR_OK)
-	return ERROR_FAIL;
-if (riscv_program_write(&program) != ERROR_OK)
-	return ERROR_FAIL;
-
-result = read_memory_progbuf_inner(target, address, size, count, buffer, increment);
-
-if (result != ERROR_OK) {
-	/* The full read did not succeed, so we will try to read each word individually. */
-	/* This will not be fast, but reading outside actual memory is a special case anyway. */
-	/* It will make the toolchain happier, especially Eclipse Memory View as it reads ahead. */
-	target_addr_t address_i = address;
-	uint32_t count_i = 1;
-	uint8_t *buffer_i = buffer;
-
-	for (uint32_t i = 0; i < count; i++, address_i += increment, buffer_i += size) {
-		/* TODO: This is much slower than it needs to be because we end up
-		 * writing the address to read for every word we read. */
-		result = read_memory_progbuf_inner(target, address_i, size, count_i, buffer_i, increment);
-
-		/* The read of a single word failed, so we will just return 0 for that instead */
-		if (result != ERROR_OK) {
-			LOG_DEBUG("error reading single word of %d bytes from 0x%" TARGET_PRIxADDR,
-					size, address_i);
-
-			buf_set_u64(buffer_i, 0, 8 * size, 0);
-		}
-	}
-	result = ERROR_OK;
-}
-
-/* Restore MSTATUS */
-if (mstatus != mstatus_old)
-	if (register_write_direct(target, GDB_REGNO_MSTATUS, mstatus_old))
+	if (riscv_program_ebreak(&program) != ERROR_OK)
+		return ERROR_FAIL;
+	if (riscv_program_write(&program) != ERROR_OK)
 		return ERROR_FAIL;
 
-return result;
+	result = read_memory_progbuf_inner(target, address, size, count, buffer, increment);
+
+	if (result != ERROR_OK) {
+		/* The full read did not succeed, so we will try to read each word individually. */
+		/* This will not be fast, but reading outside actual memory is a special case anyway. */
+		/* It will make the toolchain happier, especially Eclipse Memory View as it reads ahead. */
+		target_addr_t address_i = address;
+		uint32_t count_i = 1;
+		uint8_t *buffer_i = buffer;
+
+		for (uint32_t i = 0; i < count; i++, address_i += increment, buffer_i += size) {
+			/* TODO: This is much slower than it needs to be because we end up
+			 * writing the address to read for every word we read. */
+			result = read_memory_progbuf_inner(target, address_i, size, count_i, buffer_i, increment);
+
+			/* The read of a single word failed, so we will just return 0 for that instead */
+			if (result != ERROR_OK) {
+				LOG_DEBUG("error reading single word of %d bytes from 0x%" TARGET_PRIxADDR,
+						size, address_i);
+
+				buf_set_u64(buffer_i, 0, 8 * size, 0);
+			}
+		}
+		result = ERROR_OK;
+	}
+
+	/* Restore MSTATUS */
+	if (mstatus != mstatus_old)
+		if (register_write_direct(target, GDB_REGNO_MSTATUS, mstatus_old))
+			return ERROR_FAIL;
+
+	return result;
 }
 
 static int read_memory(struct target *target, target_addr_t address,
