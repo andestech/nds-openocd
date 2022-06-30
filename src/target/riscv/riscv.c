@@ -2672,13 +2672,6 @@ int riscv_openocd_poll(struct target *target)
 			target_call_event_callbacks(target, TARGET_EVENT_HALTED);
 	}
 
-#if _NDS_V5_ONLY_
-	ndsv5_triggered_hart = halted_hart;
-#endif /* _NDS_V5_ONLY_ */
-
-#if _NDS_V5_ONLY_ & (!_NDS_SUPPORT_WITHOUT_ANNOUNCING_)
-	target_call_event_callbacks(target, TARGET_EVENT_HALTED);
-#endif
 	return ERROR_OK;
 }
 
@@ -2738,6 +2731,15 @@ _exit:
 		target->state = TARGET_RUNNING;
 		target_call_event_callbacks(target, TARGET_EVENT_RESUMED);
 		target->state = TARGET_HALTED;
+
+
+#if _NDS_V5_ONLY_ & _NDS_SUPPORT_WITHOUT_ANNOUNCING_
+	if (ndsv5_without_announce) {
+		ndsv5_without_announce = 0;
+		return success ? ERROR_OK : ERROR_FAIL;
+	}
+#endif /* _NDS_V5_ONLY_ */
+
 		target->debug_reason = DBG_REASON_SINGLESTEP;
 
 #if _NDS_V5_ONLY_
@@ -2751,14 +2753,6 @@ _exit:
 
 		target_call_event_callbacks(target, TARGET_EVENT_HALTED);
 	}
-
-#if _NDS_V5_ONLY_ & _NDS_SUPPORT_WITHOUT_ANNOUNCING_
-	if (ndsv5_without_announce) {
-		ndsv5_without_announce = 0;
-		return success ? ERROR_OK : ERROR_FAIL;
-	}
-#endif /* _NDS_V5_ONLY_ */
-
 
 	return success ? ERROR_OK : ERROR_FAIL;
 }
