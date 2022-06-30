@@ -3208,6 +3208,9 @@ static int gdb_query_packet(struct connection *connection,
 			LOG_DEBUG("qRcmd: %s", cmd);
 
 			/* We want to print all debug output to GDB connection */
+#if _NDS_V5_ONLY_
+			log_add_callback(gdb_log_callback, connection);
+#endif
 			gdb_connection->output_flag = GDB_OUTPUT_ALL;
 			target_call_timer_callbacks_now();
 			/* some commands need to know the GDB connection, make note of current
