@@ -4058,6 +4058,38 @@ static int read_memory(struct target *target, target_addr_t address,
 	RISCV_INFO(r);
 	RISCV013_INFO(info);
 
+#if _NDS_V5_ONLY_
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	struct nds32_v5_memory *memory = &(nds32->memory);
+
+	if (info->progbufsize >= 2 && (memory->access_channel == NDS_MEMORY_ACC_CPU)) {
+		ret = read_memory_progbuf(target, address, size, count, buffer, increment);
+		goto read_memory_finish;
+	} else if( (memory->access_channel == NDS_MEMORY_ACC_CPU) && nds_dmi_access_mem ) {
+		ret = read_memory_abstract(target, address, size, count, buffer, increment);
+		if(ret == ERROR_OK)
+			goto read_memory_finish;
+	}
+
+	if (get_field(info->sbcs, DM_SBCS_SBVERSION) == 0)
+		return read_memory_bus_v0(target, address, size, count, buffer, increment);
+	else if (get_field(info->sbcs, DM_SBCS_SBVERSION) == 1) {
+		ret = read_memory_bus_v1(target, address, size, count, buffer, increment);
+		goto read_memory_finish;
+	}
+
+	if (info->progbufsize >= 2) {
+		ret = read_memory_progbuf(target, address, size, count, buffer, increment);
+		goto read_memory_finish;
+	}
+
+	return read_memory_abstract(target, address, size, count, buffer, increment);
+
+read_memory_finish:
+	return ret;
+
+#endif
+
 	char *progbuf_result = "disabled";
 	char *sysbus_result = "disabled";
 	char *abstract_result = "disabled";
@@ -4106,71 +4138,7 @@ static int read_memory(struct target *target, target_addr_t address,
 	LOG_ERROR("  progbuf=%s, sysbus=%s, abstract=%s", progbuf_result, sysbus_result, abstract_result);
 	return ret;
 
-/* TODO SYNC*/
-/*
-	RISCV013_INFO(info);
 
-#if _NDS_V5_ONLY_
-	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
-	struct nds32_v5_memory *memory = &(nds32->memory);
-
-	int result = ERROR_FAIL;
-	if (info->progbufsize >= 2 && (memory->access_channel == NDS_MEMORY_ACC_CPU)) {
-		result = read_memory_progbuf(target, address, size, count, buffer);
-		goto read_memory_finish;
-	} else if( (memory->access_channel == NDS_MEMORY_ACC_CPU) && nds_dmi_access_mem ) {
-		result = read_memory_abstract(target, address, size, count, buffer);
-		if(result == ERROR_OK)
-			goto read_memory_finish;
-	}
-#else
-	if (info->progbufsize >= 2 && !riscv_prefer_sba)
-		return read_memory_progbuf(target, address, size, count, buffer);
-#endif
-
-	if ((get_field(info->sbcs, DMI_SBCS_SBACCESS8) && size == 1) ||
-			(get_field(info->sbcs, DMI_SBCS_SBACCESS16) && size == 2) ||
-			(get_field(info->sbcs, DMI_SBCS_SBACCESS32) && size == 4) ||
-			(get_field(info->sbcs, DMI_SBCS_SBACCESS64) && size == 8) ||
-			(get_field(info->sbcs, DMI_SBCS_SBACCESS128) && size == 16)) {
-		if (get_field(info->sbcs, DM_SBCS_SBVERSION) == 0)
-			return read_memory_bus_v0(target, address, size, count, buffer);
-		else if (get_field(info->sbcs, DM_SBCS_SBVERSION) == 1)
-#if _NDS_V5_ONLY_
-			if (nds_jtag_scans_optimize > 0) {
-				result = read_memory_bus_v1_opt(target, address, size, count, buffer);
-				goto read_memory_finish;
-			} else {
-				result = read_memory_bus_v1(target, address, size, count, buffer);
-				goto read_memory_finish;
-			}
-#else
-			return read_memory_bus_v1(target, address, size, count, buffer);
-#endif
-	}
-
-#if _NDS_V5_ONLY_
-	if (info->progbufsize >= 2) {
-		result = read_memory_progbuf(target, address, size, count, buffer);
-		goto read_memory_finish;
-	}
-#else
-	if (info->progbufsize >= 2)
-		return read_memory_progbuf(target, address, size, count, buffer);
-#endif
-
-	return read_memory_abstract(target, address, size, count, buffer);
-
-#if _NDS_V5_ONLY_
-read_memory_finish:
-	if (result == ERROR_OK) {
-		uint32_t *p_word_data = (uint32_t *)buffer;
-		NDS_INFO("reading %d words of %d bytes from 0x%" TARGET_PRIxADDR " = 0x%08x", count,
-				size, address, *p_word_data);
-	}
-	return result;
-#endif
-*/
 }
 
 static int write_memory_bus_v0(struct target *target, target_addr_t address,
