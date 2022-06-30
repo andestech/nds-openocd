@@ -869,7 +869,7 @@ static int execute_abstract_command(struct target *target, uint32_t command)
 		}
 	}
 
-#if _NDS_JTAG_SCANS_OPTIMIZE_
+#if 0  & _NDS_JTAG_SCANS_OPTIMIZE_
 	uint32_t cs = 0;
 	if (nds_jtag_scans_optimize > 0) {
 		if (write_debug_buffer_batch == NULL) {
