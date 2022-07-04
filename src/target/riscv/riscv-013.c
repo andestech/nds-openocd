@@ -4071,9 +4071,10 @@ static int read_memory(struct target *target, target_addr_t address,
 			goto read_memory_finish;
 	}
 
-	if (get_field(info->sbcs, DM_SBCS_SBVERSION) == 0)
-		return read_memory_bus_v0(target, address, size, count, buffer, increment);
-	else if (get_field(info->sbcs, DM_SBCS_SBVERSION) == 1) {
+	if (get_field(info->sbcs, DM_SBCS_SBVERSION) == 0) {
+		ret = read_memory_bus_v0(target, address, size, count, buffer, increment);
+		goto read_memory_finish;
+	} else if (get_field(info->sbcs, DM_SBCS_SBVERSION) == 1) {
 		ret = read_memory_bus_v1(target, address, size, count, buffer, increment);
 		goto read_memory_finish;
 	}
@@ -4083,9 +4084,10 @@ static int read_memory(struct target *target, target_addr_t address,
 		goto read_memory_finish;
 	}
 
-	return read_memory_abstract(target, address, size, count, buffer, increment);
+	ret = read_memory_abstract(target, address, size, count, buffer, increment);
 
 read_memory_finish:
+	riscv_flush_registers(target);
 	return ret;
 
 #endif
@@ -4556,6 +4558,38 @@ static int write_memory(struct target *target, target_addr_t address,
 	RISCV_INFO(r);
 	RISCV013_INFO(info);
 
+#if _NDS_V5_ONLY_
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	struct nds32_v5_memory *memory = &(nds32->memory);
+
+	uint32_t *p_word_data = (uint32_t *)buffer;
+	NDS_INFO("writing %d words of %d bytes to 0x%08lx = 0x%08x", count, size, (long)address, *p_word_data);
+
+	if (info->progbufsize >= 2 && (memory->access_channel == NDS_MEMORY_ACC_CPU)) {
+		ret = write_memory_progbuf(target, address, size, count, buffer);
+		goto write_memory_finish;
+	} else if( (memory->access_channel == NDS_MEMORY_ACC_CPU) && nds_dmi_access_mem ) {
+		ret = write_memory_abstract(target, address, size, count, buffer);
+		if (ret == ERROR_OK)
+			goto write_memory_finish;
+	}
+
+	if (info->progbufsize >= 2) {
+		ret = write_memory_progbuf(target, address, size, count, buffer);
+		goto write_memory_finish;
+	}
+
+	if (get_field(info->sbcs, DM_SBCS_SBVERSION) == 0)
+		ret = write_memory_bus_v0(target, address, size, count, buffer);
+	else if (get_field(info->sbcs, DM_SBCS_SBVERSION) == 1)
+		ret = write_memory_bus_v1(target, address, size, count, buffer);
+
+write_memory_finish:
+	riscv_flush_registers(target);
+	return ret;
+#endif
+
+
 	char *progbuf_result = "disabled";
 	char *sysbus_result = "disabled";
 	char *abstract_result = "disabled";
@@ -4603,43 +4637,6 @@ static int write_memory(struct target *target, target_addr_t address,
 	LOG_ERROR("Target %s: Failed to write memory (addr=0x%" PRIx64 ")", target_name(target), address);
 	LOG_ERROR("  progbuf=%s, sysbus=%s, abstract=%s", progbuf_result, sysbus_result, abstract_result);
 	return ret;
-
-/* TODO SYNC */
-/*
-#if _NDS_V5_ONLY_
-	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
-	struct nds32_v5_memory *memory = &(nds32->memory);
-
-	uint32_t *p_word_data = (uint32_t *)buffer;
-	NDS_INFO("writing %d words of %d bytes to 0x%08lx = 0x%08x", count, size, (long)address, *p_word_data);
-
-	if (info->progbufsize >= 2 && (memory->access_channel == NDS_MEMORY_ACC_CPU))
-		return write_memory_progbuf(target, address, size, count, buffer);
-	else if( (memory->access_channel == NDS_MEMORY_ACC_CPU) && nds_dmi_access_mem ) {
-		if(write_memory_abstract(target, address, size, count, buffer) == ERROR_OK)
-			return ERROR_OK;
-	}
-#endif
-
-	if (info->progbufsize >= 2 && !riscv_prefer_sba)
-		return write_memory_progbuf(target, address, size, count, buffer);
-
-	if ((get_field(info->sbcs, DMI_SBCS_SBACCESS8) && size == 1) ||
-			(get_field(info->sbcs, DMI_SBCS_SBACCESS16) && size == 2) ||
-			(get_field(info->sbcs, DMI_SBCS_SBACCESS32) && size == 4) ||
-			(get_field(info->sbcs, DMI_SBCS_SBACCESS64) && size == 8) ||
-			(get_field(info->sbcs, DMI_SBCS_SBACCESS128) && size == 16)) {
-		if (get_field(info->sbcs, DM_SBCS_SBVERSION) == 0)
-			return write_memory_bus_v0(target, address, size, count, buffer);
-		else if (get_field(info->sbcs, DM_SBCS_SBVERSION) == 1)
-#if _NDS_V5_ONLY_
-			if (nds_jtag_scans_optimize > 0) {
-				return write_memory_bus_v1_opt(target, address, size, count, buffer);
-			}
-#endif
-			return write_memory_bus_v1(target, address, size, count, buffer);
-	}
-*/
 }
 
 static int arch_state(struct target *target)
