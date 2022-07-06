@@ -3663,7 +3663,7 @@ static int read_memory_progbuf_inner(struct target *target, target_addr_t addres
 
 #if _NDS_JTAG_SCANS_OPTIMIZE_
 		struct riscv_batch *batch = riscv_batch_alloc(target, nds_jtag_max_scans,
-				info->dmi_busy_delay + info->ac_busy_delay + 10);
+				info->dmi_busy_delay + info->ac_busy_delay + 20);
 #else
 		struct riscv_batch *batch = riscv_batch_alloc(target, RISCV_BATCH_ALLOC_SIZE,
 				info->dmi_busy_delay + info->ac_busy_delay);
@@ -4426,7 +4426,7 @@ static int write_memory_progbuf(struct target *target, target_addr_t address,
 		struct riscv_batch *batch = riscv_batch_alloc(
 				target,
 				nds_jtag_max_scans,
-				info->dmi_busy_delay + info->ac_busy_delay + 10);
+				info->dmi_busy_delay + info->ac_busy_delay + 20);
 #else /* _NDS_JTAG_SCANS_OPTIMIZE_ */
 		struct riscv_batch *batch = riscv_batch_alloc(
 				target,
@@ -6084,7 +6084,7 @@ int ndsv5_read_memory_progbuf_pack(struct target *target, target_addr_t address,
 		if (ndsv5_access_memory_pack_batch == NULL) {
 			ndsv5_access_memory_pack_batch = riscv_batch_alloc(target,
 								nds_jtag_max_scans,
-								info->dmi_busy_delay + info->ac_busy_delay);
+								info->dmi_busy_delay + info->ac_busy_delay + 10);
 		/* } else if (riscv_batch_full(ndsv5_access_memory_pack_batch)) { */
 		} else if (ndsv5_access_memory_pack_batch->used_scans >
 			   (ndsv5_access_memory_pack_batch->allocated_scans - 15)) {
@@ -6095,7 +6095,7 @@ int ndsv5_read_memory_progbuf_pack(struct target *target, target_addr_t address,
 			}
 			ndsv5_access_memory_pack_batch = riscv_batch_alloc(target,
 								nds_jtag_max_scans,
-								info->dmi_busy_delay + info->ac_busy_delay);
+								info->dmi_busy_delay + info->ac_busy_delay + 10);
 		}
 		select_dmi(target);
 		struct riscv_program program;
