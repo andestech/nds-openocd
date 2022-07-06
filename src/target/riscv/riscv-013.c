@@ -3994,15 +3994,14 @@ static int read_memory_progbuf(struct target *target, target_addr_t address,
 		riscv_program_csrrci(&program, GDB_REGNO_ZERO,  CSR_DCSR_MPRVEN, GDB_REGNO_DCSR);
 
 #if _NDS_V5_ONLY_
-	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
-	if (nds32->nds_const_addr_mode == 0)
-		riscv_program_addi(&program, GDB_REGNO_S0, GDB_REGNO_S0, size);
-#else /* _NDS_V5_ONLY_ */
+	if (increment != 0)
+		riscv_program_addi(&program, GDB_REGNO_S0, GDB_REGNO_S0, increment);
+#else
 	if (increment == 0)
 		riscv_program_addi(&program, GDB_REGNO_S2, GDB_REGNO_S2, 1);
 	else
 		riscv_program_addi(&program, GDB_REGNO_S0, GDB_REGNO_S0, increment);
-#endif /* _NDS_V5_ONLY_ */
+#endif
 
 	if (riscv_program_ebreak(&program) != ERROR_OK)
 		return ERROR_FAIL;
@@ -4061,6 +4060,9 @@ static int read_memory(struct target *target, target_addr_t address,
 #if _NDS_V5_ONLY_
 	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
 	struct nds32_v5_memory *memory = &(nds32->memory);
+
+	if (nds32->nds_const_addr_mode)
+		increment = 0;
 
 	if (info->progbufsize >= 2 && (memory->access_channel == NDS_MEMORY_ACC_CPU)) {
 		ret = read_memory_progbuf(target, address, size, count, buffer, increment);
