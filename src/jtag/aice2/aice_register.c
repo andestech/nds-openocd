@@ -529,7 +529,7 @@ int aice_restore_tmp_registers(struct target *target)
 	return ERROR_OK;
 }
 
-int aice_read_acr(struct target *target, uint32_t num, char *val)
+int aice_read_acr(struct target *target, uint32_t num, uint8_t *val)
 {
 	LOG_DEBUG("aice_read_acr, reg_no 0x%08x", num);
 	uint32_t instructions[4]; /** execute instructions in DIM */
@@ -576,7 +576,7 @@ int aice_read_acr(struct target *target, uint32_t num, char *val)
 	return ERROR_OK;
 }
 
-int aice_write_acr(struct target *target, uint32_t num, char *val)
+int aice_write_acr(struct target *target, uint32_t num, uint8_t *val)
 {
 	LOG_DEBUG("aice_write_acr, reg_no: 0x%08x", num);
 	uint32_t instructions[4]; /** execute instructions in DIM */

@@ -558,7 +558,7 @@ struct nds32_reg {
 	uint32_t num;
 	uint32_t value;
 	uint64_t value_64;
-	char *value_acr;
+	uint8_t *value_acr;
 	struct target *target;
 	struct nds32 *nds32;
 	bool enable;

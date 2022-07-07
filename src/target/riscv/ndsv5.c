@@ -2780,7 +2780,6 @@ int ndsv5_suppressed_hsp_exception(struct target *target, bool option)
 
 	/* Enable/Disable Exception Redirection Register */
 	riscv_reg_t dexc2dbg;
-	struct reg *reg_dexc2dbg = &target->reg_cache->reg_list[CSR_DEXC2DBG + GDB_REGNO_CSR0];
 	if (ERROR_FAIL == riscv_get_register(target, &dexc2dbg, CSR_DEXC2DBG + GDB_REGNO_CSR0)) {
 		LOG_ERROR("Get $dex2dbg failed!");
 		return ERROR_FAIL;

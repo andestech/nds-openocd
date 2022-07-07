@@ -1476,6 +1476,8 @@ static int riscv_deassert_reset(struct target *target)
 	return tt->deassert_reset(target);
 }
 
+#if _NDS_V5_ONLY_
+#else
 /* state must be riscv_reg_t state[RISCV_MAX_HWBPS] = {0}; */
 static int disable_triggers(struct target *target, riscv_reg_t *state)
 {
@@ -1561,6 +1563,7 @@ static int enable_triggers(struct target *target, riscv_reg_t *state)
 
 	return ERROR_OK;
 }
+#endif /* _NDS_V5_ONLY_ */
 
 /**
  * Get everything ready to resume.

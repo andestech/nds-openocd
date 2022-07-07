@@ -1767,6 +1767,8 @@ static int set_group(struct target *target, bool *supported, unsigned group, gro
 	return ERROR_OK;
 }
 
+#if _NDS_V5_ONLY_
+#else
 static int discover_vlenb(struct target *target)
 {
 	RISCV_INFO(r);
@@ -1784,6 +1786,7 @@ static int discover_vlenb(struct target *target)
 
 	return ERROR_OK;
 }
+#endif
 
 static int examine(struct target *target)
 {

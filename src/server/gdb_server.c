@@ -3526,6 +3526,8 @@ static int gdb_query_packet(struct connection *connection,
 	return ERROR_OK;
 }
 
+#if _NDS_V5_ONLY_
+#else
 static bool gdb_handle_vcont_packet(struct connection *connection, const char *packet, int packet_size)
 {
 	struct gdb_connection *gdb_connection = connection->priv;
@@ -3723,6 +3725,7 @@ static bool gdb_handle_vcont_packet(struct connection *connection, const char *p
 
 	return false;
 }
+#endif /* _NDS_V5_ONLY_ */
 
 static char *next_hex_encoded_field(const char **str, char sep)
 {

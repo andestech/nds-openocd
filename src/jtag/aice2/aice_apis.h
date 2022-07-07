@@ -122,9 +122,9 @@ int aice_idcode(uint32_t *idcode, uint8_t *num_of_idcode);
 int aice_write_debug_reg(struct target *target, uint32_t addr, uint32_t val);
 int aice_read_debug_reg(struct target *target, uint32_t addr, uint32_t *val);
 int aice_read_register(struct target *target, uint32_t num, uint32_t *val);
-int aice_read_acr(struct target *target, uint32_t num, char *val);
+int aice_read_acr(struct target *target, uint32_t num, uint8_t *val);
 int aice_write_register(struct target *target, uint32_t num, uint32_t val);
-int aice_write_acr(struct target *target, uint32_t num, char *val);
+int aice_write_acr(struct target *target, uint32_t num, uint8_t *val);
 int aice_read_reg_64(struct target *target, uint32_t num, uint64_t *val);
 int aice_write_reg_64(struct target *target, uint32_t num, uint64_t val);
 

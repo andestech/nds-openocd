@@ -609,7 +609,7 @@ static int nds32_set_ace_reg(struct reg *reg, uint8_t *buf)
 		memcpy(reg->value, buf, size_in_byte);
 
 		aice_read_reg(target, R2, &reg_r2_value);
-		retval = aice_write_acr(target, regnum, (char *)reg->value);
+		retval = aice_write_acr(target, regnum, reg->value);
 		aice_write_reg(target, R2, reg_r2_value);
 
 	} else {
@@ -695,7 +695,7 @@ static struct reg_cache *nds32_build_reg_cache(struct target *target,
 		if (type == NDS32_REG_TYPE_ACE) {
 			/* ACR */
 			unsigned acr_size_in_byte = DIV_ROUND_UP(nds32_reg_size(i), 8);
-			reg_arch_info[i].value_acr = (char *)calloc(acr_size_in_byte, sizeof(char));
+			reg_arch_info[i].value_acr = (uint8_t *)calloc(acr_size_in_byte, sizeof(uint8_t));
 			reg_list[i].value = reg_arch_info[i].value_acr;
 			reg_list[i].type = &nds32_ace_reg_access_type;
 			reg_list[i].group = "ace";
@@ -709,12 +709,12 @@ static struct reg_cache *nds32_build_reg_cache(struct target *target,
 		else if (type >= NDS32_REG_TYPE_COP0 && type <= NDS32_REG_TYPE_COP3) {
 			/* cop register */
 			if (reg_list[i].size == 32U) {
-				reg_list[i].value = &(reg_arch_info[i].value);
+				reg_list[i].value = (uint8_t *) &(reg_arch_info[i].value);
 				reg_list[i].type = &nds32_reg_access_type;
 				reg_list[i].reg_data_type->type = REG_TYPE_UINT32;
 				reg_list[i].reg_data_type->id = "uint32";
 			} else {
-				reg_list[i].value = &(reg_arch_info[i].value_64);
+				reg_list[i].value = (uint8_t *) &(reg_arch_info[i].value_64);
 				reg_list[i].type = &nds32_reg_access_type_64;
 				reg_list[i].reg_data_type->type = REG_TYPE_UINT64;
 				reg_list[i].reg_data_type->id = "uint64";
@@ -737,14 +737,14 @@ static struct reg_cache *nds32_build_reg_cache(struct target *target,
 		}
 #endif
 		else if (FD0 <= reg_arch_info[i].num && reg_arch_info[i].num <= FD31) {
-			reg_list[i].value = &(reg_arch_info[i].value_64);
+			reg_list[i].value = (uint8_t *) &(reg_arch_info[i].value_64);
 			reg_list[i].type = &nds32_reg_access_type_64;
 
 			reg_list[i].reg_data_type->type = REG_TYPE_IEEE_DOUBLE;
 			reg_list[i].reg_data_type->id = "ieee_double";
 			reg_list[i].group = "float";
 		} else {
-			reg_list[i].value = &(reg_arch_info[i].value);
+			reg_list[i].value = (uint8_t *) &(reg_arch_info[i].value);
 			reg_list[i].type = &nds32_reg_access_type;
 			reg_list[i].group = "general";
 

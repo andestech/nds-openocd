@@ -706,7 +706,7 @@ static int riscv_init_registers(struct target *target)
 			r->name = reg_name;
 		reg_name += strlen(reg_name) + 1;
 		assert(reg_name < info->reg_names + GDB_REGNO_COUNT * max_reg_name_len);
-		r->value = &info->reg_cache_values[number];
+		r->value = (uint8_t *)&info->reg_cache_values[number];
 	}
 
 	/* redirect all CSRs (r->name/r->exist) to NDS define */

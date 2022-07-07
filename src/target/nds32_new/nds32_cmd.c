@@ -781,7 +781,7 @@ COMMAND_HANDLER(handle_nds32_set_ACR_command)
 	uint32_t reg_r2_value = 0;
 	uint8_t val;
 	const char *val_start = NULL, *p_val = NULL;
-	char *acr_val = NULL, *p = NULL;
+	uint8_t *acr_val = NULL, *p = NULL;
 	struct reg *reg = NULL;
 	uint32_t size_in_byte = 0;
 

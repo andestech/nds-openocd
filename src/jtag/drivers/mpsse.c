@@ -623,7 +623,7 @@ static void cjtag_data_out(const uint8_t *out, unsigned out_offset, uint8_t *cjt
 	int bit = 0;
 	int b = 0;
 	int ib = 0;
-	uint8_t *ptr = out+out_offset;
+	uint8_t *ptr = (uint8_t *)(out+out_offset);
 	uint8_t out_byte;
 	int out_bit_count = bit_count / 3;
 	int idx_wb = 0;
