@@ -236,8 +236,10 @@ static int jim_command_drscan(Jim_Interp *interp, int argc, Jim_Obj * const *arg
 					compressed_out, compressed_out_offset, fields[field_count].num_bits);
 			compressed_out_offset += fields[field_count].num_bits;
 		}
-		free(compressed_out);
-		free(compressed_fields);
+		if (compressed_out)
+			free(compressed_out);
+		if (compressed_fields)
+			free(compressed_fields);
 	}
 #endif
 
