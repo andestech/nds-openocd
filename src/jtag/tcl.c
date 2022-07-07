@@ -194,7 +194,7 @@ static int jim_command_drscan(Jim_Interp *interp, int argc, Jim_Obj * const *arg
 
 #ifdef _NDS_V5_ONLY_
 	struct scan_field *compressed_fields;
-	uint8_t *compressed_out;
+	uint8_t *compressed_out = 0;
 	uint8_t compressed_out_offset = 0;
 	if (two_wire_mode) {
 		compressed_fields = malloc(sizeof(struct scan_field));
