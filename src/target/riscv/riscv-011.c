@@ -5,13 +5,13 @@
  * spec, but SiFive made some silicon that uses it.
  */
 
-#include <assert.h>
-#include <stdlib.h>
-#include <time.h>
-
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
+
+#include <assert.h>
+#include <stdlib.h>
+#include <time.h>
 
 #include "target/target.h"
 #include "target/algorithm.h"

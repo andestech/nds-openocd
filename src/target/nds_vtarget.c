@@ -1,10 +1,10 @@
-#include <assert.h>
-#include <stdlib.h>
-#include <time.h>
-
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
+
+#include <assert.h>
+#include <stdlib.h>
+#include <time.h>
 
 #include "target.h"
 #include "target/algorithm.h"
@@ -1005,7 +1005,7 @@ static dmi_status_t dmi_scan(struct target *target, uint16_t *address_in,
 {
 	RISCV_INFO(info);
 	uint8_t in[8] = {0};
-	uint8_t out[8];
+	uint8_t out[8] = {0};
 	struct scan_field field = {
 		.num_bits = info->abits + DTM_DMI_OP_LENGTH + DTM_DMI_DATA_LENGTH,
 		.out_value = out,

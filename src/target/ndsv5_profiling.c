@@ -4,13 +4,13 @@
  * Copyright (C) 2019 Hellosun Wu <wujiheng.tw@gmail.com>
  */
 
-#include <assert.h>
-#include <stdlib.h>
-#include <time.h>
-
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
+
+#include <assert.h>
+#include <stdlib.h>
+#include <time.h>
 
 #include "target.h"
 #include "target_type.h"
@@ -143,18 +143,19 @@ static void write_gmon_2(struct nds32_v5 *nds32)
 	if (c)
 		*c = '\0';
 
-	strncpy(filename, log_output_path, strlen(log_output_path));
+	/* strncpy(filename, log_output_path, strlen(log_output_path)); */
+	strcpy(filename, log_output_path);
 
 	struct target *target = nds32->target;
 	uint32_t coreid = target->coreid;
 	LOG_DEBUG("coreid: %d", coreid);
 	if (coreid == 0)
-		strncat(filename, "gmon.out", 8);
+		strcat(filename, "gmon.out");
 	else {
 		char name_tmp[32];
 		memset(name_tmp, 0, sizeof(name_tmp));
 		sprintf(name_tmp, "gmon_core%02d.out", coreid);
-		strncat(filename, name_tmp, strlen(name_tmp));
+		strcat(filename, name_tmp);
 	}
 	LOG_INFO("filename: %s", filename);
 

@@ -4,13 +4,13 @@
  * Copyright (C) 2019 Hellosun Wu <wujiheng.tw@gmail.com>
  */
 
-#include <assert.h>
-#include <stdlib.h>
-#include <time.h>
-
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
+ 
+#include <assert.h>
+#include <stdlib.h>
+#include <time.h>
 
 #include "target.h"
 #include <helper/log.h>
@@ -437,8 +437,11 @@ __COMMAND_HANDLER(handle_ndsv5_configure_command)
 			}
 			if (log_path_len > 0) {
 				strncpy(nds_remotetargetburn_fpath, log_output_path, log_path_len);
-				if (log_output_path[log_path_len - 1] != '/')
-					strncat(nds_remotetargetburn_fpath, "/", 1);
+				if (log_output_path[log_path_len - 1] != '/') {
+					/* strncat(nds_remotetargetburn_fpath, "/", 1); */
+					nds_remotetargetburn_fpath[log_path_len] = '/';
+					nds_remotetargetburn_fpath[log_path_len+1] = '\0';
+				}
 			}
 		}
 		strncat(nds_remotetargetburn_fpath, filename, filename_len);
@@ -634,7 +637,7 @@ __COMMAND_HANDLER(handle_ndsv5_configure_command)
 		ndsv5_l2c_support = 1;
 		command_print(CMD, "configure: %s = 0x%" PRIx64, CMD_ARGV[0], L2C_BASE);
 	} else if (strcmp(CMD_ARGV[0], "suppressed_hsp_exception") == 0) {
-		bool option;
+		bool option = false;
 		if (CMD_ARGC > 1)
 			COMMAND_PARSE_ON_OFF(CMD_ARGV[1], option);
 
@@ -4423,6 +4426,7 @@ void ndsv5_decode_progbuf(char *text, uint32_t cur_instr)
 								gpr_and_fpu_name[bits(cur_instr, 11, 7)],
 								gpr_and_fpu_name[bits(cur_instr, 19, 15)],
 								bits(cur_instr, 30, 20));
+							break;
 						case 4:/* vsetvl rd, rs1, rs2 */
 							sprintf(text, "%s %s, %s, %s",
 								vector_description[i].name,

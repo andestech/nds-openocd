@@ -5,13 +5,13 @@
  * latest draft.
  */
 
-#include <assert.h>
-#include <stdlib.h>
-#include <time.h>
-
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
+
+#include <assert.h>
+#include <stdlib.h>
+#include <time.h>
 
 #include "target/target.h"
 #include "target/algorithm.h"
@@ -4350,6 +4350,10 @@ static int write_memory_bus_v1(struct target *target, target_addr_t address,
 static int write_memory_progbuf(struct target *target, target_addr_t address,
 		uint32_t size, uint32_t count, const uint8_t *buffer)
 {
+#if _NDS_V5_ONLY_
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+#endif
+
 	RISCV013_INFO(info);
 
 	if (riscv_xlen(target) < size * 8) {
@@ -4405,7 +4409,6 @@ static int write_memory_progbuf(struct target *target, target_addr_t address,
 	if (riscv_enable_virtual && has_sufficient_progbuf(target, 5) && get_field(mstatus, MSTATUS_MPRV))
 		riscv_program_csrrci(&program, GDB_REGNO_ZERO,  CSR_DCSR_MPRVEN, GDB_REGNO_DCSR);
 #if _NDS_V5_ONLY_
-	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
 	if (nds32->nds_const_addr_mode == 0)
 		riscv_program_addi(&program, GDB_REGNO_S0, GDB_REGNO_S0, size);
 #else /* _NDS_V5_ONLY_ */
@@ -6018,13 +6021,16 @@ static int ndsv5_write_abstract_arg_pack(struct target *target, unsigned index, 
 	unsigned xlen = riscv_xlen(target);
 	unsigned offset = index * xlen / 32;
 	switch (xlen) {
+		case 64:
+			riscv_batch_add_dmi_write(ndsv5_access_memory_pack_batch, DM_DATA0 + offset + 1, value >> 32);
+			riscv_batch_add_dmi_write(ndsv5_access_memory_pack_batch, DM_DATA0 + offset, value);
+			break;
+		case 32:
+			riscv_batch_add_dmi_write(ndsv5_access_memory_pack_batch, DM_DATA0 + offset, value);
+			break;
 		default:
 			LOG_ERROR("Unsupported xlen: %d", xlen);
 			return ERROR_FAIL;
-		case 64:
-			riscv_batch_add_dmi_write(ndsv5_access_memory_pack_batch, DM_DATA0 + offset + 1, value >> 32);
-		case 32:
-			riscv_batch_add_dmi_write(ndsv5_access_memory_pack_batch, DM_DATA0 + offset, value);
 	}
 	return ERROR_OK;
 }
@@ -6733,16 +6739,21 @@ ndsv5_read_memory_quick_access_retry:
 		buffer[0] = value;
 		buffer[1] = value >> 8;
 		break;
-	case 8:
-		buffer[4] = value_h;
-		buffer[5] = value_h >> 8;
-		buffer[6] = value_h >> 16;
-		buffer[7] = value_h >> 24;
 	case 4:
 		buffer[0] = value;
 		buffer[1] = value >> 8;
 		buffer[2] = value >> 16;
 		buffer[3] = value >> 24;
+		break;
+	case 8:
+		buffer[0] = value;
+		buffer[1] = value >> 8;
+		buffer[2] = value >> 16;
+		buffer[3] = value >> 24;
+		buffer[4] = value_h;
+		buffer[5] = value_h >> 8;
+		buffer[6] = value_h >> 16;
+		buffer[7] = value_h >> 24;
 		break;
 	default:
 		LOG_ERROR("unsupported access size: %d", size);

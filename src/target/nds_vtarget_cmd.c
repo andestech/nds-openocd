@@ -1,10 +1,10 @@
-#include <assert.h>
-#include <stdlib.h>
-#include <time.h>
-
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
+
+#include <assert.h>
+#include <stdlib.h>
+#include <time.h>
 
 #include "target.h"
 #include <helper/log.h>
@@ -496,8 +496,8 @@ static int vtarget_log_callback(void *priv)
 
 		memset(log_buffer, 0, sizeof(log_buffer));
 		if (log_output_path)
-			strncpy(log_buffer, log_output_path, strlen(log_output_path));
-		strncat(log_buffer, Log_File_Name[LogFileIdx], strlen(Log_File_Name[LogFileIdx]));
+			strcpy(log_buffer, log_output_path);
+		strcat(log_buffer, Log_File_Name[LogFileIdx]);
 		pLogFile = fopen(log_buffer, "w");
 		set_log_output(NULL, pLogFile);
 	}
