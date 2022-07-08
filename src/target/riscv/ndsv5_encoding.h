@@ -196,17 +196,9 @@
 #define CSR_UTVAL 0x43
 #define CSR_UIP 0x44
 
+#define MATCH_CUSTOM2 0x5b
 
 #endif /* __NDSV5_ENCODING_H_ */
-
-
-
-
-
-
-
-
-
 
 #ifdef DECLARE_CSR
 DECLARE_CSR(mintthresh, CSR_MINTTHRESH)
