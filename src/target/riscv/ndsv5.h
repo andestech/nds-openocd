@@ -25,7 +25,7 @@
 /* NDSV5 compiler flags */
 /********************************************************************/
 #define _NDS_DMI_CHECK_TIMEOUT_ 1
-#define _NDS_JTAG_SCANS_OPTIMIZE_EXE_PBUF 0
+#define _NDS_JTAG_SCANS_OPTIMIZE_EXE_PBUF 1
 #define _NDS_JTAG_SCANS_OPTIMIZE_R_PBUF 1
 #define _NDS_JTAG_SCANS_OPTIMIZE_ 1
 #define _NDS_MEM_Q_ACCESS_ 1
