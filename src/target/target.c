@@ -2903,6 +2903,12 @@ COMMAND_HANDLER(handle_targets_command)
 	int retval = ERROR_OK;
 	if (CMD_ARGC == 1) {
 		retval = find_target(CMD, CMD_ARGV[0]);
+
+#if _NDS_V5_ONLY_
+		/* for target burn check targets no error */
+		LOG_USER("targets done\n");
+#endif
+
 		if (retval == ERROR_OK) {
 			/* we're done! */
 			return retval;
