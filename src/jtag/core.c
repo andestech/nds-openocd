@@ -1163,14 +1163,14 @@ static bool jtag_examine_chain_check(uint8_t *idcodes, unsigned count)
 				if (nds_ftdi_devices == 1) {
 					/* aice-mini+ 2wire mode,
 					 * use 2wire config(reference aice_sdp.cfg) and reinit adapter(jtag) */
-					command_run_line(cmd_ctx, "ftdi_vid_pid 0x1cfc 0x0001");
-					command_run_line(cmd_ctx, "ftdi_layout_init 0x0888 0x0a1b");
+					command_run_line(cmd_ctx, "ftdi ftdi_vid_pid 0x1cfc 0x0001");
+					command_run_line(cmd_ctx, "ftdi ftdi_layout_init 0x0888 0x0a1b");
 				} else {
 					/* aice-micro 2wire mode,
 					 * use 2wire config(reference aice_micro_sdp.cfg) and reinit adapter(jtag) */
-					command_run_line(cmd_ctx, "ftdi_two_wire_mode");
-					command_run_line(cmd_ctx, "ftdi_vid_pid 0x0403 0x6010");
-					command_run_line(cmd_ctx, "ftdi_layout_init 0x4d08 0x4f1b");
+					command_run_line(cmd_ctx, "ftdi ftdi_two_wire_mode");
+					command_run_line(cmd_ctx, "ftdi ftdi_vid_pid 0x0403 0x6010");
+					command_run_line(cmd_ctx, "ftdi ftdi_layout_init 0x4d08 0x4f1b");
 				}
 				adapter_deinitialized();
 				if (adapter_init(cmd_ctx) != ERROR_OK) {
