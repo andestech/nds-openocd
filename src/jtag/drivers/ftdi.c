@@ -574,6 +574,7 @@ static void ftdi_execute_scan(struct jtag_command *cmd)
 						1,
 						0,
 						ftdi_jtag_mode);
+				tap_set_state(tap_state_transition(tap_get_state(), 0));
 			} else {
 #endif
 			/* Last field, and we're leaving IRSHIFT/DRSHIFT. Clock last bit during tap
@@ -1511,7 +1512,7 @@ static int ftdi_handle_write_pins_command(Jim_Interp *interp, int argc, Jim_Obj 
 		mpsse_set_data_bits_low_byte(mpsse_ctx, output & 0xff, direction & 0xff);
 		mpsse_set_data_bits_high_byte(mpsse_ctx, output >> 8, direction >> 8);
 	}
-	
+
 	/* Restore AICE-MICRO 2w mode if needed */
 	if (two_wire_mode_bak) {
 		LOG_DEBUG("[Restore OLD] out = 0x%x, dir = 0x%x", output, direction);
