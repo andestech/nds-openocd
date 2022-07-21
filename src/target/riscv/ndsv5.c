@@ -919,12 +919,13 @@ int ndsv5_readwrite_byte(struct target *target, target_addr_t address,
 {
 	LOG_DEBUG("addr=0x%" TARGET_PRIxADDR ", size=0x%x, count=0x%x", address, size, count);
 	struct target_type *tt = get_target_type(target);
+	RISCV_INFO(r);
 	int retval;
 
 	if (if_write)
 		retval = tt->write_memory(target, address, size, count, buffer);
 	else
-		retval = tt->read_memory(target, address, size, count, (uint8_t *) buffer);
+		retval = r->read_memory(target, address, size, count, (uint8_t *) buffer, size);
 
 	if (retval != ERROR_OK)
 		return retval;
