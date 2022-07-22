@@ -4061,26 +4061,36 @@ static int read_memory(struct target *target, target_addr_t address,
 	if (nds32->nds_const_addr_mode)
 		increment = 0;
 
-	if (info->progbufsize >= 2 && (memory->access_channel == NDS_MEMORY_ACC_CPU)) {
-		ret = read_memory_progbuf(target, address, size, count, buffer, increment);
-		goto read_memory_finish;
-	} else if( (memory->access_channel == NDS_MEMORY_ACC_CPU) && nds_dmi_access_mem ) {
-		ret = read_memory_abstract(target, address, size, count, buffer, increment);
+	if (memory->access_channel == NDS_MEMORY_ACC_CPU) {
+		/* CPU mode */
+		if (info->progbufsize >= 2) {
+			ret = read_memory_progbuf(target, address, size, count, buffer, increment);
+			if(ret == ERROR_OK)
+				goto read_memory_finish;
+		}
+
+		if (nds_dmi_access_mem) {
+			ret = read_memory_abstract(target, address, size, count, buffer, increment);
+			if(ret == ERROR_OK)
+				goto read_memory_finish;
+		}
+	} else if (nds_sys_bus_supported) {
+			/* BUS mode */
+			if (get_field(info->sbcs, DM_SBCS_SBVERSION) == 0)
+				ret = read_memory_bus_v0(target, address, size, count, buffer, increment);
+			else if (get_field(info->sbcs, DM_SBCS_SBVERSION) == 1)
+				ret = read_memory_bus_v1(target, address, size, count, buffer, increment);
+
 		if(ret == ERROR_OK)
 			goto read_memory_finish;
 	}
 
-	if (get_field(info->sbcs, DM_SBCS_SBVERSION) == 0) {
-		ret = read_memory_bus_v0(target, address, size, count, buffer, increment);
-		goto read_memory_finish;
-	} else if (get_field(info->sbcs, DM_SBCS_SBVERSION) == 1) {
-		ret = read_memory_bus_v1(target, address, size, count, buffer, increment);
-		goto read_memory_finish;
-	}
-
+	/* Force using CPU mode again */
 	if (info->progbufsize >= 2) {
 		ret = read_memory_progbuf(target, address, size, count, buffer, increment);
-		goto read_memory_finish;
+
+		if (ret == ERROR_OK)
+			goto read_memory_finish;
 	}
 
 	ret = read_memory_abstract(target, address, size, count, buffer, increment);
@@ -4088,7 +4098,6 @@ static int read_memory(struct target *target, target_addr_t address,
 read_memory_finish:
 	riscv_flush_registers(target);
 	return ret;
-
 #endif
 
 	char *progbuf_result = "disabled";
@@ -4567,24 +4576,39 @@ static int write_memory(struct target *target, target_addr_t address,
 	uint32_t *p_word_data = (uint32_t *)buffer;
 	NDS_INFO("writing %d words of %d bytes to 0x%08lx = 0x%08x", count, size, (long)address, *p_word_data);
 
-	if (info->progbufsize >= 2 && (memory->access_channel == NDS_MEMORY_ACC_CPU)) {
-		ret = write_memory_progbuf(target, address, size, count, buffer);
-		goto write_memory_finish;
-	} else if( (memory->access_channel == NDS_MEMORY_ACC_CPU) && nds_dmi_access_mem ) {
-		ret = write_memory_abstract(target, address, size, count, buffer);
+	if (memory->access_channel == NDS_MEMORY_ACC_CPU) {
+		/* CPU mode */
+		if (info->progbufsize >= 2) {
+			ret = write_memory_progbuf(target, address, size, count, buffer);
+			if (ret == ERROR_OK)
+				goto write_memory_finish;
+		}
+
+		if (nds_dmi_access_mem) {
+			ret = write_memory_abstract(target, address, size, count, buffer);
+			if (ret == ERROR_OK)
+				goto write_memory_finish;
+		}
+	} else if (nds_sys_bus_supported) {
+		/* BUS mode */
+		if (get_field(info->sbcs, DM_SBCS_SBVERSION) == 0)
+			ret = write_memory_bus_v0(target, address, size, count, buffer);
+		else if (get_field(info->sbcs, DM_SBCS_SBVERSION) == 1)
+			ret = write_memory_bus_v1(target, address, size, count, buffer);
+
 		if (ret == ERROR_OK)
 			goto write_memory_finish;
 	}
 
+	/* Froce using CPU mode again */
 	if (info->progbufsize >= 2) {
 		ret = write_memory_progbuf(target, address, size, count, buffer);
-		goto write_memory_finish;
+
+		if (ret == ERROR_OK)
+			goto write_memory_finish;
 	}
 
-	if (get_field(info->sbcs, DM_SBCS_SBVERSION) == 0)
-		ret = write_memory_bus_v0(target, address, size, count, buffer);
-	else if (get_field(info->sbcs, DM_SBCS_SBVERSION) == 1)
-		ret = write_memory_bus_v1(target, address, size, count, buffer);
+	ret = write_memory_abstract(target, address, size, count, buffer);
 
 write_memory_finish:
 	riscv_flush_registers(target);
