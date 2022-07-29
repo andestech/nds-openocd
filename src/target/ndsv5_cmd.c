@@ -464,6 +464,7 @@ __COMMAND_HANDLER(handle_ndsv5_configure_command)
 		/* target_burn send targets, need set nds_targetburn_targetnum value */
 		nds_targetburn_targetnum = use_target->target_number;
 
+#if 0
 		/*get enable coreid of user defined target(nds_targetburn_targetnum) for run_algorithm */
 		int hartid = -1;
 		for (int i = 0; i < riscv_count_harts(use_target); ++i) {
@@ -478,6 +479,8 @@ __COMMAND_HANDLER(handle_ndsv5_configure_command)
 			return ERROR_FAIL;
 		}
 		nds_targetburn_corenum = hartid;
+#endif
+		nds_targetburn_corenum = use_target->coreid;
 		riscv_set_current_hartid(use_target, nds_targetburn_corenum);
 		use_target->coreid = nds_targetburn_corenum;
 		RISCV_INFO(r);
