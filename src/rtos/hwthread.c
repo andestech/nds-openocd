@@ -362,6 +362,10 @@ static int hwthread_target_for_threadid(struct connection *connection, int64_t t
 	if (!curr)
 		return ERROR_FAIL;
 
+#if _NDS_V5_ONLY_
+	LOG_DEBUG("thread_id: %ld, switch to target [%s]", thread_id, target_name(curr));
+#endif
+
 	*p_target = curr;
 
 	return ERROR_OK;
