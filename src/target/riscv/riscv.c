@@ -2557,10 +2557,16 @@ int riscv_openocd_poll(struct target *target)
 				if (set_debug_reason(t, halt_reason) != ERROR_OK)
 					return ERROR_FAIL;
 
-				if (halt_reason == RISCV_HALT_BREAKPOINT) {
 #if _NDS_V5_ONLY_
-					/* Disable semihosting support */
+				if (halt_reason == RISCV_HALT_BREAKPOINT ||
+				    halt_reason == RISCV_HALT_TRIGGER) {
+					/* Disable semihosting support(SEMI_NONE) */
+					if (ndsv5_handle_triggered(target) != ERROR_OK) {
+						/* resume target */
+					} else
+						should_remain_halted++;
 #else
+				if (halt_reason == RISCV_HALT_BREAKPOINT) {
 					int retval;
 					switch (riscv_semihosting(t, &retval)) {
 					case SEMI_NONE:
@@ -2609,6 +2615,16 @@ int riscv_openocd_poll(struct target *target)
 				break;
 			}
 		}
+
+#if _NDS_V5_ONLY_
+		if (should_remain_halted) {
+			if (ndsv5_without_announce) {
+				ndsv5_without_announce = 0;
+				LOG_DEBUG("ndsv5_without_announce");
+			} else
+				target_call_event_callbacks(target, TARGET_EVENT_HALTED);
+		}
+#endif
 
 		return ERROR_OK;
 
