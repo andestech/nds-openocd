@@ -809,7 +809,11 @@ int target_examine(void)
 	int retval = ERROR_OK;
 	struct target *target;
 
+#if _NDS_V5_ONLY_
+	examine_attempted = false;
+#else
 	examine_attempted = true;
+#endif
 
 	for (target = all_targets; target; target = target->next) {
 		/* defer examination, but don't skip it */
