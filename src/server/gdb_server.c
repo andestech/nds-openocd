@@ -413,7 +413,7 @@ static void gdb_log_incoming_packet(struct connection *connection, char *packet)
 
 	struct target *target = get_target_from_connection(connection);
 
-#if _NDS32_ONLY_ && 0 /* SYNC_TMP do we need this!? */
+#if 0 & _NDS32_ONLY_ /* SYNC_TMP do we need this!? */
 	if (LOG_LEVEL_IS(LOG_LVL_INFO)) {
 		char buf[64];
 		unsigned offset = 0;
@@ -3352,7 +3352,7 @@ static int gdb_query_packet(struct connection *connection,
 				&buffer,
 				&pos,
 				&size,
-				"PacketSize=%x;qXfer:memory-map:read%c;qXfer:features:read%c;QStartNoAckMode+;InstallInTrace+;EnableDisableTracepoints+;ConditionalBreakpoints%c",
+				"PacketSize=%x;qXfer:memory-map:read%c;qXfer:features:read%c;QStartNoAckMode+;InstallInTrace+;EnableDisableTracepoints+;ConditionalBreakpoints%c;vContSupported+",
 				(GDB_BUFFER_SIZE - 1),
 				((gdb_use_memory_map == 1) && (flash_get_bank_count() > 0)) ? '+' : '-',
 				(gdb_target_desc_supported == 1) ? '+' : '-',
@@ -3526,8 +3526,6 @@ static int gdb_query_packet(struct connection *connection,
 	return ERROR_OK;
 }
 
-#if _NDS_V5_ONLY_
-#else
 static bool gdb_handle_vcont_packet(struct connection *connection, const char *packet, int packet_size)
 {
 	struct gdb_connection *gdb_connection = connection->priv;
@@ -3725,7 +3723,6 @@ static bool gdb_handle_vcont_packet(struct connection *connection, const char *p
 
 	return false;
 }
-#endif /* _NDS_V5_ONLY_ */
 
 static char *next_hex_encoded_field(const char **str, char sep)
 {
@@ -4155,7 +4152,7 @@ static int gdb_v_packet(struct connection *connection,
 			return out;
 	}
 
-#if _NDS32_ONLY_
+#if 0 & _NDS32_ONLY_
 #else
 	if (strncmp(packet, "vCont", 5) == 0) {
 		bool handled;
