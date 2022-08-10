@@ -1563,6 +1563,7 @@ int ndsv5_dump_cache_va(struct target *target, unsigned int cache_type, uint64_t
 #define L2C_CONFIG_VERSION_OFFSET       (24)
 #define L2C_CONFIG_VERSION              (0xFFU << L2C_CONFIG_VERSION_OFFSET)
 #define L2C_CONFIG_VER_DEFAULT          (0x1)
+#define L2C_CONFIG_VER_DEFAULT_GEN2     (0x10)
 
 
 
@@ -1736,7 +1737,8 @@ int ndsv5_check_l2cache_exist(struct target *target, uint64_t *config)
 
 	int version = get_field(l2c_config, L2C_CONFIG_VERSION);
 	int size    = get_field(l2c_config, L2C_CONFIG_SIZE);
-	if (version != L2C_CONFIG_VER_DEFAULT) {
+	if (version != L2C_CONFIG_VER_DEFAULT &&
+	    version != L2C_CONFIG_VER_DEFAULT_GEN2) {
 		ndsv5_l2c_support = 0;
 		LOG_ERROR("L2C doesn't exist");
 		return ERROR_FAIL;
