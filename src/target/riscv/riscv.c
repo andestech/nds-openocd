@@ -4138,13 +4138,13 @@ static bool gdb_regno_cacheable(enum gdb_regno regno, bool write)
 		case GDB_REGNO_MSTATUS:
 		case GDB_REGNO_MEPC:
 		case GDB_REGNO_MCAUSE:
-		case GDB_REGNO_SATP:
 			/*
 			 * WARL registers might not contain the value we just wrote, but
 			 * these ones won't spontaneously change their value either. *
 			 */
 			return !write;
 
+		case GDB_REGNO_SATP:
 		case GDB_REGNO_TSELECT:	/* I think this should be above, but then it doesn't work. */
 		case GDB_REGNO_TDATA1:	/* Changes value when tselect is changed. */
 		case GDB_REGNO_TDATA2:  /* Changse value when tselect is changed. */
