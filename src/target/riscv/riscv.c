@@ -1042,6 +1042,9 @@ int riscv_remove_watchpoint(struct target *target,
 	return ERROR_OK;
 }
 
+
+#if _NDS_V5_ONLY_
+#else
 /**
  * Look at the trigger hit bits to find out which trigger is the reason we're
  * halted.  Sets *unique_id to the unique ID of that trigger. If *unique_id is
@@ -1102,6 +1105,7 @@ static int riscv_hit_trigger_hit_bit(struct target *target, uint32_t *unique_id)
 
 	return ERROR_OK;
 }
+#endif
 
 /* Sets *hit_watchpoint to the first watchpoint identified as causing the
  * current halt.
@@ -1300,6 +1304,15 @@ int set_debug_reason(struct target *target, enum riscv_halt_reason halt_reason)
 	RISCV_INFO(r);
 	r->trigger_hit = -1;
 	switch (halt_reason) {
+#if _NDS_V5_ONLY_
+		case RISCV_HALT_BREAKPOINT:
+			target->debug_reason = DBG_REASON_BREAKPOINT;
+		case RISCV_HALT_TRIGGER:
+			if (ndsv5_handle_triggered(target) != ERROR_OK) {
+				return ERROR_FAIL;
+			} 
+			break;
+#else
 		case RISCV_HALT_BREAKPOINT:
 			target->debug_reason = DBG_REASON_BREAKPOINT;
 			break;
@@ -1313,6 +1326,7 @@ int set_debug_reason(struct target *target, enum riscv_halt_reason halt_reason)
 					target->debug_reason = DBG_REASON_BREAKPOINT;
 			}
 			break;
+#endif /* _NDS_V5_ONLY_ */
 		case RISCV_HALT_INTERRUPT:
 		case RISCV_HALT_GROUP:
 			target->debug_reason = DBG_REASON_DBGRQ;
@@ -1616,6 +1630,7 @@ static int resume_prep(struct target *target, int current,
 static int resume_go(struct target *target, int current,
 		target_addr_t address, int handle_breakpoints, int debug_execution)
 {
+	LOG_DEBUG("[%d]", target->coreid);
 	riscv_info_t *r = riscv_info(target);
 	int result;
 	if (!r->is_halted) {
@@ -2557,15 +2572,6 @@ int riscv_openocd_poll(struct target *target)
 				if (set_debug_reason(t, halt_reason) != ERROR_OK)
 					return ERROR_FAIL;
 
-#if _NDS_V5_ONLY_
-				if (halt_reason == RISCV_HALT_BREAKPOINT ||
-				    halt_reason == RISCV_HALT_TRIGGER) {
-					/* Disable semihosting support(SEMI_NONE) */
-					if (ndsv5_handle_triggered(target) != ERROR_OK) {
-						/* resume target */
-					} else
-						should_remain_halted++;
-#else
 				if (halt_reason == RISCV_HALT_BREAKPOINT) {
 					int retval;
 					switch (riscv_semihosting(t, &retval)) {
@@ -2582,9 +2588,10 @@ int riscv_openocd_poll(struct target *target)
 					case SEMI_ERROR:
 						return retval;
 					}
-#endif
 				} else if (halt_reason != RISCV_HALT_GROUP) {
 					should_remain_halted++;
+					LOG_DEBUG("should_remain_halted=%d, should_resume=%d",
+							should_remain_halted, should_resume);
 				}
 				break;
 
@@ -2602,6 +2609,15 @@ int riscv_openocd_poll(struct target *target)
 		if (should_remain_halted) {
 			LOG_DEBUG("halt all");
 			riscv_halt(target);
+
+#if _NDS_V5_ONLY_ & _NDS_SUPPORT_WITHOUT_ANNOUNCING_
+			if (ndsv5_without_announce) {
+				ndsv5_without_announce = 0;
+				LOG_DEBUG("ndsv5_without_announce");
+			} else {
+				target_call_event_callbacks(target, TARGET_EVENT_HALTED);
+			}
+#endif
 		} else if (should_resume) {
 			LOG_DEBUG("resume all");
 			riscv_resume(target, true, 0, 0, 0, false);
@@ -2615,19 +2631,7 @@ int riscv_openocd_poll(struct target *target)
 				break;
 			}
 		}
-
-#if _NDS_V5_ONLY_
-		if (should_remain_halted) {
-			if (ndsv5_without_announce) {
-				ndsv5_without_announce = 0;
-				LOG_DEBUG("ndsv5_without_announce");
-			} else
-				target_call_event_callbacks(target, TARGET_EVENT_HALTED);
-		}
-#endif
-
 		return ERROR_OK;
-
 	} else {
 		enum riscv_poll_hart out = riscv_poll_hart(target,
 				riscv_current_hartid(target));
@@ -2648,16 +2652,7 @@ int riscv_openocd_poll(struct target *target)
 		target->state = TARGET_HALTED;
 	}
 
-#if _NDS_V5_ONLY_
-	if (target->debug_reason == DBG_REASON_BREAKPOINT ||
-	    target->debug_reason == DBG_REASON_WATCHPOINT) {
-#else
 	if (target->debug_reason == DBG_REASON_BREAKPOINT) {
-#endif
-
-#if _NDS_V5_ONLY_
-		/* Disable semihosting support */
-#else
 		int retval;
 		switch (riscv_semihosting(target, &retval)) {
 			case SEMI_NONE:
@@ -2670,19 +2665,6 @@ int riscv_openocd_poll(struct target *target)
 				break;
 			case SEMI_ERROR:
 				return retval;
-		}
-#endif
-
-		if (ndsv5_handle_triggered(target) != ERROR_OK) {
-			/* resume target */
-		} else {
-#if _NDS_SUPPORT_WITHOUT_ANNOUNCING_
-			if (ndsv5_without_announce) {
-				ndsv5_without_announce = 0;
-				LOG_DEBUG("ndsv5_without_announce");
-			} else
-				target_call_event_callbacks(target, TARGET_EVENT_HALTED);
-#endif
 		}
 	} else {
 		if (old_state == TARGET_DEBUG_RUNNING)
