@@ -118,11 +118,25 @@ static void ndsv5_do_once_time(struct target *target)
 struct nds32_v5 *target_to_nds32_v5(struct target *target)
 {
 	struct nds32_v5 *pnds32_v5 = NULL;
+	struct target *ttarget = target;
+
+	if (target->smp) {
+		/* Find SMP group header */
+		struct target_list *tlist;
+		foreach_smp_target(tlist, target->smp_targets) {
+			struct target *t = tlist->target;
+			if (t->rtos) {
+				ttarget = t;
+				break;
+			}
+		}
+	}
 
 	for (pnds32_v5 = gpnds32_v5; pnds32_v5; pnds32_v5 = pnds32_v5->next) {
-		if (pnds32_v5->target == target)
+		if (pnds32_v5->target == ttarget)
 			break;
 	}
+
 	return pnds32_v5;
 }
 
@@ -140,7 +154,9 @@ static int ndsv5_init_arch_info(struct target *target, struct nds32_v5 *new_nds3
 	struct nds32_v5 *pnds32_v5;
 
 	new_nds32->common_magic = NDSV5_COMMON_MAGIC;
-	new_nds32->target = target;
+
+	if (!target->smp || target->rtos)
+		new_nds32->target = target;
 	new_nds32->next = NULL;
 	new_nds32->hit_syscall = false;
 	new_nds32->active_syscall_id = NDS_EBREAK_UNDEFINED;
@@ -1658,7 +1674,22 @@ int ndsv5_target_create(struct target *target, Jim_Interp *interp)
 	NDS_INFO("%s", __func__);
 	struct nds32_v5 *pnds32_v5;
 
-	pnds32_v5 = calloc(1, sizeof(struct nds32_v5));
+
+	if (target->smp && target->rtos == 0x0) {
+		/* Find SMP group head's struct nds32_v5 */
+		struct target_list *tlist;
+		foreach_smp_target(tlist, target->smp_targets) {
+			struct target *t = tlist->target;
+			if (t->rtos) { 
+				pnds32_v5 = target_to_nds32_v5(t);
+				break;
+			}
+		}
+	} else {
+		/* allocate struct only for SMP head and AMP */
+		pnds32_v5 = calloc(1, sizeof(struct nds32_v5));
+	}
+
 	ndsv5_init_arch_info(target, pnds32_v5);
 	ndsv5_do_once_time(target);
 	/*
