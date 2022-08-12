@@ -13,6 +13,7 @@
 #include <time.h>
 
 #include "target.h"
+#include <target/smp.h>
 #include <helper/log.h>
 #include <helper/binarybuffer.h>
 #include "register.h"
@@ -2729,19 +2730,33 @@ static int ndsv5_gdb_attach(struct target *target)
 	}
 
 	if (nds32->attached == false) {
-		ndsv5_init_reg(target);
-		target_halt(target);
-		/*
-		update_trigger_config(target);
-		*/
-		ndsv5_init_option_reg(target);
+		if (target->smp) {
+			struct target_list *tlist;
+			foreach_smp_target(tlist, target->smp_targets) {
+				struct target *t = tlist->target;
+				struct nds32_v5 *t_nds32 = target_to_nds32_v5(t);
 
-		nds32->attached = true;
-		nds32->hit_syscall = false;
+				ndsv5_init_reg(t);
+				target_halt(t);
+				ndsv5_init_option_reg(t);
 
-		/* reset to debug mode in case abnormal operations */
-		nds32->gdb_run_mode = RUN_MODE_DEBUG;
-		nds32->is_program_exit = false;
+				t_nds32->attached = true;
+				t_nds32->hit_syscall = false;
+				t_nds32->gdb_run_mode = RUN_MODE_DEBUG;
+				t_nds32->is_program_exit = false;
+			}
+		} else {
+			ndsv5_init_reg(target);
+			target_halt(target);
+			ndsv5_init_option_reg(target);
+
+			nds32->attached = true;
+			nds32->hit_syscall = false;
+
+			/* reset to debug mode in case abnormal operations */
+			nds32->gdb_run_mode = RUN_MODE_DEBUG;
+			nds32->is_program_exit = false;
+		}
 	}
 
 	return ERROR_OK;
