@@ -202,8 +202,8 @@ int ndsv5_poll(struct target *target)
 		return ERROR_OK;
 
 	if (old_or_new_riscv_poll(target) != ERROR_OK) {
-		LOG_ERROR("old_or_new_riscv_poll failed");
-		return ERROR_FAIL;
+		LOG_DEBUG("old_or_new_riscv_poll failed");
+		//return ERROR_FAIL;
 	}
 
 	return ndsv5_handle_poll(target);
