@@ -5617,6 +5617,8 @@ static int riscv013_on_step_or_resume(struct target *target, bool step)
 
 	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
 	if ((nds32->attached == false) && (nds32->target_burn_attached == false)) {
+		LOG_DEBUG("nds32->attached: %x, nds32->target_burn_attached: %x", 
+				nds32->attached, nds32->target_burn_attached);
 		dcsr = set_field(dcsr, CSR_DCSR_EBREAKM, 0);
 		dcsr = set_field(dcsr, CSR_DCSR_EBREAKS, 0);
 		dcsr = set_field(dcsr, CSR_DCSR_EBREAKU, 0);
