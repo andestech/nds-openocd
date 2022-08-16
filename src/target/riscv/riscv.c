@@ -1306,11 +1306,11 @@ int set_debug_reason(struct target *target, enum riscv_halt_reason halt_reason)
 	switch (halt_reason) {
 #if _NDS_V5_ONLY_
 		case RISCV_HALT_BREAKPOINT:
-			target->debug_reason = DBG_REASON_BREAKPOINT;
 		case RISCV_HALT_TRIGGER:
+			target->debug_reason = DBG_REASON_BREAKPOINT;
 			if (ndsv5_handle_triggered(target) != ERROR_OK) {
 				return ERROR_FAIL;
-			} 
+			}
 			break;
 #else
 		case RISCV_HALT_BREAKPOINT:
@@ -5198,6 +5198,9 @@ int riscv_init_registers(struct target *target)
 				case CSR_SIP:
 				case CSR_SIE:
 				case CSR_SCOUNTEREN:
+#if _NDS_V5_ONLY_
+				case CSR_SENVCFG:
+#endif
 				case CSR_SSCRATCH:
 				case CSR_SEPC:
 				case CSR_SCAUSE:
@@ -5290,6 +5293,15 @@ int riscv_init_registers(struct target *target)
 				case CSR_VLENB:
 					r->exist = riscv_supports_extension(target, 'V');
 					break;
+
+#if _NDS_V5_ONLY_
+				case CSR_MENVCFG:
+					r->exist = riscv_supports_extension(target, 'U');
+					break;
+				case CSR_MENVCFGH:
+					r->exist = ((riscv_xlen(target) == 32) && riscv_supports_extension(target, 'U'));
+					break;
+#endif
 			}
 
 #if _NDS_V5_ONLY_

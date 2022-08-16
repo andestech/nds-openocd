@@ -117,7 +117,7 @@ static void ndsv5_do_once_time(struct target *target)
 /** Convert target handle to generic Andes target state handle. */
 struct nds32_v5 *target_to_nds32_v5(struct target *target)
 {
-	struct nds32_v5 *pnds32_v5 = NULL;
+	struct nds32_v5 *pnds32_v5;
 	struct target *ttarget = target;
 
 	if (target->smp) {
@@ -151,8 +151,6 @@ bool is_ndsv5(struct target *target)
 
 static int ndsv5_init_arch_info(struct target *target, struct nds32_v5 *new_nds32)
 {
-	struct nds32_v5 *pnds32_v5;
-
 	new_nds32->common_magic = NDSV5_COMMON_MAGIC;
 
 	if (!target->smp || target->rtos)
@@ -176,7 +174,7 @@ static int ndsv5_init_arch_info(struct target *target, struct nds32_v5 *new_nds3
 	new_nds32->nds_do_fencei = false;
 
 	if (gpnds32_v5) {
-		for (pnds32_v5 = gpnds32_v5; pnds32_v5; pnds32_v5 = pnds32_v5->next) {
+		for (struct nds32_v5 *pnds32_v5 = gpnds32_v5; pnds32_v5; pnds32_v5 = pnds32_v5->next) {
 			if (pnds32_v5->next == NULL) {
 				pnds32_v5->next = new_nds32;
 				break;
@@ -1672,7 +1670,7 @@ const struct command_registration ndsv5_command_handlers[] = {
 int ndsv5_target_create(struct target *target, Jim_Interp *interp)
 {
 	NDS_INFO("%s", __func__);
-	struct nds32_v5 *pnds32_v5;
+	struct nds32_v5 *pnds32_v5 = NULL;
 
 
 	if (target->smp && target->rtos == 0x0) {
@@ -1680,7 +1678,7 @@ int ndsv5_target_create(struct target *target, Jim_Interp *interp)
 		struct target_list *tlist;
 		foreach_smp_target(tlist, target->smp_targets) {
 			struct target *t = tlist->target;
-			if (t->rtos) { 
+			if (t->rtos) {
 				pnds32_v5 = target_to_nds32_v5(t);
 				break;
 			}
@@ -2125,6 +2123,8 @@ static int ndsv5_init_option_reg(struct target *target)
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_PMACFG1].exist = false;
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_PMACFG3].exist = false;
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MMSC_CFG2].exist = false;
+
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MSECCFGH].exist = false;
 	}
 
 	reg_name = ndsv5_get_CSR_name(target, CSR_MISA);
@@ -2157,7 +2157,7 @@ static int ndsv5_init_option_reg(struct target *target)
 	if ((reg_misa_value & 0x40000) == 0) {
 		LOG_DEBUG("disable CSR_SCOUNTEREN, CSR_SDCAUSE, CSR_SSTATUS, CSR_SIE, CSR_SIP, CSR_STVEC, "
 			  "CSR_SEPC, CSR_SCAUSE, CSR_STVAL, CSR_SSCRATCH, CSR_SATP, CSR_MSLIDELEG, "
-			  "CSR_SLIE, CSR_SLIP, CSR_SEDELEG, CSR_SIDELEG registers");
+			  "CSR_SLIE, CSR_SLIP, CSR_SEDELEG, CSR_SIDELEG, CSR_SCOUNTOVF registers");
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SCOUNTEREN].exist = false;
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SDCAUSE].exist = false;
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SSTATUS].exist = false;
@@ -2174,6 +2174,8 @@ static int ndsv5_init_option_reg(struct target *target)
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SLIP].exist = false;
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SEDELEG].exist = false;
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SIDELEG].exist = false;
+
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SCOUNTOVF].exist = false;
 	}
 
 	/* (misa[18]==1) | (misa[13]==1), enable CSR_MEDELEG, CSR_MIDELEG registers */
@@ -2409,6 +2411,24 @@ static int ndsv5_init_option_reg(struct target *target)
 		NDS_INFO("disable CSR_MECC_CODE registers");
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MECC_CODE].exist = false;
 	}
+
+	/* mrvarch_cfg.sscofpmf==1 & misa[18]==1 */
+	if (!target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG].exist || 
+	    !riscv_supports_extension(target, 'U')) {
+		NDS_INFO("disable CSR_MRVARCH_CFG"); 
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SCOUNTOVF].exist = false;
+	} else {
+		reg_name = ndsv5_get_CSR_name(target, CSR_MRVARCH_CFG);
+		p_cur_reg = register_get_by_name(target->reg_cache, reg_name, 1);
+		p_cur_reg->type->get(p_cur_reg);
+		uint64_t reg_mrvarch_value = buf_get_u64(p_cur_reg->value, 0, p_cur_reg->size);
+
+		if ((reg_mrvarch_value & 0x80) == 0) {
+			NDS_INFO("disable CSR_MRVARCH_CFG"); 
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SCOUNTOVF].exist = false;
+		}
+	}
+
 
 	/* check pmpcfg0-15 exist */
 	int retval;
