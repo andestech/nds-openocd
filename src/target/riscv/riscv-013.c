@@ -4913,14 +4913,12 @@ static int riscv013_halt_go(struct target *target)
 		NDS32_LOG("<-- Unable to halt [%s] hart %d -->", target->tap->dotted_name, r->current_hartid);
 		NDS32_LOG("  dmcontrol=0x%08x", dmcontrol);
 		NDS32_LOG("  dmstatus =0x%08x", dmstatus);
-		/* SYNC TODO */
-		/*
-		if (riscv_rtos_enabled(target)) {
-			target->rtos->hart_unavailable[riscv_current_hartid(target)] = 0xff;
-			LOG_DEBUG("  hart_unavailable[%d] = 0x%x", riscv_current_hartid(target),
-				target->rtos->hart_unavailable[riscv_current_hartid(target)]);
+
+		if (target->smp) {
+			target->hart_unavailable = 0xff;
+			LOG_DEBUG("  hart_unavailable[%d] = 0x%x", r->current_hartid,
+				target->hart_unavailable);
 		}
-		*/
 
 		/* Release haltreq when failed to halt */
 		dmcontrol = set_field(dmcontrol, DM_DMCONTROL_HALTREQ, 0);
@@ -4936,15 +4934,13 @@ static int riscv013_halt_go(struct target *target)
 	dmcontrol = set_field(dmcontrol, DM_DMCONTROL_HALTREQ, 0);
 	dmi_write(target, DM_DMCONTROL, dmcontrol);
 
-/*
 #if _NDS_V5_ONLY_
-	if (riscv_rtos_enabled(target)) {
-		target->rtos->hart_unavailable[riscv_current_hartid(target)] = 0x0;
-		LOG_DEBUG("  hart_unavailable[%d] = 0x%x", riscv_current_hartid(target),
-			target->rtos->hart_unavailable[riscv_current_hartid(target)]);
+	if (target->smp) {
+		target->hart_unavailable = 0x0;
+		LOG_DEBUG("  hart_unavailable[%d] = 0x%x", r->current_hartid,
+				target->hart_unavailable);
 	}
 #endif
-*/
 
 	if (use_hasel) {
 		target_list_t *entry;
@@ -4994,14 +4990,11 @@ static int riscv013_on_halt(struct target *target)
 
 static bool riscv013_is_halted(struct target *target)
 {
-/*TODO SYNC */
-/*
 #if _NDS_V5_ONLY_
-	if (riscv_rtos_enabled(target)) {
-		target->rtos->hart_unavailable[riscv_current_hartid(target)] = 0x0;
+	if (target->smp) {
+		target->hart_unavailable = 0x0;
 	}
 #endif
-*/
 
 	uint32_t dmstatus;
 	if (dmstatus_read(target, &dmstatus, true) != ERROR_OK)
@@ -5009,26 +5002,20 @@ static bool riscv013_is_halted(struct target *target)
 #if _NDS_V5_ONLY_
 	if (get_field(dmstatus, DM_DMSTATUS_ANYUNAVAIL)) {
 		LOG_ERROR("[%s] hart %d is unavailiable", target->tap->dotted_name, riscv_current_hartid(target));
-		/*TODO SYNC */
-		/*
-		if (riscv_rtos_enabled(target)) {
-			target->rtos->hart_unavailable[riscv_current_hartid(target)] = 0xff;
+		if (target->smp) {
+			target->hart_unavailable = 0xff;
 			LOG_DEBUG("  hart_unavailable[%d] = 0x%x", riscv_current_hartid(target),
-				target->rtos->hart_unavailable[riscv_current_hartid(target)]);
+					target->hart_unavailable);
 		}
-		*/
 		return get_field(dmstatus, DM_DMSTATUS_ALLHALTED);
 	}
 	if (get_field(dmstatus, DM_DMSTATUS_ANYNONEXISTENT)) {
 		LOG_ERROR("[%s] hart %d doesn't exist", target->tap->dotted_name, riscv_current_hartid(target));
-		/*TODO SYNC */
-		/*
-		if (riscv_rtos_enabled(target)) {
-			target->rtos->hart_unavailable[riscv_current_hartid(target)] = 0xff;
+		if (target->smp) {
+			target->hart_unavailable = 0xff;
 			LOG_DEBUG("  hart_unavailable[%d] = 0x%x", riscv_current_hartid(target),
-				target->rtos->hart_unavailable[riscv_current_hartid(target)]);
+					target->hart_unavailable);
 		}
-		*/
 		return get_field(dmstatus, DM_DMSTATUS_ALLHALTED);
 	}
 

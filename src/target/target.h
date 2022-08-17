@@ -235,6 +235,7 @@ struct target {
 	char gdb_running_type;
 	/* if executed reset run command, cannot change r->rtos_hartid and target->rtos->current_threadid/thread */
 	bool after_reset_run;
+	uint32_t hart_unavailable;
 #endif
 };
 
