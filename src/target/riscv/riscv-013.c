@@ -2897,7 +2897,8 @@ static int execute_fence_i(struct target *target)
 		if (nds32->nds_do_fencei == true) {
 			if (riscv_program_exec(&program, target) != ERROR_OK)
 				LOG_ERROR("Unable to execute pre-fence.i");
-			nds32->nds_do_fencei = false;
+			if (!target->smp)
+				nds32->nds_do_fencei = false;
 		} else
 			LOG_DEBUG("Skip to execute pre-fence.i");
 	}

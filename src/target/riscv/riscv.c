@@ -1696,6 +1696,8 @@ int riscv_resume(
 				result = ERROR_FAIL;
 		}
 
+		struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+		nds32->nds_do_fencei = false;
 	} else {
 		if (resume_prep(target, current, address, handle_breakpoints,
 					debug_execution) != ERROR_OK)
@@ -2615,6 +2617,7 @@ int riscv_openocd_poll(struct target *target)
 				ndsv5_without_announce = 0;
 				LOG_DEBUG("ndsv5_without_announce");
 			} else {
+				LOG_DEBUG("Call event TARGET_EVENT_HALTED");
 				target_call_event_callbacks(target, TARGET_EVENT_HALTED);
 			}
 #endif
