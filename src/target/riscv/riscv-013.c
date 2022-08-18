@@ -1845,9 +1845,15 @@ static int examine(struct target *target)
 	LOG_DEBUG("info->dmi_busy_delay: 0x%08x", info->dmi_busy_delay);
 #endif /* _NDS_V5_ONLY_ */
 
+#if _NDS_V5_ONLY_
+	/* Avoid using HASEL */
+	dmi_write(target, DM_DMCONTROL, DM_DMCONTROL_DMACTIVE);
+#else
 	dmi_write(target, DM_DMCONTROL, DM_DMCONTROL_HARTSELLO |
 			DM_DMCONTROL_HARTSELHI | DM_DMCONTROL_DMACTIVE |
 			DM_DMCONTROL_HASEL);
+#endif /* _NDS_V5_ONLY_ */
+
 
 	uint32_t dmcontrol;
 	if (dmi_read(target, &dmcontrol, DM_DMCONTROL) != ERROR_OK)
@@ -1871,6 +1877,10 @@ static int examine(struct target *target)
 		return ERROR_FAIL;
 	}
 
+#if _NDS_V5_ONLY_
+	/* Avoid using HASEL */
+	info->hartsellen = 0;
+#else
 	uint32_t hartsel =
 		(get_field(dmcontrol, DM_DMCONTROL_HARTSELHI) <<
 		 DM_DMCONTROL_HARTSELLO_LENGTH) |
@@ -1880,6 +1890,7 @@ static int examine(struct target *target)
 		info->hartsellen++;
 		hartsel >>= 1;
 	}
+#endif /* _NDS_V5_ONLY_ */
 	LOG_DEBUG("hartsellen=%d", info->hartsellen);
 
 	uint32_t hartinfo;
