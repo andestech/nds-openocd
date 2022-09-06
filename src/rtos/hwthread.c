@@ -129,6 +129,10 @@ static int hwthread_update_threads(struct rtos *rtos)
 	/* create space for new thread details */
 	rtos->thread_details = malloc(sizeof(struct thread_detail) * thread_list_size);
 
+#if _NDS_V5_ONLY_
+	bool isDBG_REASON_WPTANDBKPT = false;
+#endif
+
 	if (target->smp) {
 		/* loop over all threads */
 		foreach_smp_target(head, target->smp_targets) {
@@ -148,6 +152,7 @@ static int hwthread_update_threads(struct rtos *rtos)
 				LOG_DEBUG("Reset DBG_REASON_WPTANDBKPT to DBG_REASON_BREAKPOINT");
 				curr->debug_reason = DBG_REASON_BREAKPOINT;
 				LOG_DEBUG("[%s] current_reason = %d", target_name(curr), curr->debug_reason);
+				isDBG_REASON_WPTANDBKPT = true;
 			}
 #endif
 
@@ -163,13 +168,25 @@ static int hwthread_update_threads(struct rtos *rtos)
 					if (tid == rtos->current_threadid)
 						current_thread = tid;
 				}
+#if _NDS_V5_ONLY_
+				/* breakpoints/watchpoints overrides single-step */
+				else if (curr->debug_reason == DBG_REASON_BREAKPOINT ||
+						curr->debug_reason == DBG_REASON_WATCHPOINT) {
+					current_reason = curr->debug_reason;
+					current_thread = tid;
+				}
+#endif
 				break;
 			case DBG_REASON_BREAKPOINT:
+#if _NDS_V5_ONLY_
+				/* step (priority 0, lowest) */
+#else
 				/* single-step overrides breakpoint */
 				if (curr->debug_reason == DBG_REASON_SINGLESTEP) {
 					current_reason = curr->debug_reason;
 					current_thread = tid;
 				} else
+#endif
 				/* multiple breakpoints, prefer gdbs' threadid */
 				if (curr->debug_reason == DBG_REASON_BREAKPOINT) {
 					if (tid == rtos->current_threadid)
@@ -177,9 +194,14 @@ static int hwthread_update_threads(struct rtos *rtos)
 				}
 				break;
 			case DBG_REASON_WATCHPOINT:
+#if _NDS_V5_ONLY_
+				/* step (priority 0, lowest) */
+				if (curr->debug_reason == DBG_REASON_BREAKPOINT) {
+#else
 				/* breakpoint and single-step override watchpoint */
 				if (curr->debug_reason == DBG_REASON_SINGLESTEP ||
 						curr->debug_reason == DBG_REASON_BREAKPOINT) {
+#endif
 					current_reason = curr->debug_reason;
 					current_thread = tid;
 				}
@@ -219,6 +241,9 @@ static int hwthread_update_threads(struct rtos *rtos)
 
 
 #if _NDS_V5_ONLY_
+	if (isDBG_REASON_WPTANDBKPT && current_reason == DBG_REASON_BREAKPOINT)
+		current_reason = DBG_REASON_WPTANDBKPT;
+
 	LOG_DEBUG("[Final] current_thread: %d, rtos->current_threadid: %d, current_reason: %d", 
 			(int)current_thread, (int)rtos->current_threadid, (int)current_reason);
 #endif
