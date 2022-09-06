@@ -4152,8 +4152,6 @@ static int gdb_v_packet(struct connection *connection,
 			return out;
 	}
 
-#if 0 & _NDS32_ONLY_
-#else
 	if (strncmp(packet, "vCont", 5) == 0) {
 		bool handled;
 
@@ -4166,7 +4164,6 @@ static int gdb_v_packet(struct connection *connection,
 
 		return ERROR_OK;
 	}
-#endif
 
 	if (strncmp(packet, "vRun", 4) == 0) {
 		bool handled;
