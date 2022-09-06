@@ -221,7 +221,11 @@ int ndsv5_halt(struct target *target)
 		ndsv5_without_announce = 0;
 		LOG_DEBUG("ndsv5_without_announce");
 	} else {
-		target_call_event_callbacks(target, TARGET_EVENT_HALTED);
+		if (target->smp) {
+			struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+			target_call_event_callbacks(nds32->target, TARGET_EVENT_HALTED);
+		} else
+			target_call_event_callbacks(target, TARGET_EVENT_HALTED);
 	}
 #endif
 	/* to update if target->state == TARGET_HALTED */

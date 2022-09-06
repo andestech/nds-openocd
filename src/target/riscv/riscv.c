@@ -2617,7 +2617,6 @@ int riscv_openocd_poll(struct target *target)
 				ndsv5_without_announce = 0;
 				LOG_DEBUG("ndsv5_without_announce");
 			} else {
-				LOG_DEBUG("Call event TARGET_EVENT_HALTED");
 				target_call_event_callbacks(target, TARGET_EVENT_HALTED);
 			}
 #endif
