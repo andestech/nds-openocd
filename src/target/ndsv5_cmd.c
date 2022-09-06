@@ -2953,6 +2953,8 @@ int ndsv5_get_gdb_fileio_info(struct target *target, struct gdb_fileio_info *fil
 	if (nds32->hit_syscall == false)
 		return ERROR_FAIL;
 
+	target = nds32->active_target;
+
 	struct reg *reg_r0 = register_get_by_name(target->reg_cache, gpr_and_fpu_name[10], 1); /* a0 */
 	reg_r0->type->get(reg_r0);
 	struct reg *reg_r1 = register_get_by_name(target->reg_cache, gpr_and_fpu_name[11], 1); /* a1 */
@@ -3092,6 +3094,8 @@ int ndsv5_gdb_fileio_end(struct target *target, int retcode, int fileio_errno, b
 			retcode, fileio_errno, ctrl_c ? "true" : "false");
 
 	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	target = nds32->active_target;
+
 	int64_t reg_r0_value = 0;
 	struct reg *reg_r0 = register_get_by_name(target->reg_cache, gpr_and_fpu_name[10], 1); /* a0 */
 
@@ -3152,8 +3156,11 @@ int ndsv5_virtual_hosting_check(struct target *target)
 {
 	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
 
-	nds32->hit_syscall = false;
-	nds32->active_syscall_id = NDS_EBREAK_UNDEFINED;
+	if (!target->smp && !nds32->hit_syscall) {
+		nds32->hit_syscall = false;
+		nds32->active_syscall_id = NDS_EBREAK_UNDEFINED;
+		nds32->active_target = NULL;
+	}
 
 	char *ddcause_name = ndsv5_get_CSR_name(target, CSR_DDCAUSE);
 	if (ddcause_name == NULL) {
@@ -3250,6 +3257,7 @@ int ndsv5_virtual_hosting_check(struct target *target)
 				if ((reg_syscall_value&0xFFFF) == (nds_support_syscall_id[i]&0xFFFF)) {
 					nds32->active_syscall_id = (uint32_t)nds_support_syscall_id[i];
 					nds32->hit_syscall = true;
+					nds32->active_target = target;
 					ndsv5_without_announce = 0;
 					NDS_INFO("nds32->active_syscall_id = 0x%x", (uint32_t)nds32->active_syscall_id);
 
@@ -3257,6 +3265,11 @@ int ndsv5_virtual_hosting_check(struct target *target)
 					reg_syscall_value = 0;
 					reg_syscall->type->set(reg_syscall, (uint8_t *)&reg_syscall_value);
 					NDS_INFO("reset reg_a7/t0_value");
+
+					riscv_reg_t pc;
+					riscv_get_register(target, &pc, GDB_REGNO_PC);
+					riscv_set_register(target, GDB_REGNO_PC, pc + 4);
+					LOG_DEBUG("next_pc: 0x%" TARGET_PRIxADDR, pc+4);
 					return ERROR_OK;
 				}
 			}

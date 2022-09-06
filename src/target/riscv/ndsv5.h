@@ -277,6 +277,8 @@ struct nds32_v5 {
 	/** Record syscall ID for other operations to do special processing for target */
 	uint32_t active_syscall_id;
 
+	struct target *active_target;
+
 	/** gdb run mode */
 	enum target_run_mode gdb_run_mode;
 	bool gdb_run_mode_acting;

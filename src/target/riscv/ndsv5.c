@@ -696,15 +696,8 @@ int ndsv5_step_check(struct target *target)
 	LOG_DEBUG("%s", __func__);
 	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
 	if (nds32->hit_syscall == true) {
-		/* skip ebreak */
-		struct reg *reg_pc = register_get_by_name(target->reg_cache, "pc", 1);
-		reg_pc->type->get(reg_pc);
-		uint64_t reg_pc_value = buf_get_u64(reg_pc->value, 0, reg_pc->size);
-		int ebreak_length = ndsv5_get_ebreak_length(target, reg_pc_value);
-		reg_pc_value += ebreak_length;  /* "ebreak" length */
-		reg_pc->type->set(reg_pc, (uint8_t *)&reg_pc_value);
 		nds32->hit_syscall = false;
-		LOG_DEBUG("next_pc: 0x%" TARGET_PRIxADDR, reg_pc_value);
+		nds32->active_target = NULL;
 	}
 	if (nds32->virtual_hosting_ctrl_c == true) {
 		LOG_DEBUG("virtual_hosting_ctrl_c = true");
@@ -779,15 +772,8 @@ int ndsv5_resume_check(struct target *target)
 	LOG_DEBUG("%s", __func__);
 	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
 	if (nds32->hit_syscall == true) {
-		/* skip ebreak */
-		struct reg *reg_pc = register_get_by_name(target->reg_cache, "pc", 1);
-		reg_pc->type->get(reg_pc);
-		uint64_t reg_pc_value = buf_get_u64(reg_pc->value, 0, reg_pc->size);
-		int ebreak_length = ndsv5_get_ebreak_length(target, reg_pc_value);
-		reg_pc_value += ebreak_length;
-		reg_pc->type->set(reg_pc, (uint8_t *)&reg_pc_value);
 		nds32->hit_syscall = false;
-		LOG_DEBUG("next_pc: 0x%" TARGET_PRIxADDR, reg_pc_value);
+		nds32->active_target = NULL;
 	}
 	if (nds32->virtual_hosting_ctrl_c == true) {
 		LOG_DEBUG("virtual_hosting_ctrl_c = true");
@@ -950,6 +936,7 @@ int ndsv5_write_buffer(struct target *target, target_addr_t address, uint32_t wr
 		return ERROR_OK;
 
 	if (nds32->hit_syscall) {
+		target = nds32->active_target;
 		ndsv5_gdb_fileio_write_memory(target, address, &total_size, &write_buffers);
 		LOG_DEBUG("gdb_fileio_write_memory, total_size=%d", total_size);
 	}
