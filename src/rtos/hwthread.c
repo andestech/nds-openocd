@@ -141,6 +141,16 @@ static int hwthread_update_threads(struct rtos *rtos)
 
 			hwthread_fill_thread(rtos, curr, threads_found);
 
+			LOG_DEBUG("[%s] current_reason = %d", target_name(curr), curr->debug_reason);
+
+#if _NDS_V5_ONLY_
+			if (curr->debug_reason == DBG_REASON_WPTANDBKPT) {
+				LOG_DEBUG("Reset DBG_REASON_WPTANDBKPT to DBG_REASON_BREAKPOINT");
+				curr->debug_reason = DBG_REASON_BREAKPOINT;
+				LOG_DEBUG("[%s] current_reason = %d", target_name(curr), curr->debug_reason);
+			}
+#endif
+
 			/* find an interesting thread to set as current */
 			switch (current_reason) {
 			case DBG_REASON_UNDEFINED:
@@ -193,6 +203,10 @@ static int hwthread_update_threads(struct rtos *rtos)
 				break;
 			}
 
+#if _NDS_V5_ONLY_
+			LOG_DEBUG("tid: %d, current_thread: %d, current_reason: %d",
+					(int)tid, (int)current_thread, (int)current_reason);
+#endif
 			threads_found++;
 		}
 	} else {
@@ -202,6 +216,12 @@ static int hwthread_update_threads(struct rtos *rtos)
 	}
 
 	rtos->thread_count = threads_found;
+
+
+#if _NDS_V5_ONLY_
+	LOG_DEBUG("[Final] current_thread: %d, rtos->current_threadid: %d, current_reason: %d", 
+			(int)current_thread, (int)rtos->current_threadid, (int)current_reason);
+#endif
 
 	/* we found an interesting thread, set it as current */
 	if (current_thread != 0)
@@ -364,6 +384,7 @@ static int hwthread_target_for_threadid(struct connection *connection, int64_t t
 
 #if _NDS_V5_ONLY_
 	LOG_DEBUG("thread_id: %ld, switch to target [%s]", thread_id, target_name(curr));
+	target->rtos->current_threadid = thread_id;
 #endif
 
 	*p_target = curr;
