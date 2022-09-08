@@ -4114,8 +4114,6 @@ static bool gdb_regno_cacheable(enum gdb_regno regno, bool write)
 		case GDB_REGNO_VXSAT:
 		case GDB_REGNO_VXRM:
 		case GDB_REGNO_VLENB:
-		case GDB_REGNO_VL:
-		case GDB_REGNO_VTYPE:
 		case GDB_REGNO_MISA:
 		case GDB_REGNO_DCSR:
 		case GDB_REGNO_DSCRATCH0:
@@ -4128,6 +4126,8 @@ static bool gdb_regno_cacheable(enum gdb_regno regno, bool write)
 			 */
 			return !write;
 
+		case GDB_REGNO_VL:
+		case GDB_REGNO_VTYPE:
 		case GDB_REGNO_SATP:
 		case GDB_REGNO_TSELECT:	/* I think this should be above, but then it doesn't work. */
 		case GDB_REGNO_TDATA1:	/* Changes value when tselect is changed. */
@@ -4787,6 +4787,11 @@ int riscv_init_registers(struct target *target)
 		.type_class = REG_TYPE_CLASS_VENDOR_DEF,
 		.id = "vec512"
 	};
+	static struct reg_data_type type_vec1024 = {
+		.type = REG_TYPE_ARCH_DEFINED,
+		.type_class = REG_TYPE_CLASS_VENDOR_DEF,
+		.id = "vec1024"
+	};
 #endif /* _NDS_V5_ONLY_ */
 
 	/* This is roughly the XML we want:
@@ -5365,12 +5370,17 @@ int riscv_init_registers(struct target *target)
 #if _NDS_V5_ONLY_
 			/* TODO: Check we still have this?! */
 			struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+
+			nds32->nds_vector_length = info->vlenb * 8;
 			if (nds32->nds_vector_length == 128) {
 				r->reg_data_type = &type_vec128;
 				r->size = 128;
 			} else if (nds32->nds_vector_length == 256) {
 				r->reg_data_type = &type_vec256;
 				r->size = 256;
+			} else if (nds32->nds_vector_length == 1024) {
+				r->reg_data_type = &type_vec1024;
+				r->size = 1024;
 			} else {
 				/* if (nds32->nds_vector_length == 512) { */
 				r->reg_data_type = &type_vec512;

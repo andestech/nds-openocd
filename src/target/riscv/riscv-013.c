@@ -1766,8 +1766,6 @@ static int set_group(struct target *target, bool *supported, unsigned group, gro
 	return ERROR_OK;
 }
 
-#if _NDS_V5_ONLY_
-#else
 static int discover_vlenb(struct target *target)
 {
 	RISCV_INFO(r);
@@ -1785,7 +1783,6 @@ static int discover_vlenb(struct target *target)
 
 	return ERROR_OK;
 }
-#endif
 
 static int examine(struct target *target)
 {
@@ -2046,13 +2043,11 @@ static int examine(struct target *target)
 		LOG_ERROR("Fatal: Failed to read MISA from hart %d.", r->current_hartid);
 		return ERROR_FAIL;
 	}
-#if _NDS_V5_ONLY_
-#else
+
 	if (riscv_supports_extension(target, 'V')) {
 		if (discover_vlenb(target) != ERROR_OK)
 			return ERROR_FAIL;
 	}
-#endif /* _NDS_V5_ONLY_ */
 
 	/* Now init registers based on what we discovered. */
 	if (riscv_init_registers(target) != ERROR_OK)
