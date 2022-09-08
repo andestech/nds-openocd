@@ -3198,6 +3198,7 @@ static int gdb_query_packet(struct connection *connection,
 	struct gdb_connection *gdb_connection = connection->priv;
 	struct target *target = get_target_from_connection(connection);
 
+
 	if (strncmp(packet, "qRcmd,", 6) == 0) {
 		if (packet_size > 6) {
 			Jim_Interp *interp = cmd_ctx->interp;
@@ -3210,6 +3211,17 @@ static int gdb_query_packet(struct connection *connection,
 			/* We want to print all debug output to GDB connection */
 #if _NDS_V5_ONLY_
 			log_add_callback(gdb_log_callback, connection);
+
+			struct target *ct;
+			struct rtos *rtos = rtos_of_target(target);
+			if (rtos) {
+				rtos->current_threadid = rtos->current_thread;
+				rtos->gdb_target_for_threadid(connection, rtos->current_threadid, &ct);
+				LOG_DEBUG("gdb_server: cmd_ctx turn target from %d to %d", \
+						target->target_number,
+						ct->target_number);
+				cmd_ctx->current_target = ct;
+			}
 #endif
 			gdb_connection->output_flag = GDB_OUTPUT_ALL;
 			target_call_timer_callbacks_now();
@@ -3233,8 +3245,10 @@ static int gdb_query_packet(struct connection *connection,
 
 			cmd_ctx->current_target_override = saved_target_override;
 
-#if _NDS32_ONLY_
+#if 0 & _NDS32_ONLY_
 			/* SYNC 0531 */
+			if (target->rtos)
+				rtos_update_threads(target);
 			LOG_DEBUG("gdb_server: cmd_ctx turn target from %d to %d", \
 					cmd_ctx->current_target->target_number, \
 					target->target_number);
