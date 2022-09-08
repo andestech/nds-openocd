@@ -4098,15 +4098,18 @@ int riscv_count_harts(struct target *target)
  */
 static bool gdb_regno_cacheable(enum gdb_regno regno, bool write)
 {
+
+#if _NDS_V5_ONLY_
+	/* access_stack_protection_regs_v5 will modified $sp during test */
+	if (regno == GDB_REGNO_SP)
+		return false;
+#endif
+
 	/* GPRs, FPRs, vector registers are just normal data stores. */
 	if (regno <= GDB_REGNO_XPR31 ||
 			(regno >= GDB_REGNO_FPR0 && regno <= GDB_REGNO_FPR31) ||
 			(regno >= GDB_REGNO_V0 && regno <= GDB_REGNO_V31))
-#if _NDS_V5_ONLY_
-		return false;
-#else
 		return true;
-#endif
 
 	/* Most CSRs won't change value on us, but we can't assume it about arbitrary
 	 * CSRs. */
