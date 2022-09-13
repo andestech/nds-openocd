@@ -1770,6 +1770,22 @@ static int discover_vlenb(struct target *target)
 {
 	RISCV_INFO(r);
 	riscv_reg_t vlenb;
+	uint64_t mmsc_cfg, cur_mstatus_VS;
+	if (register_read_direct(target, &mmsc_cfg, GDB_REGNO_CSR0 + CSR_MMSC_CFG) != ERROR_OK)
+		LOG_ERROR("read mmsc_cfg error");
+
+	if ((mmsc_cfg & 0x1000000000)>>36)
+		cur_mstatus_VS = 0x00000600;
+	else
+		cur_mstatus_VS = 0x01800000;
+
+	uint64_t mstatus;
+	if (register_read_direct(target, &mstatus, GDB_REGNO_MSTATUS) != ERROR_OK)
+		LOG_ERROR("read mstatus error");
+
+	if ((mstatus & cur_mstatus_VS) == 0 &&
+	   register_write_direct(target, GDB_REGNO_MSTATUS, set_field(mstatus, cur_mstatus_VS, 1)) != ERROR_OK)
+		LOG_ERROR("cannot write mstatus_vs");
 
 	if (register_read_direct(target, &vlenb, GDB_REGNO_VLENB) != ERROR_OK) {
 		LOG_WARNING("Couldn't read vlenb for %s; vector register access won't work.",
@@ -1777,6 +1793,7 @@ static int discover_vlenb(struct target *target)
 		r->vlenb = 0;
 		return ERROR_OK;
 	}
+
 	r->vlenb = vlenb;
 
 	LOG_INFO("Vector support with vlenb=%d", r->vlenb);
