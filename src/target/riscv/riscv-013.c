@@ -1791,13 +1791,16 @@ static int discover_vlenb(struct target *target)
 		LOG_WARNING("Couldn't read vlenb for %s; vector register access won't work.",
 				target_name(target));
 		r->vlenb = 0;
+		if (register_write_direct(target, GDB_REGNO_MSTATUS, mstatus) != ERROR_OK)
+			return ERROR_FAIL;
 		return ERROR_OK;
 	}
 
 	r->vlenb = vlenb;
 
 	LOG_INFO("Vector support with vlenb=%d", r->vlenb);
-
+	if (register_write_direct(target, GDB_REGNO_MSTATUS, mstatus) != ERROR_OK)
+		return ERROR_FAIL;
 	return ERROR_OK;
 }
 
