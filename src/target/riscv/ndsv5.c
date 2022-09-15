@@ -32,7 +32,7 @@ extern uint32_t dtmcontrol_scan(struct target *target, uint32_t out);	/* declear
 /********************************************************************/
 
 
-
+extern uint32_t nds_is_rvv_0_8;
 
 /********************************************************************/
 /* ndsv5.c global Var. */
@@ -2455,10 +2455,24 @@ int riscv_program_vsetvli(struct riscv_program *p, enum gdb_regno rd, uint32_t S
 		vtypei_SEW = 2;
 	else if (SEW == 64)
 		vtypei_SEW = 3;
+	else if (SEW == 128)
+		vtypei_SEW = 4;
+	else if (SEW == 256)
+		vtypei_SEW = 5;
+	else if (SEW == 512)
+		vtypei_SEW = 6;
+	else if (SEW == 1024)
+		vtypei_SEW = 7;
 	else
 		return ERROR_FAIL;
 
-	vtypei = ((vtypei_SEW << 2) << 20);
+	if (nds_is_rvv_0_8 == 1) {
+		/* RVV 0.8 */
+		vtypei = ((vtypei_SEW << 2) << 20);
+	} else {
+		/* RVV 0.9 & above */
+		vtypei = ((vtypei_SEW << 3) << 20);
+	}
 	LOG_DEBUG("vtypei: 0x%x", vtypei);
 	opcode = 0x7057;
 	opcode |= ((rd << 7) | vtypei);

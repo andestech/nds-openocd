@@ -29,6 +29,8 @@
 #include "asm.h"
 #include "batch.h"
 
+uint32_t nds_is_rvv_0_8;
+
 #if _NDS_V5_ONLY_
 #include "ndsv5.h"
 #include "ndsv5-013.h"
@@ -1617,7 +1619,7 @@ static int register_read_direct(struct target *target, uint64_t *value, uint32_t
 				riscv_program_insert(&program, fmv_x_w(S0, number - GDB_REGNO_FPR0));
 			}
 		} else if (number >= GDB_REGNO_CSR0 && number <= GDB_REGNO_CSR4095) {
-#if _NDS_V5_ONLY_
+#if 0
 			if (register_read_direct(target, &mstatus, GDB_REGNO_MSTATUS) != ERROR_OK)
 				return ERROR_FAIL;
 			if ((mstatus & MSTATUS_VS) == 0) {
@@ -1774,11 +1776,15 @@ static int discover_vlenb(struct target *target)
 	if (register_read_direct(target, &mmsc_cfg, GDB_REGNO_CSR0 + CSR_MMSC_CFG) != ERROR_OK)
 		LOG_ERROR("read mmsc_cfg error");
 
-	if ((mmsc_cfg & 0x1000000000)>>36)
+	if ((mmsc_cfg & 0x1000000000)>>36) {
+		/* RVV 0.9 & above */
 		cur_mstatus_VS = 0x00000600;
-	else
+		nds_is_rvv_0_8 = 0;
+	} else {
+		/* RVV 0.8 */
 		cur_mstatus_VS = 0x01800000;
-
+		nds_is_rvv_0_8 = 1;
+	}
 	uint64_t mstatus;
 	if (register_read_direct(target, &mstatus, GDB_REGNO_MSTATUS) != ERROR_OK)
 		LOG_ERROR("read mstatus error");
@@ -2284,9 +2290,13 @@ static int prep_for_vector_access(struct target *target, uint64_t *vtype,
 		return ERROR_FAIL;
 	if (register_read_direct(target, vl, GDB_REGNO_VL) != ERROR_OK)
 		return ERROR_FAIL;
-
-	if (register_write_direct(target, GDB_REGNO_VTYPE, encoded_vsew << 3) != ERROR_OK)
-		return ERROR_FAIL;
+	if (nds_is_rvv_0_8 == 1) {
+		if (register_write_direct(target, GDB_REGNO_VTYPE, encoded_vsew << 2) != ERROR_OK)
+			return ERROR_FAIL;
+	} else {
+		if (register_write_direct(target, GDB_REGNO_VTYPE, encoded_vsew << 3) != ERROR_OK)
+			return ERROR_FAIL;
+	}
 	*debug_vl = DIV_ROUND_UP(r->vlenb * 8, riscv_xlen(target));
 	if (register_write_direct(target, GDB_REGNO_VL, *debug_vl) != ERROR_OK)
 		return ERROR_FAIL;

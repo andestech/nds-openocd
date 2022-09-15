@@ -1982,7 +1982,7 @@ struct reg_arch_type ndsv5_reg_arch_type = {
 	.set = ndsv5_register_set
 };
 
-char gNDSVectorRegBuf[32][512/8];
+char gNDSVectorRegBuf[32][1024/8];
 static int ndsv5_register_vector_get(struct reg *reg)
 {
 	riscv_reg_info_t *reg_info = reg->arch_info;
