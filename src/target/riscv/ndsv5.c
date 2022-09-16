@@ -2430,7 +2430,7 @@ int riscv_program_vsetvl(struct riscv_program *p, enum gdb_regno rd, enum gdb_re
 	riscv_insn_t opcode = 0;
 
 	opcode = 0x80007057;
-	opcode |= ((rd << 7) | (rs2 << 20));
+	opcode |= ((rd << 7) | (rd << 15) | (rs2 << 20));
 	return riscv_program_insert(p, opcode);
 }
 
@@ -2475,7 +2475,7 @@ int riscv_program_vsetvli(struct riscv_program *p, enum gdb_regno rd, uint32_t S
 	}
 	LOG_DEBUG("vtypei: 0x%x", vtypei);
 	opcode = 0x7057;
-	opcode |= ((rd << 7) | vtypei);
+	opcode |= ((rd << 7) | (rd << 15) | vtypei);
 	return riscv_program_insert(p, opcode);
 }
 

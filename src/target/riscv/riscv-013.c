@@ -1804,6 +1804,8 @@ static int discover_vlenb(struct target *target)
 
 	r->vlenb = vlenb;
 
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	nds32->nds_vector_length = r->vlenb;
 	LOG_INFO("Vector support with vlenb=%d", r->vlenb);
 	if (register_write_direct(target, GDB_REGNO_MSTATUS, mstatus) != ERROR_OK)
 		return ERROR_FAIL;
@@ -6261,23 +6263,23 @@ int ndsv5_write_memory_progbuf_pack(struct target *target, target_addr_t address
 	return ERROR_OK;
 }
 
-int ndsv5_vector_restore_vtype_vl(struct target *target, uint64_t reg_vtype)
+int ndsv5_vector_restore_vtype_vl(struct target *target, uint64_t reg_vl, uint64_t reg_vtype)
 {
 	int result;
 
-	register_write_direct(target, GDB_REGNO_S0, reg_vtype);
+	register_write_direct(target, GDB_REGNO_S0, reg_vl);
+	register_write_direct(target, GDB_REGNO_S1, reg_vtype);
 	LOG_DEBUG("reg_vtype: 0x%lx", (long unsigned int)reg_vtype);
 
 	/* Restore vtype & vl */
 	struct riscv_program program;
 	riscv_program_init(&program, target);
-	riscv_program_vsetvl(&program, GDB_REGNO_S0, GDB_REGNO_S0);
+	riscv_program_vsetvl(&program, GDB_REGNO_S0, GDB_REGNO_S1);
 	result = riscv_program_exec(&program, target);
 	if (result != ERROR_OK) {
 		LOG_ERROR("riscv_program_vsetvl ERROR !!");
 		return ERROR_FAIL;
 	}
-
 	return ERROR_OK;
 }
 
@@ -6322,6 +6324,9 @@ int ndsv5_get_vector_VLMAX(struct target *target)
 
 	struct riscv_program program;
 	while (vector_SEW >= 8) {
+		vector_vl = (nds32->nds_vector_length/vector_SEW);
+		if (register_write_direct(target, GDB_REGNO_S0, vector_vl) != ERROR_OK)
+			return ERROR_FAIL;
 		riscv_program_init(&program, target);
 		riscv_program_vsetvli(&program, GDB_REGNO_S0, vector_SEW);
 		result = riscv_program_exec(&program, target);
@@ -6347,14 +6352,14 @@ int ndsv5_get_vector_VLMAX(struct target *target)
 		} else
 			vector_SEW = (vector_SEW >> 1);
 	}
-	nds32->nds_vector_length = vector_SEW * vector_vl;
+
 	nds32->nds_vector_SEW = vector_SEW;
 	nds32->nds_vector_vl = (uint32_t)vector_vl;
 	LOG_DEBUG("nds32->nds_vector_SEW: 0x%x, nds32->nds_vector_vl: 0x%x", nds32->nds_vector_SEW, nds32->nds_vector_vl);
 	LOG_DEBUG("nds32->nds_vector_length: 0x%x", nds32->nds_vector_length);
 
 	/* Restore vtype & vl */
-	ndsv5_vector_restore_vtype_vl(target, reg_vtype);
+	ndsv5_vector_restore_vtype_vl(target, reg_vl, reg_vtype);
 
 	riscv_get_register(target, &reg_vtype, CSR_VTYPE + GDB_REGNO_CSR0);
 	riscv_get_register(target, &reg_vl, CSR_VL + GDB_REGNO_CSR0);
@@ -6392,6 +6397,8 @@ int ndsv5_get_vector_register(struct target *target, enum gdb_regno r, char *pRe
 	riscv_get_register(target, &reg_vstart, CSR_VSTART + GDB_REGNO_CSR0);
 	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
 
+	if (register_write_direct(target, GDB_REGNO_S0, nds32->nds_vector_vl) != ERROR_OK)
+		return ERROR_FAIL;
 	struct riscv_program program;
 	riscv_program_init(&program, target);
 	riscv_program_vsetvli(&program, GDB_REGNO_S0, nds32->nds_vector_SEW);
@@ -6428,7 +6435,7 @@ int ndsv5_get_vector_register(struct target *target, enum gdb_regno r, char *pRe
 			*pRegValue++ = *p_vector_value++;
 	}
 	/* Restore vtype & vl */
-	ndsv5_vector_restore_vtype_vl(target, reg_vtype);
+	ndsv5_vector_restore_vtype_vl(target, reg_vl, reg_vtype);
 	riscv_set_register(target, CSR_VSTART + GDB_REGNO_CSR0, reg_vstart);
 	if (register_write_direct(target, GDB_REGNO_MSTATUS, mstatus) != ERROR_OK)
 		return ERROR_FAIL;
@@ -6467,6 +6474,8 @@ int ndsv5_set_vector_register(struct target *target, enum gdb_regno r, char *pRe
 	riscv_get_register(target, &reg_vstart, CSR_VSTART + GDB_REGNO_CSR0);
 	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
 
+	if (register_write_direct(target, GDB_REGNO_S0, nds32->nds_vector_vl) != ERROR_OK)
+		return ERROR_FAIL;
 	struct riscv_program program;
 	riscv_program_init(&program, target);
 	riscv_program_vsetvli(&program, GDB_REGNO_S0, nds32->nds_vector_SEW);
@@ -6500,7 +6509,7 @@ int ndsv5_set_vector_register(struct target *target, enum gdb_regno r, char *pRe
 		}
 	}
 	/* Restore vtype & vl & vstart */
-	ndsv5_vector_restore_vtype_vl(target, reg_vtype);
+	ndsv5_vector_restore_vtype_vl(target, reg_vl, reg_vtype);
 	riscv_set_register(target, CSR_VSTART + GDB_REGNO_CSR0, reg_vstart);
 	if (register_write_direct(target, GDB_REGNO_MSTATUS, mstatus) != ERROR_OK)
 		return ERROR_FAIL;

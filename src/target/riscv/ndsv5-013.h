@@ -32,7 +32,7 @@ int ndsv5_write_memory_progbuf_pack(struct target *target, target_addr_t address
 void ndsv5_decode_csr(char *text, unsigned address, unsigned data);
 
 
-int ndsv5_vector_restore_vtype_vl(struct target *target, uint64_t reg_vtype);
+int ndsv5_vector_restore_vtype_vl(struct target *target, uint64_t reg_vl, uint64_t reg_vtype);
 int ndsv5_get_vector_VLMAX(struct target *target);
 int ndsv5_get_vector_register(struct target *target, enum gdb_regno r, char *pRegValue);
 int ndsv5_set_vector_register(struct target *target, enum gdb_regno r, char *pRegValue);
