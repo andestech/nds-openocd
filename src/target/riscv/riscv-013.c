@@ -35,6 +35,7 @@ uint32_t nds_is_rvv_0_8;
 #include "ndsv5.h"
 #include "ndsv5-013.h"
 #include "target/nds32_new/nds32_log.h"
+#include <target/smp.h>
 #define DIM(x)          (sizeof(x)/sizeof(*x))
 static void write_to_buf(uint8_t *buffer, uint64_t value, unsigned size);
 #endif
@@ -2723,8 +2724,16 @@ static int assert_reset(struct target *target)
 {
 #if _NDS_V5_ONLY_
 	/* Disable halt-on-reset when reset-run */
-	if ((nds_halt_on_reset == 1) && (target->reset_halt == 0))
-		ndsv5_haltonreset(target, 0);
+	if ((nds_halt_on_reset == 1) && (target->reset_halt == 0)) {
+		if (target->smp) {
+			struct target_list *tlist;
+			foreach_smp_target(tlist, target->smp_targets) {
+				struct target *t = tlist->target;
+				ndsv5_haltonreset(t, 0);
+			}
+		} else 
+			ndsv5_haltonreset(target, 0);
+	}
 
 	if ((ndsv5_script_custom_reset_halt) && (target->reset_halt == 1)) {
 		ndsv5_script_do_custom_reset(target, ndsv5_script_custom_reset_halt);
@@ -2744,9 +2753,24 @@ static int assert_reset(struct target *target)
 #if _NDS_V5_ONLY_
 	if (target->reset_halt) {
 		/* single core no execute haltonreset: bitmap built before 2019/5 */
-		ndsv5_haltonreset(target, 1);
-	} else
-		ndsv5_haltonreset(target, 0);
+		if (target->smp) {
+			struct target_list *tlist;
+			foreach_smp_target(tlist, target->smp_targets) {
+				struct target *t = tlist->target;
+				ndsv5_haltonreset(t, 1);
+			}
+		} else 
+			ndsv5_haltonreset(target, 1);
+	} else {
+		if (target->smp) {
+			struct target_list *tlist;
+			foreach_smp_target(tlist, target->smp_targets) {
+				struct target *t = tlist->target;
+				ndsv5_haltonreset(t, 0);
+			}
+		} else 
+			ndsv5_haltonreset(target, 0);
+	}
 #endif /* _NDS_V5_ONLY_ */
 
 	if (target_has_event_action(target, TARGET_EVENT_RESET_ASSERT)) {
@@ -2909,7 +2933,14 @@ static int deassert_reset(struct target *target)
 	/* Restore halt-on-reset */
 	if (nds_halt_on_reset == 1 && target->rtos) {
 		/* single core no execute haltonreset: bitmap built before 2019/5 */
-		ndsv5_haltonreset(target, 1);
+		if (target->smp) {
+			struct target_list *tlist;
+			foreach_smp_target(tlist, target->smp_targets) {
+				struct target *t = tlist->target;
+				ndsv5_haltonreset(t, 1);
+			}
+		} else 
+			ndsv5_haltonreset(target, 1);
 	} else
 		ndsv5_haltonreset(target, 0);
 
@@ -5831,8 +5862,6 @@ ndsv5_get_csr_reg_quick_access_retry:
 
 int ndsv5_haltonreset(struct target *target, int enable)
 {
-	int i;
-
 	if (enable == 1)
 		LOG_DEBUG("Set setresethaltreq");
 	else
@@ -5847,28 +5876,24 @@ int ndsv5_haltonreset(struct target *target, int enable)
 	dmi_read(target, &tmp_dmcontrol, DM_DMCONTROL);
 	dm->current_hartid = get_field(tmp_dmcontrol, DM_DMCONTROL_HARTSELLO);
 
-	for (i = 0; i < r->hart_count(target); i++) {
-		r->current_hartid = i;
-		riscv013_select_current_hart(target);
+	riscv013_select_current_hart(target);
 
-		uint32_t s;
-		dmi_read(target, &s, DM_DMSTATUS);
-		if (get_field(s, DM_DMSTATUS_HASRESETHALTREQ)) {
-			uint32_t control;
-			dmi_read(target, &control, DM_DMCONTROL);
+	uint32_t s;
+	dmi_read(target, &s, DM_DMSTATUS);
+	if (get_field(s, DM_DMSTATUS_HASRESETHALTREQ)) {
+		uint32_t control;
+		dmi_read(target, &control, DM_DMCONTROL);
 
-			if (enable == 1)
-				control = set_field(control, DM_DMCONTROL_SETRESETHALTREQ, 1);
-			else
-				control = set_field(control, DM_DMCONTROL_CLRRESETHALTREQ, 1);
-			dmi_write(target, DM_DMCONTROL, control);
+		if (enable == 1)
+			control = set_field(control, DM_DMCONTROL_SETRESETHALTREQ, 1);
+		else
+			control = set_field(control, DM_DMCONTROL_CLRRESETHALTREQ, 1);
+		dmi_write(target, DM_DMCONTROL, control);
 
-			if (enable == 1)
-				LOG_DEBUG("hart %d: halt-on-reset is on!", i);
-			else
-				LOG_DEBUG("hart %d: halt-on-reset is off!", i);
-
-		}
+		if (enable == 1)
+			LOG_DEBUG("hart %d: halt-on-reset is on!", target->coreid);
+		else
+			LOG_DEBUG("hart %d: halt-on-reset is off!", target->coreid);
 
 	}
 
