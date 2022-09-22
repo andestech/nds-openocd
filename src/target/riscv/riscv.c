@@ -2617,7 +2617,13 @@ int riscv_openocd_poll(struct target *target)
 				ndsv5_without_announce = 0;
 				LOG_DEBUG("ndsv5_without_announce");
 			} else {
-				target_call_event_callbacks(target, TARGET_EVENT_HALTED);
+				struct target_list *tlist;
+				foreach_smp_target(tlist, target->smp_targets) {
+					struct target *t = tlist->target;
+					target_call_event_callbacks(t, TARGET_EVENT_HALTED);
+					break;
+				}
+
 			}
 #endif
 		} else if (should_resume) {
