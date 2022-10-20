@@ -330,6 +330,20 @@ static void move_to_state(tap_state_t goal_state)
 {
 	tap_state_t start_state = tap_get_state();
 
+
+	if (start_state == TAP_RESET && goal_state != TAP_RESET) {
+		LOG_DEBUG_IO("start=%s goal=%s", tap_state_name(start_state), tap_state_name(TAP_IDLE));
+		uint8_t zero = 0x0;
+		DO_CLOCK_TMS_CS_OUT(mpsse_ctx,
+				&zero,
+				0,
+				7,
+				false,
+				ftdi_jtag_mode);
+		start_state = TAP_IDLE;
+		tap_set_state(TAP_IDLE);
+	}
+
 	/*	goal_state is 1/2 of a tuple/pair of states which allow convenient
 		lookup of the required TMS pattern to move to this state from the
 		start state.
