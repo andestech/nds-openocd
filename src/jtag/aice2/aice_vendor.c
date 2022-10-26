@@ -1294,11 +1294,11 @@ int nds_sdm_idcode_scan(struct jtag_tap *tap, uint8_t *idcode_buffer, uint32_t m
 	return ERROR_OK;
 }
 
-extern struct command_context *global_cmd_ctx;
+//extern struct command_context *global_cmd_ctx;
 extern uint32_t nds_ftdi_devices;
 static int nds_ftdi_write_ctrl(uint32_t address, uint32_t WriteData)
 {
-	struct command_context *cmd_ctx = global_cmd_ctx;
+	//struct command_context *cmd_ctx = global_cmd_ctx;
 	/*
 	LOG_DEBUG("ADDR:0x%x, DATA:0x%x", address, WriteData);
 	unsigned int ctrl_data = WriteData;
@@ -1313,19 +1313,19 @@ static int nds_ftdi_write_ctrl(uint32_t address, uint32_t WriteData)
 		if (WriteData == AICE_JTAG_PIN_CONTROL_SRST) {
 			LOG_DEBUG("AICE_JTAG_PIN_CONTROL_SRST");
 			/* AICE-MINI-PLUS */
-			if (nds_ftdi_devices == 1) /* ftdi_vid[i] == 0x1cfc */
-				command_run_line(cmd_ctx, "ftdi_set_signal nSRST 1");
-			else
-				command_run_line(cmd_ctx, "ftdi_write_pin nSRST 0");
+			//if (nds_ftdi_devices == 1) /* ftdi_vid[i] == 0x1cfc */
+			//	command_run_line(cmd_ctx, "ftdi_set_signal nSRST 1");
+			//else
+			//	command_run_line(cmd_ctx, "ftdi_write_pin nSRST 0");
 
-			/* aice_write_misc(target, NDS_EDM_MISC_EDM_CMDR, 4); */
+			aice_write_misc(target, NDS_EDM_MISC_EDM_CMDR, 4);
 			alive_sleep(300);
-			if (nds_ftdi_devices == 1) /* ftdi_vid[i] == 0x1cfc */
-				command_run_line(cmd_ctx, "ftdi_set_signal nSRST z");
-			else
-				command_run_line(cmd_ctx, "ftdi_write_pin nSRST 1");
+			//if (nds_ftdi_devices == 1) /* ftdi_vid[i] == 0x1cfc */
+			//	command_run_line(cmd_ctx, "ftdi_set_signal nSRST z");
+			//else
+			//	command_run_line(cmd_ctx, "ftdi_write_pin nSRST 1");
 
-			/* aice_write_misc(target, NDS_EDM_MISC_EDM_CMDR, 5); */
+			aice_write_misc(target, NDS_EDM_MISC_EDM_CMDR, 5);
 			alive_sleep(500);
 		} else if (WriteData == AICE_JTAG_PIN_CONTROL_TRST) {
 			LOG_DEBUG("AICE_JTAG_PIN_CONTROL_TRST");
@@ -1345,17 +1345,19 @@ static int nds_ftdi_write_ctrl(uint32_t address, uint32_t WriteData)
 		} else if (WriteData == AICE_JTAG_PIN_CONTROL_RESTART) {
 			LOG_DEBUG("AICE_JTAG_PIN_CONTROL_RESTART");
 			/* AICE-MINI-PLUS */
-			if (nds_ftdi_devices == 1) /* ftdi_vid[i] == 0x1cfc */
-				command_run_line(cmd_ctx, "ftdi_set_signal nSRST 1");
-			else
-				command_run_line(cmd_ctx, "ftdi_write_pin nSRST 0");
+			//if (nds_ftdi_devices == 1) /* ftdi_vid[i] == 0x1cfc */
+			//	command_run_line(cmd_ctx, "ftdi_set_signal nSRST 1");
+			//else
+			//	command_run_line(cmd_ctx, "ftdi_write_pin nSRST 0");
 
 			alive_sleep(300);
+			aice_write_misc(target, NDS_EDM_MISC_EDM_CMDR, 4);
 			aice_write_misc(target, NDS_EDM_MISC_EDM_CMDR, 0);
-			if (nds_ftdi_devices == 1) /* ftdi_vid[i] == 0x1cfc */
-				command_run_line(cmd_ctx, "ftdi_set_signal nSRST z");
-			else
-				command_run_line(cmd_ctx, "ftdi_write_pin nSRST 1");
+			aice_write_misc(target, NDS_EDM_MISC_EDM_CMDR, 5);
+			//if (nds_ftdi_devices == 1) /* ftdi_vid[i] == 0x1cfc */
+			//	command_run_line(cmd_ctx, "ftdi_set_signal nSRST z");
+			//else
+			//	command_run_line(cmd_ctx, "ftdi_write_pin nSRST 1");
 
 			alive_sleep(500);
 		}
@@ -1363,16 +1365,18 @@ static int nds_ftdi_write_ctrl(uint32_t address, uint32_t WriteData)
 		uint32_t delay_count = (WriteData >> 16) & 0xFFFF;
 		if (WriteData & AICE_CUSTOM_DELAY_SET_SRST) {
 			LOG_DEBUG("AICE_CUSTOM_DELAY_SET_SRST");
-			if (nds_ftdi_devices == 1) /* ftdi_vid[i] == 0x1cfc */
-				command_run_line(cmd_ctx, "ftdi_set_signal nSRST 1");
-			else
-				command_run_line(cmd_ctx, "ftdi_write_pin nSRST 0");
+			//if (nds_ftdi_devices == 1) /* ftdi_vid[i] == 0x1cfc */
+			//	command_run_line(cmd_ctx, "ftdi_set_signal nSRST 1");
+			//else
+			//	command_run_line(cmd_ctx, "ftdi_write_pin nSRST 0");
+			aice_write_misc(target, NDS_EDM_MISC_EDM_CMDR, 4);
 		} else if (WriteData & AICE_CUSTOM_DELAY_CLEAN_SRST) {
 			LOG_DEBUG("AICE_CUSTOM_DELAY_CLEAN_SRST");
-			if (nds_ftdi_devices == 1) /* ftdi_vid[i] == 0x1cfc */
-				command_run_line(cmd_ctx, "ftdi_set_signal nSRST z");
-			else
-				command_run_line(cmd_ctx, "ftdi_write_pin nSRST 1");
+			//if (nds_ftdi_devices == 1) /* ftdi_vid[i] == 0x1cfc */
+			//	command_run_line(cmd_ctx, "ftdi_set_signal nSRST z");
+			//else
+			//	command_run_line(cmd_ctx, "ftdi_write_pin nSRST 1");
+			aice_write_misc(target, NDS_EDM_MISC_EDM_CMDR, 5);
 		} else if (WriteData & AICE_CUSTOM_DELAY_SET_DBGI) {
 			LOG_DEBUG("AICE_CUSTOM_DELAY_SET_DBGI");
 			aice_write_misc(target, NDS_EDM_MISC_EDM_CMDR, 0);
