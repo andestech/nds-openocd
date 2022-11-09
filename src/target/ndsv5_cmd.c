@@ -2311,7 +2311,7 @@ static int ndsv5_init_option_reg(struct target *target)
 
 			/* if RV32 mmsc_cfg2.CCACHEMP_CFG == 1 */
 			/* AndeStar_V5_SPA_UM164_V1.5.43-20220726 */
-			if ((reg_mmsc_cfg2_value & 0x4000) == 0) {
+			if ((reg_mmsc_cfg2_value & 0x2000) == 0) {
 				NDS_INFO("disable CSR_MCCACHE_CTL_BASE register");
 				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MCCACHE_CTL_BASE].exist = false;
 			}
@@ -2356,7 +2356,7 @@ static int ndsv5_init_option_reg(struct target *target)
 
 		/* if RV64 mmsc_cfg.CCACHEMP_CFG == 1 */
 		/* AndeStar_V5_SPA_UM164_V1.5.43-20220726 */
-		if ((reg_mmsc_cfg_value & 0x400000000000) == 0) {
+		if ((reg_mmsc_cfg_value & 0x200000000000) == 0) {
 			NDS_INFO("disable CSR_MCCACHE_CTL_BASE register");
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MCCACHE_CTL_BASE].exist = false;
 		}
