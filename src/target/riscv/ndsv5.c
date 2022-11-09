@@ -1693,7 +1693,9 @@ int ndsv5_check_l2cache_exist(struct target *target, uint64_t *config)
 	LOG_DEBUG("Check L2C exist");
 
 	/* After AndeStar V5 SPA v1.5.29 */
-	if (target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MCCACHE_CTL_BASE].exist) {
+	if (L2C_BASE != (uint64_t)-1) {
+		ndsv5_l2c_support = 1;
+	} else if (target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MCCACHE_CTL_BASE].exist) {
 		uint64_t mccache_ctl_base;
 		if (riscv_get_register(target, &mccache_ctl_base,
 					GDB_REGNO_CSR0 + CSR_MCCACHE_CTL_BASE) == ERROR_OK) {
