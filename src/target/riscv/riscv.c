@@ -4387,6 +4387,18 @@ int riscv_enumerate_triggers(struct target *target)
 				if (tdata1 & CSR_MCONTROL6_DMODE(riscv_xlen(target)))
 					riscv_set_register(target, GDB_REGNO_TDATA1, 0);
 				break;
+#if _NDS_V5_ONLY_
+			case 15:
+				/* Resetting current trigger to mcontrol */
+				riscv_set_register(target, GDB_REGNO_TDATA1,
+						set_field(0, MCONTROL_TYPE(riscv_xlen(target)), 2));
+
+				/* Check trigger again */
+				riscv_get_register(target, &tdata1, GDB_REGNO_TDATA1);
+				if (get_field(tdata1, CSR_TDATA1_TYPE(riscv_xlen(target))) != 0x2)
+					LOG_ERROR("Unable to reset %d trigger to mcontrol", t);					
+				break;
+#endif
 		}
 	}
 
