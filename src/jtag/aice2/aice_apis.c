@@ -44,7 +44,7 @@ uint32_t aice_packet_append_size;
 uint32_t aice_skip_tckscan_before_restart = 1;
 
 static uint32_t aice_dis_DEH_SEL;
-extern uint32_t aice_no_crst_detect;
+extern uint32_t aice_no_reset_detect;
 extern int vid_pid_array_top;
 extern uint32_t nds32_reset_halt_as_init;
 extern unsigned int aice_set_clk_first;
@@ -1501,7 +1501,7 @@ int aice_state(struct target *target, enum aice_target_state_s *state)
 		/* Clear NDS_DBGER_AT_MAX */
 		aice_write_misc(target, NDS_EDM_MISC_DBGER, NDS_DBGER_AT_MAX);
 		*state = AICE_TARGET_HALTED;
-	} else if (((dbger_value & NDS_DBGER_CRST) == NDS_DBGER_CRST) && (aice_no_crst_detect == 0)) {
+	} else if (((dbger_value & NDS_DBGER_CRST) == NDS_DBGER_CRST) && (aice_no_reset_detect == 0)) {
 		LOG_DEBUG("DBGER.CRST is on.");
 
 		*state = AICE_TARGET_RESET;

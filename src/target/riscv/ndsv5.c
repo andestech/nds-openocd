@@ -573,10 +573,13 @@ int ndsv5_virtual_to_physical(struct target *target, target_addr_t address, targ
 	mstatus |= MSTATUS_SUM;		/* Set SUM = 1 */
 	mstatus |= MSTATUS_MXR;		/* Set MXR = 1 */
 
-	if ((nds_dmi_quick_access) && (!riscv_is_halted(target)))
+	if ((nds_dmi_quick_access) && (!riscv_is_halted(target))) {
 		ndsv5_set_csr_reg_quick_access(target, GDB_REGNO_MSTATUS, mstatus);
-	else
+		ndsv5_get_csr_reg_quick_access(target, GDB_REGNO_MSTATUS, &mstatus);
+	} else {
 		riscv_set_register(target, GDB_REGNO_MSTATUS, mstatus);
+		riscv_get_register(target, &mstatus, GDB_REGNO_MSTATUS);
+	}
 
 	*physical = address;
 	return ERROR_OK;

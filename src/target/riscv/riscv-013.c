@@ -5062,7 +5062,7 @@ static bool riscv013_is_halted(struct target *target)
 	}
 
 	if ((target->state != TARGET_HALTED) &&
-	    (nds_no_crst_detect == 0) &&
+	    (nds_no_reset_detect == 0) &&
 	    (get_field(dmstatus, DM_DMSTATUS_ANYHAVERESET) == 1)) {
 		LOG_DEBUG(NDS32_ERRMSG_TARGET_RESET);
 
@@ -5804,6 +5804,7 @@ ndsv5_set_csr_reg_quick_access_retry:
 		}
 	}
 
+	LOG_DEBUG("reg_num: 0x%x, value: 0x%lx", reg_num, reg_value);
 	return ERROR_OK;
 }
 
@@ -5848,7 +5849,6 @@ ndsv5_get_csr_reg_quick_access_retry:
 
 	uint32_t value = 0;
 	dmi_read(target, &value, DM_DATA0);
-	LOG_DEBUG("value: 0x%x", value);
 	uint32_t value_h = 0;
 	if (riscv_xlen(target) == 64) {
 		dmi_read(target, &value_h, DM_DATA1);
@@ -5857,6 +5857,7 @@ ndsv5_get_csr_reg_quick_access_retry:
 	uint64_t reg_value = value_h;
 	reg_value = (reg_value << 32) | value;
 	*preg_value = reg_value;
+	LOG_DEBUG("reg_num: 0x%x, value: 0x%lx", reg_num, *preg_value);
 	return ERROR_OK;
 }
 

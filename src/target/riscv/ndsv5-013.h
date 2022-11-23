@@ -149,7 +149,7 @@ int read_memory_bus_v1_opt(struct target *target, target_addr_t address,
 	uint32_t size, uint32_t count, uint8_t *buffer);
 int write_memory_bus_v1_opt(struct target *target, target_addr_t address,
 	uint32_t size, uint32_t count, const uint8_t *buffer);
-extern uint32_t nds_no_crst_detect;
+extern uint32_t nds_no_reset_detect;
 
 
 

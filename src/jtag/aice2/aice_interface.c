@@ -55,7 +55,7 @@ static int aice_khz_to_speed_map[AICE_KHZ_TO_SPEED_MAP_SIZE] = {
 };
 
 static struct aice_port_param_s param;
-uint32_t aice_no_crst_detect;
+uint32_t aice_no_reset_detect;
 uint32_t aice_no_force_V3_EDM;
 static uint32_t aice_num_of_nds32_core;
 static uint32_t aice_num_of_id_codes_on_chain;
@@ -595,14 +595,14 @@ COMMAND_HANDLER(aice_handle_aice_count_to_check_dbger_command)
 	return ERROR_OK;
 }
 
-COMMAND_HANDLER(aice_handle_aice_no_crst_detect_command)
+COMMAND_HANDLER(aice_handle_aice_no_reset_detect_command)
 {
-	LOG_DEBUG("aice_handle_aice_no_crst_detect_command");
+	LOG_DEBUG("aice_handle_aice_no_reset_detect_command");
 
 	if (CMD_ARGC == 1)
-		COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], aice_no_crst_detect);
+		COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], aice_no_reset_detect);
 	else
-		LOG_ERROR("expected exactly one argument to aice no_crst_detect");
+		LOG_ERROR("expected exactly one argument to aice no_reset_detect");
 
 	return ERROR_OK;
 }
@@ -628,7 +628,7 @@ COMMAND_HANDLER(aice_handle_aice_dis_deh_sel_command)
 		COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], if_disable);
 		aice_set_dis_DEH_SEL(if_disable);
 	} else
-		LOG_ERROR("expected exactly one argument to aice no_crst_detect");
+		LOG_ERROR("expected exactly one argument to aice dis_deh_sel");
 
 	return ERROR_OK;
 }
@@ -911,11 +911,11 @@ static const struct command_registration aice_subcommand_handlers[] = {
 		.usage = "aice count_to_check_dbger count_of_checking",
 	},
 	{
-		.name = "no_crst_detect",
-		.handler = &aice_handle_aice_no_crst_detect_command,
+		.name = "no_reset_detect",
+		.handler = &aice_handle_aice_no_reset_detect_command,
 		.mode = COMMAND_ANY,
-		.help = "No CRST detection in debug session",
-		.usage = "aice no_crst_detect 0",
+		.help = "No reset detection in debug session",
+		.usage = "aice no_reset_detect 0",
 	},
 	{
 		.name = "force_edm_v3",
