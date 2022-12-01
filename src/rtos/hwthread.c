@@ -441,7 +441,11 @@ static int hwthread_thread_packet(struct connection *connection, const char *pac
 			}
 			target->rtos->current_thread = current_threadid;
 		} else
+#if _NDS_V5_ONLY_
+		if (current_threadid == -1)
+#else
 		if (current_threadid == 0 || current_threadid == -1)
+#endif
 			target->rtos->current_thread = threadid_from_target(target);
 
 		target->rtos->current_threadid = current_threadid;

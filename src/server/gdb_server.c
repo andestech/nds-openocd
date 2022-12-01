@@ -4706,6 +4706,11 @@ static void gdb_keep_client_alive(struct connection *connection)
 {
 	struct gdb_connection *gdb_con = connection->priv;
 
+#if _NDS_V5_ONLY_
+	if (!gdb_con)
+		return;
+#endif
+
 	if (gdb_con->busy) {
 		/* do not send packets, retry asap */
 		return;

@@ -27,7 +27,7 @@ struct riscv_batch *riscv_batch_alloc(struct target *target, size_t scans, size_
 #if _NDS_V5_ONLY_
 	/* _NDS_RW_MEMORY_64BITS_ */
 	scans += 2;
-	LOG_DEBUG("idle = %lu", idle);
+	//LOG_DEBUG("idle = %lu", idle);
 #endif
 	struct riscv_batch *out = calloc(1, sizeof(*out));
 	if (!out)
