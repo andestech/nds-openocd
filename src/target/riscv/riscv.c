@@ -1945,6 +1945,9 @@ static int riscv_read_memory(struct target *target, target_addr_t address,
 					if (retval == ERROR_OK)
 						physical_address = physical_address + LM_BASE;
 				}
+			} else {
+				LOG_ERROR("Unsupport BUS mode");
+				return ERROR_FAIL;
 			}
 		}
 	}
@@ -2052,6 +2055,9 @@ static int riscv_write_memory(struct target *target, target_addr_t address,
 					if (retval == ERROR_OK)
 						physical_address = physical_address + LM_BASE;
 				}
+			} else {
+				LOG_ERROR("Unsupport BUS mode");
+				return ERROR_FAIL;
 			}
 		}
 	}

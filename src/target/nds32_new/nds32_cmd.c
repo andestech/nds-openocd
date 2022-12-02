@@ -2445,14 +2445,14 @@ const struct command_registration nds32_exec_command_handlers[] = {
 		.name = "icache",
 		.handler = handle_nds32_icache_command,
 		.mode = COMMAND_EXEC,
-		.usage = "['invalidate'|'enable'|'disable'|'dump']",
+		.usage = "['invalidate'|'dump']",
 		.help = "icache control",
 	},
 	{
 		.name = "dcache",
 		.handler = handle_nds32_dcache_command,
 		.mode = COMMAND_EXEC,
-		.usage = "['invalidate'|'enable'|'disable'|'dump']",
+		.usage = "['invalidate'|'dump']",
 		.help = "dcache control",
 	},
 	{

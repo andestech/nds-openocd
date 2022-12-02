@@ -1938,7 +1938,7 @@ static int examine(struct target *target)
 		return ERROR_FAIL;
 
 #if _NDS_V5_ONLY_
-	ndsv5_dis_cache_busmode = 1;
+	ndsv5_dis_cache_busmode = 0;
 	if (info->sbcs & 0x1F) {
 		int sb_version = get_field(info->sbcs, DM_SBCS_SBVERSION);
 		if ((sb_version == 0) || (sb_version == 1)) {

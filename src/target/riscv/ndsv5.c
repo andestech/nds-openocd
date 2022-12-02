@@ -38,7 +38,7 @@ extern uint32_t nds_is_rvv_0_8;
 /* ndsv5.c global Var. */
 /********************************************************************/
 uint64_t LM_BASE = 0xa0000000;
-uint32_t ndsv5_dis_cache_busmode = 1;
+uint32_t ndsv5_dis_cache_busmode;
 uint32_t ndsv5_dmi_busy_retry_times = 100;
 uint64_t MSTATUS_VS = 0x01800000;
 uint64_t L2C_BASE = (uint64_t)-1;
