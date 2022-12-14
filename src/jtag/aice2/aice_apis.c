@@ -1563,6 +1563,8 @@ int aice_step(struct target *target)
 	if ((ir0_value & 0x800) == 0)
 	      ir0_value |= (0x01 << 11);
 	*/
+	ir0_value |= (0x01 << 11);
+
 	if (aice_usb_pack_command == 2) {
 		/* without DBGER.DPED checking */
 		aice_set_command_mode(AICE_COMMAND_MODE_NORMAL);
