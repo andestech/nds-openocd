@@ -1156,8 +1156,11 @@ static void gdb_frontend_halted(struct target *target, struct connection *connec
 
 #if _NDS32_ONLY_
 		if ((target->debug_reason == DBG_REASON_TRACE_BUFFULL) ||
-		    (target->debug_reason == DBG_REASON_HIT_EXCEPTIONS)) {
+		    (target->debug_reason == DBG_REASON_HIT_EXCEPTIONS) ||
+		    (target->debug_reason == DBG_REASON_HIT_MONITOR_WATCH)) {
+			gdb_connection->output_flag = GDB_OUTPUT_ALL;
 			gdb_signal_reply(target, connection);
+			gdb_connection->output_flag = GDB_OUTPUT_NO;
 			return;
 		}
 #endif /* _NDS32_ONLY_ */
