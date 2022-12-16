@@ -450,9 +450,22 @@ static int hwthread_thread_packet(struct connection *connection, const char *pac
 
 		target->rtos->current_threadid = current_threadid;
 
+#if _NDS_V5_ONLY_
+		LOG_DEBUG("target->rtos->current_threadid: %ld", target->rtos->current_threadid);
+#endif
+
 		gdb_put_packet(connection, "OK", 2);
 		return ERROR_OK;
 	}
+
+#if _NDS_V5_ONLY_
+	if (packet[0] == 'T') {
+		threadid_t threadid;
+		sscanf(packet, "T%" SCNx64, &threadid);
+		target->rtos->current_threadid = threadid;
+		LOG_DEBUG("target->rtos->current_threadid: %ld", target->rtos->current_threadid);
+	}
+#endif
 
 	return rtos_thread_packet(connection, packet, packet_size);
 }
