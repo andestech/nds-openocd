@@ -4952,9 +4952,15 @@ static int riscv013_halt_go(struct target *target)
 			return ERROR_FAIL;
 
 #if _NDS_V5_ONLY_
-		NDS32_LOG("Unable to halt [%s] hart %d", target->tap->dotted_name, r->current_hartid);
-		NDS32_LOG("  dmcontrol=0x%08x", dmcontrol);
-		NDS32_LOG("  dmstatus =0x%08x", dmstatus);
+		if (nds_no_halt_detect) {
+			LOG_INFO("Unable to halt [%s] hart %d", target->tap->dotted_name, r->current_hartid);
+			LOG_INFO("  dmcontrol=0x%08x", dmcontrol);
+			LOG_INFO("  dmstatus =0x%08x", dmstatus);
+		} else {
+			NDS32_LOG("<-- Unable to halt [%s] hart %d -->", target->tap->dotted_name, r->current_hartid);
+			NDS32_LOG("  dmcontrol=0x%08x", dmcontrol);
+			NDS32_LOG("  dmstatus =0x%08x", dmstatus);
+		}
 
 		if (target->smp) {
 			target->hart_unavailable = 0xff;

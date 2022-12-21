@@ -34,6 +34,7 @@
 
 /* for v5 command functions */
 extern uint32_t nds_no_reset_detect;
+extern uint32_t nds_no_halt_detect;
 extern bool is_ndsv5(struct target *target);
 extern int ndsv5cmd_set_va_to_pa_off(struct target *target, uint32_t va_to_pa_off);
 extern int ndsv5cmd_set_boot_time(struct target *target, uint32_t boot_time);
@@ -2150,6 +2151,18 @@ COMMAND_HANDLER(handle_nds32_no_reset_detect_command)
 	return ERROR_OK;
 }
 
+extern uint32_t aice_no_halt_detect;
+COMMAND_HANDLER(handle_nds32_no_halt_detect_command)
+{
+	LOG_DEBUG("%s", __func__);
+	if (CMD_ARGC == 1)
+		COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], aice_no_halt_detect);
+	else
+		LOG_ERROR("expected exactly one argument to aice no_halt_detect");
+	nds_no_reset_detect = aice_no_halt_detect;
+	return ERROR_OK;
+}
+
 COMMAND_HANDLER(handle_nds32_dis_deh_sel_command)
 {
 	LOG_DEBUG("%s", __func__);
@@ -2815,6 +2828,13 @@ const struct command_registration nds32_exec_command_handlers[] = {
 		.mode = COMMAND_ANY,
 		.help = "No reset detection in debug session",
 		.usage = "no_reset_detect 0",
+	},
+	{
+		.name = "no_halt_detect",
+		.handler = handle_nds32_no_halt_detect_command,
+		.mode = COMMAND_ANY,
+		.help = "No halt detection in debug session",
+		.usage = "no_halt_detect 0",
 	},
 	{
 		.name = "dis_deh_sel",

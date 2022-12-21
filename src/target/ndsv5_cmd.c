@@ -72,6 +72,7 @@ uint32_t nds_dis_condition_break;
 uint32_t nds_dmi_access_mem;
 uint32_t ndsv5_cur_target_xlen = 32;
 uint32_t nds_no_reset_detect;
+uint32_t nds_no_halt_detect;
 uint32_t nds_ftdi_devices;
 uint32_t nds_halt_on_reset = 1;
 int nds_targetburn_targetnum;
