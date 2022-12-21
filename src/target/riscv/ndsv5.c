@@ -1587,9 +1587,13 @@ int ndsv5_dump_cache_va(struct target *target, unsigned int cache_type, uint64_t
 static int ndsv5_l2c_status_idle(struct target *target)
 {
 	uint64_t l2c_status;
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	struct nds32_v5_memory *memory = &(nds32->memory);
+	uint32_t bak_access_channel = (uint32_t)memory->access_channel;
+	memory->access_channel = NDS_MEMORY_ACC_CPU;
 
 	while (1) {
-		if (target_read_memory(target, L2C_STATUS, 8, 1, (uint8_t *)&l2c_status) != ERROR_OK) {
+		if (target_read_phys_memory(target, L2C_STATUS, 8, 1, (uint8_t *)&l2c_status) != ERROR_OK) {
 			LOG_ERROR("Unable to read L2C STATUS");
 			return ERROR_FAIL;
 		}
@@ -1599,6 +1603,7 @@ static int ndsv5_l2c_status_idle(struct target *target)
 
 		switch (status0) {
 			case 0x0: /* Idle */
+				memory->access_channel = bak_access_channel;
 				return ERROR_OK;
 
 			case 0x1: /* still running */
@@ -1606,9 +1611,11 @@ static int ndsv5_l2c_status_idle(struct target *target)
 				continue;
 
 			case 0x2: /* illegal CCTL operation */
+				memory->access_channel = bak_access_channel;
 				LOG_ERROR("Illegal CCTL operation");
 				return ERROR_FAIL;
 			default:
+				memory->access_channel = bak_access_channel;
 				LOG_ERROR("Illegal Status");
 				return ERROR_FAIL;
 		};
@@ -1617,9 +1624,14 @@ static int ndsv5_l2c_status_idle(struct target *target)
 
 static int ndsv5_l2c_get_reg(struct target *target, uint64_t addr, uint64_t *data, uint64_t size)
 {
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	struct nds32_v5_memory *memory = &(nds32->memory);
+	uint32_t bak_access_channel = (uint32_t)memory->access_channel;
+	memory->access_channel = NDS_MEMORY_ACC_CPU;
+
 	ndsv5_l2c_status_idle(target);
 
-	if (target_read_memory(target, addr, size, 1, (uint8_t *)data) != ERROR_OK) {
+	if (target_read_phys_memory(target, addr, size, 1, (uint8_t *)data) != ERROR_OK) {
 		LOG_ERROR("Unable to read L2C reg 0x%lx", addr);
 		return ERROR_FAIL;
 	}
@@ -1629,21 +1641,28 @@ static int ndsv5_l2c_get_reg(struct target *target, uint64_t addr, uint64_t *dat
 		*data =  *data & 0xffffffff;
 	LOG_DEBUG("L2C get reg 0x%lx data 0x%lx", addr, *data);
 
+	memory->access_channel = bak_access_channel;
 	return ERROR_OK;
 }
 
 static int ndsv5_l2c_set_reg(struct target *target, uint64_t addr, uint64_t data)
 {
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	struct nds32_v5_memory *memory = &(nds32->memory);
+	uint32_t bak_access_channel = (uint32_t)memory->access_channel;
+	memory->access_channel = NDS_MEMORY_ACC_CPU;
+
 	LOG_DEBUG("L2C set reg: 0x%lx, data: 0x%lx", addr, data);
 
 	/* Get & Check version */
 	ndsv5_l2c_status_idle(target);
-	if (target_write_memory(target, addr, 8, 1, (uint8_t *)&data) != ERROR_OK) {
+	if (target_write_phys_memory(target, addr, 8, 1, (uint8_t *)&data) != ERROR_OK) {
 		LOG_ERROR("Unable to write L2C reg 0x%lx", addr);
 		return ERROR_FAIL;
 	}
 
 	/* Wait command complete */
+	memory->access_channel = bak_access_channel;
 	return ndsv5_l2c_status_idle(target);
 }
 
