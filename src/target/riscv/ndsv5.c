@@ -1872,24 +1872,24 @@ int ndsv5_dump_l2cache_va(struct target *target, uint64_t va)
 
 		if (new_tagformat) {
 			int mesi = tag & 0x7;
-			ce[idx][way].inval = 0;
-			ce[idx][way].shared = 0;
-			ce[idx][way].exclusive = 0;
-			ce[idx][way].modified = 0;
+			ces[way].inval = 0;
+			ces[way].shared = 0;
+			ces[way].exclusive = 0;
+			ces[way].modified = 0;
 
 			switch (mesi) {
 				case 0:
-					ce[idx][way].inval = 1;
+					ces[way].inval = 1;
 					break;
 				case 1:
-					ce[idx][way].shared = 1;
+					ces[way].shared = 1;
 					break;
 				case 3:
-					ce[idx][way].exclusive = 1;
+					ces[way].exclusive = 1;
 					break;
 				case 6:
 				case 7:
-					ce[idx][way].modified = 1;
+					ces[way].modified = 1;
 					break;
 				default:
 					LOG_ERROR("Reserved MESI: 0x%x", mesi);
@@ -1951,17 +1951,15 @@ int ndsv5_dump_l2cache_va(struct target *target, uint64_t va)
 		NDS32_LOG_LF(fmt_str, (i * word_size));
 	NDS32_LOG_LF("\n");
 	for (way = 0; way < ways; way++) {
-
-
 		if (new_tagformat) {
 			NDS32_LOG_LF(fmt_str3,
-					ce[0][way].pa | idx,
+					ces[way].pa | idx,
 					idx >> line_bits,
 					way,
-					ce[0][way].inval,
-					ce[0][way].shared,
-					ce[0][way].exclusive,
-					ce[0][way].modified);
+					ces[way].inval,
+					ces[way].shared,
+					ces[way].exclusive,
+					ces[way].modified);
 		} else
 			NDS32_LOG_LF(fmt_str3, ces[way].pa, idx, way, ces[way].valid, ces[way].dirty);
 
@@ -1981,13 +1979,13 @@ int ndsv5_dump_l2cache_va(struct target *target, uint64_t va)
 	for (way = 0; way < ways; way++) {
 		if (new_tagformat) {
 			LOG_INFO(fmt_str3,
-					ce[0][way].pa | idx,
+					ces[way].pa | idx,
 					idx >> line_bits,
 					way,
-					ce[0][way].inval,
-					ce[0][way].shared,
-					ce[0][way].exclusive,
-					ce[0][way].modified);
+					ces[way].inval,
+					ces[way].shared,
+					ces[way].exclusive,
+					ces[way].modified);
 		} else
 			LOG_INFO(fmt_str3, ces[way].pa, idx, way, ces[way].valid, ces[way].dirty);
 
