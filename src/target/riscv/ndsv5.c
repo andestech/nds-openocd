@@ -1591,9 +1591,11 @@ static int ndsv5_l2c_status_idle(struct target *target)
 	struct nds32_v5_memory *memory = &(nds32->memory);
 	uint32_t bak_access_channel = (uint32_t)memory->access_channel;
 	memory->access_channel = NDS_MEMORY_ACC_CPU;
+	uint32_t bak_nds_va_to_pa_off = nds32->nds_va_to_pa_off;
+	nds32->nds_va_to_pa_off = 1;
 
 	while (1) {
-		if (target_read_phys_memory(target, L2C_STATUS, 8, 1, (uint8_t *)&l2c_status) != ERROR_OK) {
+		if (target_read_memory(target, L2C_STATUS, 8, 1, (uint8_t *)&l2c_status) != ERROR_OK) {
 			LOG_ERROR("Unable to read L2C STATUS");
 			return ERROR_FAIL;
 		}
@@ -1604,6 +1606,7 @@ static int ndsv5_l2c_status_idle(struct target *target)
 		switch (status0) {
 			case 0x0: /* Idle */
 				memory->access_channel = bak_access_channel;
+				nds32->nds_va_to_pa_off = bak_nds_va_to_pa_off;
 				return ERROR_OK;
 
 			case 0x1: /* still running */
@@ -1612,10 +1615,12 @@ static int ndsv5_l2c_status_idle(struct target *target)
 
 			case 0x2: /* illegal CCTL operation */
 				memory->access_channel = bak_access_channel;
+				nds32->nds_va_to_pa_off = bak_nds_va_to_pa_off;
 				LOG_ERROR("Illegal CCTL operation");
 				return ERROR_FAIL;
 			default:
 				memory->access_channel = bak_access_channel;
+				nds32->nds_va_to_pa_off = bak_nds_va_to_pa_off;
 				LOG_ERROR("Illegal Status");
 				return ERROR_FAIL;
 		};
@@ -1628,10 +1633,12 @@ static int ndsv5_l2c_get_reg(struct target *target, uint64_t addr, uint64_t *dat
 	struct nds32_v5_memory *memory = &(nds32->memory);
 	uint32_t bak_access_channel = (uint32_t)memory->access_channel;
 	memory->access_channel = NDS_MEMORY_ACC_CPU;
+	uint32_t bak_nds_va_to_pa_off = nds32->nds_va_to_pa_off;
+	nds32->nds_va_to_pa_off = 1;
 
 	ndsv5_l2c_status_idle(target);
 
-	if (target_read_phys_memory(target, addr, size, 1, (uint8_t *)data) != ERROR_OK) {
+	if (target_read_memory(target, addr, size, 1, (uint8_t *)data) != ERROR_OK) {
 		LOG_ERROR("Unable to read L2C reg 0x%lx", addr);
 		return ERROR_FAIL;
 	}
@@ -1642,6 +1649,7 @@ static int ndsv5_l2c_get_reg(struct target *target, uint64_t addr, uint64_t *dat
 	LOG_DEBUG("L2C get reg 0x%lx data 0x%lx", addr, *data);
 
 	memory->access_channel = bak_access_channel;
+	nds32->nds_va_to_pa_off = bak_nds_va_to_pa_off;
 	return ERROR_OK;
 }
 
@@ -1651,18 +1659,21 @@ static int ndsv5_l2c_set_reg(struct target *target, uint64_t addr, uint64_t data
 	struct nds32_v5_memory *memory = &(nds32->memory);
 	uint32_t bak_access_channel = (uint32_t)memory->access_channel;
 	memory->access_channel = NDS_MEMORY_ACC_CPU;
+	uint32_t bak_nds_va_to_pa_off = nds32->nds_va_to_pa_off;
+	nds32->nds_va_to_pa_off = 1;
 
 	LOG_DEBUG("L2C set reg: 0x%lx, data: 0x%lx", addr, data);
 
 	/* Get & Check version */
 	ndsv5_l2c_status_idle(target);
-	if (target_write_phys_memory(target, addr, 8, 1, (uint8_t *)&data) != ERROR_OK) {
+	if (target_write_memory(target, addr, 8, 1, (uint8_t *)&data) != ERROR_OK) {
 		LOG_ERROR("Unable to write L2C reg 0x%lx", addr);
 		return ERROR_FAIL;
 	}
 
 	/* Wait command complete */
 	memory->access_channel = bak_access_channel;
+	nds32->nds_va_to_pa_off = bak_nds_va_to_pa_off;
 	return ndsv5_l2c_status_idle(target);
 }
 
@@ -1781,6 +1792,7 @@ int ndsv5_dump_l2cache_va(struct target *target, uint64_t va)
 	uint64_t xlen, shift_bit, tag_dw;
 	static uint64_t palen = (uint64_t)-1;
 	static uint64_t l2c_config = (uint64_t)-1;
+	bool new_tagformat = false;
 
 	if (l2c_config == (uint64_t)-1) {
 		if (ndsv5_check_l2cache_exist(target, &l2c_config) != ERROR_OK)
@@ -1826,6 +1838,14 @@ int ndsv5_dump_l2cache_va(struct target *target, uint64_t va)
 	LOG_DEBUG("Way:%lu, Set:%lu, Line Size:%lu, idx:%lu", ways, sets, line_size, idx);
 	shift_bit = set_bits + line_bits;
 
+
+	/* Identy new format */
+	struct reg *reg_marchid = ndsv5_get_reg_by_CSR(target, CSR_MARCHID);
+	uint64_t reg_marchid_value = ndsv5_get_register_value(reg_marchid);
+	if ((reg_marchid_value & 0xff) == 0x45)
+		new_tagformat = true;
+
+
 	/* Index Example Format for CCTL Index Type Operation for 64bit icache
 	 * same with 32bit i/dcache(from Roger email) */
 	xlen = riscv_xlen(target);
@@ -1848,9 +1868,38 @@ int ndsv5_dump_l2cache_va(struct target *target, uint64_t va)
 		/* Read TAG */
 		ndsv5_l2c_get_reg(target, L2C_TGT_DATA_0, &tag, 8);
 
-		ces[way].valid = (uint8_t)((tag >> tag_dw) & 0x1);
-		ces[way].dirty = (uint8_t)((tag >> (tag_dw+1)) & 0x1);
-		ces[way].pa = ((tag & maskTAG) << shift_bit) | (idx << line_bits);
+		LOG_DEBUG("\t[%ld] TGT_TAG: 0x%lx", way, tag);
+
+		if (new_tagformat) {
+			int mesi = tag & 0x7;
+			ce[idx][way].inval = 0;
+			ce[idx][way].shared = 0;
+			ce[idx][way].exclusive = 0;
+			ce[idx][way].modified = 0;
+
+			switch (mesi) {
+				case 0:
+					ce[idx][way].inval = 1;
+					break;
+				case 1:
+					ce[idx][way].shared = 1;
+					break;
+				case 3:
+					ce[idx][way].exclusive = 1;
+					break;
+				case 6:
+				case 7:
+					ce[idx][way].modified = 1;
+					break;
+				default:
+					LOG_ERROR("Reserved MESI: 0x%x", mesi);
+					break;
+			}
+		} else {
+			ces[way].valid = (uint8_t)((tag >> tag_dw) & 0x1);
+			ces[way].dirty = (uint8_t)((tag >> (tag_dw+1)) & 0x1);
+			ces[way].pa = ((tag & maskTAG) << shift_bit) | (idx << line_bits);
+		}
 
 		/* Read cache line */
 		ra = set_field(ra, L2C_CCTL_ACC_TGT_RAMID, 1);
@@ -1868,7 +1917,7 @@ int ndsv5_dump_l2cache_va(struct target *target, uint64_t va)
 					(L2C_TGT_DATA_0 + i * word_size),
 					&ces[way].cacheline[i], word_size);
 
-			LOG_DEBUG("\tTGT_DATA: 0x%lx", ces[way].cacheline[i]);
+			LOG_DEBUG("\t[%ld][%ld] TGT_DATA: 0x%lx", way, i, ces[way].cacheline[i]);
 		}
 	}
 
@@ -1883,13 +1932,38 @@ int ndsv5_dump_l2cache_va(struct target *target, uint64_t va)
 		fmt_str3 = "%016llx %04llx %04llx %01x %01x ";
 	}
 
+	if (new_tagformat) {
+		fmt_str2 = "%8s %4s %4s %1s %1s %1s %1s";
+		fmt_str3 = "%08llx %04llx %04llx %01x %01x %01x %01x ";
+		if (xlen == 64) {
+			fmt_str2 = "%16s %4s %4s %1s %1s %1s %1s";
+			fmt_str3 = "%016llx %04llx %04llx %01x %01x %01x %01x ";
+		}
+	}
+
 	NDS32_LOG_LF("Dump L2\n");
-	NDS32_LOG_LF(fmt_str2, "ADDRESS", "SET", "WAY", "V", "D");
+	if (new_tagformat)
+		NDS32_LOG_LF(fmt_str2, "ADDRESS", "SET", "WAY", "I", "S", "E", "M");
+	else
+		NDS32_LOG_LF(fmt_str2, "ADDRESS", "SET", "WAY", "V", "D");
+
 	for (i = 0; i < word_num; i++)
 		NDS32_LOG_LF(fmt_str, (i * word_size));
 	NDS32_LOG_LF("\n");
 	for (way = 0; way < ways; way++) {
-		NDS32_LOG_LF(fmt_str3, ces[way].pa, idx, way, ces[way].valid, ces[way].dirty);
+
+
+		if (new_tagformat) {
+			NDS32_LOG_LF(fmt_str3,
+					ce[0][way].pa | idx,
+					idx >> line_bits,
+					way,
+					ce[0][way].inval,
+					ce[0][way].shared,
+					ce[0][way].exclusive,
+					ce[0][way].modified);
+		} else
+			NDS32_LOG_LF(fmt_str3, ces[way].pa, idx, way, ces[way].valid, ces[way].dirty);
 
 		for (i = 0; i < word_num; i++)
 			NDS32_LOG_LF(fmt_str1, ces[way].cacheline[i]);
@@ -1897,12 +1971,25 @@ int ndsv5_dump_l2cache_va(struct target *target, uint64_t va)
 	}
 
 	LOG_INFO("Dump L2\n");
-	LOG_INFO(fmt_str2, "ADDRESS", "SET", "WAY", "V", "D");
+	if (new_tagformat)
+		LOG_INFO(fmt_str2, "ADDRESS", "SET", "WAY", "I", "S", "E", "M");
+	else
+		LOG_INFO(fmt_str2, "ADDRESS", "SET", "WAY", "V", "D");
 	for (i = 0; i < word_num; i++)
 		LOG_INFO(fmt_str, (i * word_size));
 	LOG_INFO("\n");
 	for (way = 0; way < ways; way++) {
-		LOG_INFO(fmt_str3, ces[way].pa, idx, way, ces[way].valid, ces[way].dirty);
+		if (new_tagformat) {
+			LOG_INFO(fmt_str3,
+					ce[0][way].pa | idx,
+					idx >> line_bits,
+					way,
+					ce[0][way].inval,
+					ce[0][way].shared,
+					ce[0][way].exclusive,
+					ce[0][way].modified);
+		} else
+			LOG_INFO(fmt_str3, ces[way].pa, idx, way, ces[way].valid, ces[way].dirty);
 
 		for (i = 0; i < word_num; i++)
 			LOG_INFO(fmt_str1, ces[way].cacheline[i]);
