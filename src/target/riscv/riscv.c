@@ -1909,10 +1909,22 @@ static int riscv_read_memory(struct target *target, target_addr_t address,
 	struct nds32_v5_memory *memory = &(nds32->memory);
 	int retval = ERROR_OK;
 	uint64_t reg_mcache_ctl_value = 0;
-
 	target_addr_t physical_address = address;
-	if (ndsv5_virtual_to_physical(target, address, &physical_address) != ERROR_OK)
-		return ERROR_FAIL;
+	int dmi_quick_access = 0;
+
+	if (nds_dmi_quick_access && (!riscv_is_halted(target)) && (memory->access_channel == NDS_MEMORY_ACC_CPU)) {
+		riscv_halt(target);
+		dmi_quick_access = 1;
+
+		retval = ndsv5_virtual_to_physical(target, address, &physical_address);
+		if (retval != ERROR_OK) {
+			riscv_resume(target, 1, 0, 0, 0, false);
+			return ERROR_FAIL;
+		}
+	} else {
+		if (ndsv5_virtual_to_physical(target, address, &physical_address) != ERROR_OK)
+			return ERROR_FAIL;
+	}
 
 	/* ilm and dlm exist and mmsc_cfg.LMSLVP == 1, when bus mode access address need add LM_BASE */
 	if (memory->access_channel == NDS_MEMORY_ACC_BUS) {
@@ -1983,6 +1995,10 @@ static int riscv_read_memory(struct target *target, target_addr_t address,
 		}
 	}
 
+	if (dmi_quick_access) {
+		riscv_resume(target, 1, 0, 0, 0, false);
+	}
+
 	return retval;
 #endif /* _NDS_V5_ONLY_ */
 
@@ -2019,10 +2035,22 @@ static int riscv_write_memory(struct target *target, target_addr_t address,
 	struct nds32_v5_memory *memory = &(nds32->memory);
 	int retval = ERROR_OK;
 	uint64_t reg_mcache_ctl_value = 0;
-
 	target_addr_t physical_address = address;
-	if (ndsv5_virtual_to_physical(target, address, &physical_address) != ERROR_OK)
-		return ERROR_FAIL;
+	int dmi_quick_access = 0;
+
+	if (nds_dmi_quick_access && (!riscv_is_halted(target)) && (memory->access_channel == NDS_MEMORY_ACC_CPU)) {
+		riscv_halt(target);
+		dmi_quick_access = 1;
+
+		retval = ndsv5_virtual_to_physical(target, address, &physical_address);
+		if (retval != ERROR_OK) {
+			riscv_resume(target, 1, 0, 0, 0, false);
+			return ERROR_FAIL;
+		}
+	} else {
+		if (ndsv5_virtual_to_physical(target, address, &physical_address) != ERROR_OK)
+			return ERROR_FAIL;
+	}
 
 	/* ilm and dlm exist and mmsc_cfg.LMSLVP == 1, when bus mode access address need add LM_BASE */
 	if (memory->access_channel == NDS_MEMORY_ACC_BUS) {
@@ -2092,6 +2120,11 @@ static int riscv_write_memory(struct target *target, target_addr_t address,
 			bus_mode_off(target, reg_mcache_ctl_value);
 		}
 	}
+
+	if (dmi_quick_access) {
+		riscv_resume(target, 1, 0, 0, 0, false);
+	}
+
 	return retval;
 #endif /* _NDS_V5_ONLY_ */
 
