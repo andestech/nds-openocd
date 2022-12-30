@@ -699,6 +699,21 @@ static int add_trigger(struct target *target, struct trigger *trigger)
 			/* redefine: trigger->address */
 			modify_trigger_address_mbit_match(target, trigger);
 		}
+
+		/* Check for disabled trigger */
+		if (type == 15) {
+			/* Resetting current trigger to mcontrol */
+			riscv_set_register(target, GDB_REGNO_TDATA1,
+					set_field(0, MCONTROL_TYPE(riscv_xlen(target)), 2));
+
+			/* Check trigger again */
+			riscv_get_register(target, &tdata1, GDB_REGNO_TDATA1);
+			if (get_field(tdata1, CSR_TDATA1_TYPE(riscv_xlen(target))) != 0x2)
+				LOG_ERROR("Unable to reset %d trigger to mcontrol", i);					
+
+			type = get_field(tdata1, CSR_TDATA1_TYPE(riscv_xlen(target)));
+		}
+
 #endif
 
 		switch (type) {
