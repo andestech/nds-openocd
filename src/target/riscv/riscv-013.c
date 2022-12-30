@@ -32,12 +32,19 @@
 uint32_t nds_is_rvv_0_8;
 
 #if _NDS_V5_ONLY_
+
 #include "ndsv5.h"
 #include "ndsv5-013.h"
 #include "target/nds32_new/nds32_log.h"
 #include <target/smp.h>
 #define DIM(x)          (sizeof(x)/sizeof(*x))
 static void write_to_buf(uint8_t *buffer, uint64_t value, unsigned size);
+
+static const char *const NDS_MEMORY_ACCESS_NAME[] = {
+	"BUS",
+	"CPU",
+};
+
 #endif
 
 static int riscv013_on_step_or_resume(struct target *target, bool step);
@@ -4100,6 +4107,8 @@ static int read_memory(struct target *target, target_addr_t address,
 	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
 	struct nds32_v5_memory *memory = &(nds32->memory);
 
+	memset(buffer, 0, sizeof(uint8_t)*count*size);
+
 	if (nds32->nds_const_addr_mode)
 		increment = 0;
 
@@ -4116,15 +4125,21 @@ static int read_memory(struct target *target, target_addr_t address,
 			if(ret == ERROR_OK)
 				goto read_memory_finish;
 		}
-	} else if (nds_sys_bus_supported) {
+	} else {
+		if (nds_sys_bus_supported) {
 			/* BUS mode */
 			if (get_field(info->sbcs, DM_SBCS_SBVERSION) == 0)
 				ret = read_memory_bus_v0(target, address, size, count, buffer, increment);
 			else if (get_field(info->sbcs, DM_SBCS_SBVERSION) == 1)
 				ret = read_memory_bus_v1(target, address, size, count, buffer, increment);
 
-		if(ret == ERROR_OK)
-			goto read_memory_finish;
+			if(ret == ERROR_OK)
+				goto read_memory_finish;
+		} else {
+			LOG_ERROR("memory access channel: %s, but sysbusaccess:%d", 
+					NDS_MEMORY_ACCESS_NAME[memory->access_channel], nds_sys_bus_supported);
+			return ERROR_FAIL;
+		}
 	}
 
 	/* Force using CPU mode again */
@@ -4614,7 +4629,7 @@ static int write_memory(struct target *target, target_addr_t address,
 #if _NDS_V5_ONLY_
 	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
 	struct nds32_v5_memory *memory = &(nds32->memory);
-
+	
 	uint32_t *p_word_data = (uint32_t *)buffer;
 	NDS_INFO("writing %d words of %d bytes to 0x%08lx = 0x%08x", count, size, (long)address, *p_word_data);
 
@@ -4631,15 +4646,21 @@ static int write_memory(struct target *target, target_addr_t address,
 			if (ret == ERROR_OK)
 				goto write_memory_finish;
 		}
-	} else if (nds_sys_bus_supported) {
-		/* BUS mode */
-		if (get_field(info->sbcs, DM_SBCS_SBVERSION) == 0)
-			ret = write_memory_bus_v0(target, address, size, count, buffer);
-		else if (get_field(info->sbcs, DM_SBCS_SBVERSION) == 1)
-			ret = write_memory_bus_v1(target, address, size, count, buffer);
+	} else {
+		if (nds_sys_bus_supported) {
+			/* BUS mode */
+			if (get_field(info->sbcs, DM_SBCS_SBVERSION) == 0)
+				ret = write_memory_bus_v0(target, address, size, count, buffer);
+			else if (get_field(info->sbcs, DM_SBCS_SBVERSION) == 1)
+				ret = write_memory_bus_v1(target, address, size, count, buffer);
 
-		if (ret == ERROR_OK)
-			goto write_memory_finish;
+			if (ret == ERROR_OK)
+				goto write_memory_finish;
+		} else {
+			LOG_ERROR("memory access channel: %s, but sysbusaccess:%d", 
+					NDS_MEMORY_ACCESS_NAME[memory->access_channel], nds_sys_bus_supported);
+			return ERROR_FAIL;
+		}
 	}
 
 	/* Froce using CPU mode again */
