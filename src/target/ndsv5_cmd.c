@@ -894,7 +894,14 @@ __COMMAND_HANDLER(handle_ndsv5_memory_access_command)
 	}
 	if (CMD_ARGC > 0) {
 		if (strcmp(CMD_ARGV[0], "bus") == 0) {
-			memory->access_channel = NDS_MEMORY_ACC_BUS;
+			if (nds_sys_bus_supported)
+				memory->access_channel = NDS_MEMORY_ACC_BUS;
+			else {
+				LOG_ERROR("memory access channel: %s, but sysbusaccess:%d",
+						NDS_MEMORY_ACCESS_NAME[memory->access_channel], nds_sys_bus_supported);
+				LOG_INFO("Change back to CPU");
+				memory->access_channel = NDS_MEMORY_ACC_CPU;
+			}
 		} else if (strcmp(CMD_ARGV[0], "cpu") == 0) {
 			memory->access_channel = NDS_MEMORY_ACC_CPU;
 		} else {
