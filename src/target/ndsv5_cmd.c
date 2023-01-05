@@ -264,6 +264,9 @@ __COMMAND_HANDLER(handle_ndsv5_query_capability_command)
 	ndsv5_check_l2cache_exist(target, &tmp);
 
 
+	/* Bug-26232, set disbus to 1 when HW system bus access is not supported */
+	disable_busmode = (system_bus_access)? 0 : 1;
+
 	command_print(CMD, "tracer:%d;"
 			   "profiling:%d;"
 			   "disbus:%d;"
@@ -897,8 +900,7 @@ __COMMAND_HANDLER(handle_ndsv5_memory_access_command)
 			if (nds_sys_bus_supported)
 				memory->access_channel = NDS_MEMORY_ACC_BUS;
 			else {
-				LOG_ERROR("memory access channel: %s, but sysbusaccess:%d",
-						NDS_MEMORY_ACCESS_NAME[memory->access_channel], nds_sys_bus_supported);
+				LOG_ERROR("memory access channel: BUS, but sysbusaccess:%d", nds_sys_bus_supported);
 				LOG_INFO("Change back to CPU");
 				memory->access_channel = NDS_MEMORY_ACC_CPU;
 			}
