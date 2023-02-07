@@ -4198,11 +4198,11 @@ int ndsv5_get_ebreak_length(struct target *target, uint64_t reg_pc_value)
 
 #define NDS32_STRUCT_STAT_SIZE 104	/* 60 */
 #define NDS32_STRUCT_TIMEVAL_SIZE 8
-uint8_t stat_buffer[NDS32_STRUCT_STAT_SIZE];
-uint8_t timeval_buffer[NDS32_STRUCT_TIMEVAL_SIZE];
+static uint8_t stat_buffer[NDS32_STRUCT_STAT_SIZE];
+static uint8_t timeval_buffer[NDS32_STRUCT_TIMEVAL_SIZE];
 
 #define NDS32_STRUCT_TIMEVAL_SIZE_64 16
-uint8_t timeval_buffer_64[NDS32_STRUCT_TIMEVAL_SIZE_64];
+static uint8_t timeval_buffer_64[NDS32_STRUCT_TIMEVAL_SIZE_64];
 int ndsv5_gdb_fileio_write_memory(struct target *target, target_addr_t address,
 		uint32_t *psize, uint8_t **pbuffer)
 {

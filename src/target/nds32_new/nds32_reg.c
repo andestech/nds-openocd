@@ -55,6 +55,7 @@ static unsigned acr_type_count;
 static struct nds32_reg_access_op_s *nds32_reg_access_op;
 /* Access instructions will be at index @number - first_ace_reg_num. */
 static uint32_t first_acr_reg_num;
+struct nds32_reg_s *nds32_regs;
 
 static inline void nds32_reg_access_op_set(uint32_t number, unsigned *read_insn,
 		unsigned *write_insn, unsigned *size_of_read, unsigned *size_of_write)
@@ -114,13 +115,13 @@ static inline void nds32_reg_set(uint32_t number, const char *simple_mnemonic,
 	nds32_regs[number].size = size;
 }
 
-void nds32_reg_init(struct nds32 *nds32)
+void nds32_reg_init(struct nds32 *nds32_p)
 {
 	if (nds32_reg_init_done == true)
 		return;
 
 	/* acr_list will be allocated and setup in nds32_ace_init. */
-	nds32_ace_init(nds32->aceconf, &acr_type_count, &total_acr_reg_nums);
+	nds32_ace_init(nds32_p->aceconf, &acr_type_count, &total_acr_reg_nums);
 	LOG_DEBUG("setup %d acr_type_count and %d acr_reg_count", acr_type_count, total_acr_reg_nums);
 
 	/* acr_list may be NULL if no ACR info. */
@@ -432,7 +433,7 @@ void nds32_reg_init(struct nds32 *nds32)
 
 static void nds32_reg_init_ace_regs(void)
 {
-	extern void *handle;
+	extern void *handle_v3;
 	extern ACR_INFO_T *acr_info_list;
 	uint32_t reg_num;
 
@@ -456,17 +457,17 @@ static void nds32_reg_init_ace_regs(void)
 			LOG_DEBUG("register ACR: %s, number: %d", acr_name, reg_num);
 			char dim_table_name[1024];
 			sprintf(dim_table_name, "read_%s_DIM_insn_table", acr_name);
-			read_insn = (unsigned *)dlsym(handle, dim_table_name);
+			read_insn = (unsigned *)dlsym(handle_v3, dim_table_name);
 			sprintf(dim_table_name, "size_of_read_%s_DIM_insn_table", acr_name);
-			size_of_read_insn = (unsigned *)dlsym(handle, dim_table_name);
+			size_of_read_insn = (unsigned *)dlsym(handle_v3, dim_table_name);
 			if (size_of_read_insn == NULL)
 				LOG_ERROR("unable to load %s", dim_table_name);
 			else
 				LOG_DEBUG("size of read insn %d", *size_of_read_insn);
 			sprintf(dim_table_name, "write_%s_DIM_insn_table", acr_name);
-			write_insn = (uint32_t *)dlsym(handle, dim_table_name);
+			write_insn = (uint32_t *)dlsym(handle_v3, dim_table_name);
 			sprintf(dim_table_name, "size_of_write_%s_DIM_insn_table", acr_name);
-			size_of_write_insn = (uint32_t *)dlsym(handle, dim_table_name);
+			size_of_write_insn = (uint32_t *)dlsym(handle_v3, dim_table_name);
 			nds32_reg_access_op_set(reg_num, read_insn, write_insn, size_of_read_insn, size_of_write_insn);
 			reg_num++;
 		}

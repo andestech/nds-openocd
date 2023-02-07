@@ -24,12 +24,14 @@
 #include <helper/log.h>
 #include <helper/time_support.h>
 #include <target/target.h>
-#include "aice_usb.h"
-#include "aice_apis.h"
+#include <target/target_request.h>
 #include <target/nds32_new/nds32.h>
 #include <target/nds32_new/nds32_disassembler.h>
-#include <target/target_request.h>
 #include <target/nds32_new/nds32_tracer.h>
+#include <target/nds32_new/nds32_reg.h>
+#include "aice_usb.h"
+#include "aice_apis.h"
+
 
 #define DTR_INDEX (0)
 #define DTR_BUF (R0)

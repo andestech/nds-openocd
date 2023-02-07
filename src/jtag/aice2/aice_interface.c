@@ -87,7 +87,7 @@ unsigned int aice_efreq_value;
 
 
 /* AICE operations */
-const char *target_cfg_name_str;
+static const char *target_cfg_name_str;
 #define FILENAME_INPUT     "target/nds32.cfg.tpl"
 /*comment out this line, because modified config files must add ICEman log folder(-f $workspacepath)) */
 /* #define FILENAME_OUTPUT    "target/nds32v3_0.cfg" */

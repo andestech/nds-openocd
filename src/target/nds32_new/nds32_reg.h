@@ -20,6 +20,8 @@
 #ifndef __NDS32_REG_H__
 #define __NDS32_REG_H__
 
+#include "nds32.h"
+
 #define SRIDX(a, b, c)			((a << 7) | (b << 3) | c)
 #define NDS32_REGISTER_DISABLE		(0x0)
 
@@ -350,9 +352,9 @@ struct nds32_reg_access_op_s {
 	unsigned *size_of_write_insn;
 };
 
-struct nds32_reg_s *nds32_regs;
-struct nds32; /* forward declaration */
-void nds32_reg_init(struct nds32 *nds32);
+extern struct nds32_reg_s *nds32_regs;
+
+void nds32_reg_init(struct nds32 *nds32_p);
 uint32_t nds32_reg_sr_index(uint32_t number);
 enum nds32_reg_type_s nds32_reg_type(uint32_t number);
 uint32_t nds32_reg_size(uint32_t number);

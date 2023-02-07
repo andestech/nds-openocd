@@ -85,7 +85,7 @@ static int32_t get_ace_file_name(const char *aceconf, const char *marker, char *
 			return -1;            \
 		}                             \
 	} while (0);
-void *handle;
+void *handle_v3;
 /* dlopen a shared object named 'so_name' */
 /* dlsym certain global variables */
 static int loadSharedLib(const char *so_name)
@@ -95,35 +95,35 @@ static int loadSharedLib(const char *so_name)
 	LOG_DEBUG("loadSharedLib");
 
 	/* dlopen a shared object named 'so_name' */
-	handle = dlopen(so_name, RTLD_NOW | RTLD_LOCAL);
+	handle_v3 = dlopen(so_name, RTLD_NOW | RTLD_LOCAL);
 	LE("unable to dlopen the shared library.")
 
-	assert(handle != NULL);
+	assert(handle_v3 != NULL);
 
-	global_acr_reg_count = (unsigned *)dlsym(handle, "acr_reg_count");
+	global_acr_reg_count = (unsigned *)dlsym(handle_v3, "acr_reg_count");
 	LE("unable to load symbol acr_reg_count")
 
-	global_acr_type_count = (unsigned *)dlsym(handle, "acr_type_count");
+	global_acr_type_count = (unsigned *)dlsym(handle_v3, "acr_type_count");
 	LE("unable to load symbol acr_type_count")
 
-	ace_lib_for_gdb = (const char *)dlsym(handle, "ace_lib_for_gdb");
+	ace_lib_for_gdb = (const char *)dlsym(handle_v3, "ace_lib_for_gdb");
 	LE("unable to load symbol ace_lib_for_gdb")
 
 	/*
-	ace_xml_for_gdb = (const char *)dlsym (handle, "ace_xml_for_gdb");
+	ace_xml_for_gdb = (const char *)dlsym (handle_v3, "ace_xml_for_gdb");
 	LE("unable to load symbol ace_xml_for_gdb");
 	*/
 
-	sym_copilot_version = (const uint32_t *)dlsym(handle, "copilot_version");
+	sym_copilot_version = (const uint32_t *)dlsym(handle_v3, "copilot_version");
 
 	if (*global_acr_type_count != 0)
-		acr_info_list = (ACR_INFO_T *)dlsym(handle, "acr_list");
+		acr_info_list = (ACR_INFO_T *)dlsym(handle_v3, "acr_list");
 
 	LOG_DEBUG("end of loadSharedLib");
 	return 0;
 }
 
-char *so_name;
+static char *so_name;
 static int init_core_ace_reg_list(const char *aceconf)
 {
 	int ret;

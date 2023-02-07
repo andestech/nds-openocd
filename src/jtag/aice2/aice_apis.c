@@ -21,13 +21,15 @@
 #include "config.h"
 #endif
 
+#include <helper/time_support.h>
 #include <target/target.h>
+#include <target/nds32_new/nds32_log.h>
+#include <target/nds32_new/nds32_reg.h>
 #include "aice_port.h"
 #include "aice_apis.h"
 #include "aice_jdp.h"
 #include "aice_usb_pack_format.h"
-#include <target/nds32_new/nds32_log.h>
-#include <helper/time_support.h>
+
 
 #define EDMv311_STANDBY_MODE   1
 

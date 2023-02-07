@@ -2962,23 +2962,23 @@ static int gdb_get_target_description_chunk(struct target *target, struct target
 				char tmp_s[2048] = {0};
 
 				/* Add workspae path as prefix to filename_tdesc */
-				strncpy(tmp_s, p_tdesc, strlen(p_tdesc));
+				strcpy(tmp_s, p_tdesc);
 				sprintf(&tmp_s[11], "%02d.xml", target->coreid);
-				strncpy(filename_tdesc, nds_workspace_folder, strlen(nds_workspace_folder));
+				strcpy(filename_tdesc, nds_workspace_folder);
 				strcat(filename_tdesc, tmp_s);
 
 				/* Reset tmp_s */
 				memset(tmp_s, 0, sizeof(tmp_s));
 
 				/* Add workspace path as prefix to filename_out */
-				strncpy(tmp_s, p_out, strlen(p_out));
+				strcpy(tmp_s, p_out);
 				sprintf(&tmp_s[15], "%02d.xml", target->coreid);
-				strncpy(filename_out, nds_workspace_folder, strlen(nds_workspace_folder));
+				strcpy(filename_out, nds_workspace_folder);
 				strcat(filename_out, tmp_s);
 			} else {
-				strncpy(filename_tdesc, p_tdesc, strlen(p_tdesc));
+				strcpy(filename_tdesc, p_tdesc);
 				sprintf(&filename_tdesc[11], "%02d.xml", target->coreid);
-				strncpy(filename_out, p_out, strlen(p_out));
+				strcpy(filename_out, p_out);
 				sprintf(&filename_out[15], "%02d.xml", target->coreid);
 			}
 			LOG_DEBUG("filename_tdesc: %s", filename_tdesc);

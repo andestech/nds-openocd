@@ -30,6 +30,7 @@
 #include "nds32_tlb.h"
 #include "nds32_disassembler.h"
 #include "nds32_log.h"
+#include "nds32_reg.h"
 #include "bytecode-ax.h"
 
 #define ENABLE_DEX_USE_PSW   1
@@ -3894,8 +3895,8 @@ int nds32_profiling(struct target *target, uint32_t *samples,
 	return ERROR_OK;
 }
 
-uint8_t stat_buffer[NDS32_STRUCT_STAT_SIZE];
-uint8_t timeval_buffer[NDS32_STRUCT_TIMEVAL_SIZE];
+static uint8_t stat_buffer[NDS32_STRUCT_STAT_SIZE];
+static uint8_t timeval_buffer[NDS32_STRUCT_TIMEVAL_SIZE];
 
 int nds32_gdb_fileio_write_memory(struct nds32 *nds32, uint32_t address,
 		uint32_t *psize, uint8_t **pbuffer)

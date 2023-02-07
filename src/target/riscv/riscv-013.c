@@ -45,6 +45,22 @@ static const char *const NDS_MEMORY_ACCESS_NAME[] = {
 	"CPU",
 };
 
+bool reset_halt;
+unsigned acr_reg_count_v5;
+unsigned acr_type_count_v5;
+
+#if _NDS_JTAG_SCANS_OPTIMIZE_EXE_PBUF
+static struct riscv_batch *write_debug_buffer_batch;
+#endif /* _NDS_JTAG_SCANS_OPTIMIZE_EXE_PBUF */
+
+#if _NDS_JTAG_SCANS_OPTIMIZE_R_PBUF
+static uint64_t backup_debug_buffer[RISCV_MAX_HARTS][16];
+#endif /* _NDS_JTAG_SCANS_OPTIMIZE_R_PBUF */
+
+static bool isAceCsrEnable;
+static struct riscv_batch *busmode_batch;
+uint32_t nds_sys_bus_supported;
+
 #endif
 
 static int riscv013_on_step_or_resume(struct target *target, bool step);

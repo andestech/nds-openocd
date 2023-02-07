@@ -28,6 +28,7 @@
 #include "nds32_v3m.h"
 #include "nds32_v3_common.h"
 #include "nds32_log.h"
+#include "nds32_reg.h"
 
 extern uint32_t nds32_dis_global_stop_warning;
 static int nds32_v3m_activate_hardware_breakpoint(struct target *target)

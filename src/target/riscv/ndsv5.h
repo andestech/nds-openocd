@@ -83,20 +83,20 @@ extern int riscv_examine(struct target *target);
 /********************************************************************/
 /* NDSV5 flags */
 /********************************************************************/
-uint32_t ndsv5_use_mprv_mode;
-uint32_t nds_skip_dmi;
-uint32_t ndsv5_system_bus_access;
-uint32_t ndsv5_without_announce;
-uint32_t ndsv5_dmi_abstractcs;
-uint32_t ndsv5_byte_access_from_burn;
+extern uint32_t ndsv5_use_mprv_mode;
+extern uint32_t nds_skip_dmi;
+extern uint32_t ndsv5_system_bus_access;
+extern uint32_t ndsv5_without_announce;
+extern uint32_t ndsv5_dmi_abstractcs;
+extern uint32_t ndsv5_byte_access_from_burn;
 
 #if _NDS_MEM_Q_ACCESS_
-uint32_t nds_dmi_quick_access;
-uint32_t nds_dmi_abstractcs;
-uint32_t nds_dmi_quick_access_ena;
+extern uint32_t nds_dmi_quick_access;
+extern uint32_t nds_dmi_abstractcs;
+extern uint32_t nds_dmi_quick_access_ena;
 #endif /* _NDS_MEM_Q_ACCESS_ */
 
-uint32_t ndsv5_l2c_support;
+extern uint32_t ndsv5_l2c_support;
 /********************************************************************/
 
 
@@ -115,14 +115,14 @@ extern struct reg_arch_type nds_ace_reg_access_type;
 extern int nds_targetburn_corenum;
 extern unsigned int nds_mixed_mode_checking;
 
-uint64_t ndsv5_ilm_bpa, ndsv5_ilm_lmsz;
-uint64_t ndsv5_dlm_bpa, ndsv5_dlm_lmsz;
-uint32_t ndsv5_ilm_ena, ndsv5_dlm_ena;
-uint32_t ndsv5_local_memory_slave_port;
-uint32_t ndsv5_check_idlm_capability_before;
-uint64_t ndsv5_backup_mstatus;
-uint64_t MSTATUS_VS;
-uint64_t L2C_BASE;
+extern uint64_t ndsv5_ilm_bpa, ndsv5_ilm_lmsz;
+extern uint64_t ndsv5_dlm_bpa, ndsv5_dlm_lmsz;
+extern uint32_t ndsv5_ilm_ena, ndsv5_dlm_ena;
+extern uint32_t ndsv5_local_memory_slave_port;
+extern uint32_t ndsv5_check_idlm_capability_before;
+extern uint64_t ndsv5_backup_mstatus;
+extern uint64_t MSTATUS_VS;
+extern uint64_t L2C_BASE;
 /********************************************************************/
 
 
@@ -336,9 +336,9 @@ struct nds32_v5 {
 	bool suppressed_hsp_exception;
 };
 
-char *ndsv5_script_custom_reset;
-char *ndsv5_script_custom_reset_halt;
-char *ndsv5_script_custom_initial;
+extern char *ndsv5_script_custom_reset;
+extern char *ndsv5_script_custom_reset_halt;
+extern char *ndsv5_script_custom_initial;
 
 extern struct target_type *get_target_type(struct target *target);
 /* when polling target halted, do NOT announce gdb */

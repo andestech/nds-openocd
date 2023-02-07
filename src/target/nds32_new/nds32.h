@@ -27,7 +27,6 @@
 #include <target/target_type.h>
 #include <target/register.h>
 #include <target/breakpoints.h>
-#include "nds32_reg.h"
 #include "nds32_insn.h"
 #include "nds32_edm.h"
 

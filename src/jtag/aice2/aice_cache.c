@@ -22,10 +22,11 @@
 #endif
 
 #include <target/target.h>
+#include <target/nds32_new/nds32_log.h>
+#include <target/nds32_new/nds32_reg.h>
 #include "aice_port.h"
 #include "aice_apis.h"
 #include "aice_jdp.h"
-#include <target/nds32_new/nds32_log.h>
 
 uint32_t backup_tlb_vpn_;
 uint32_t backup_tlb_data_;
@@ -975,7 +976,7 @@ struct cache_element {
 /* This is the number of cache entries. User should change it if necessary. */
 #define CACHE_SET_NUM 0x1000
 #define CACHE_WAY_NUM 0x8
-struct cache_element ce[CACHE_SET_NUM][CACHE_WAY_NUM];
+static struct cache_element ce[CACHE_SET_NUM][CACHE_WAY_NUM];
 #define CCTL_mskDIRTY 0x400000
 #define CCTL_offDIRTY 22
 #define CCTL_mskVALID 0x2
@@ -1155,14 +1156,14 @@ int aice_dump_cache(struct target *target, unsigned int cache_type, const char* 
 
 static uint32_t va2idx(struct target *target, uint32_t va, unsigned int cache_type, uint32_t *way_offset)
 {
-	struct cache_info *cache = malloc(sizeof(*cache));
+	struct cache_info *cache;
 	uint32_t coreid = target_to_coreid(target);
 	uint32_t set_bits, line_bits;
 	uint32_t idx;
 
 	if (cache_type == ICACHE)
 		cache = &core_info[coreid].icache;
-	else if (cache_type == DCACHE)
+	else
 		cache = &core_info[coreid].dcache;
 
 	set_bits = cache->log2_set;
@@ -1170,7 +1171,6 @@ static uint32_t va2idx(struct target *target, uint32_t va, unsigned int cache_ty
 	*way_offset = set_bits + line_bits;
 
 	idx = (va & (((1 << set_bits) - 1) << line_bits));
-	free(cache);
 	return idx;
 }
 

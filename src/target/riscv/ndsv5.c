@@ -35,6 +35,26 @@ extern uint32_t dtmcontrol_scan(struct target *target, uint32_t out);	/* declear
 extern uint32_t nds_is_rvv_0_8;
 
 /********************************************************************/
+/* NDSV5 flags */
+/********************************************************************/
+uint32_t ndsv5_use_mprv_mode;
+uint32_t nds_skip_dmi;
+uint32_t ndsv5_system_bus_access;
+uint32_t ndsv5_without_announce;
+uint32_t ndsv5_dmi_abstractcs;
+uint32_t ndsv5_byte_access_from_burn;
+
+#if _NDS_MEM_Q_ACCESS_
+uint32_t nds_dmi_quick_access;
+uint32_t nds_dmi_abstractcs;
+uint32_t nds_dmi_quick_access_ena;
+#endif /* _NDS_MEM_Q_ACCESS_ */
+
+uint32_t ndsv5_l2c_support;
+/********************************************************************/
+
+
+/********************************************************************/
 /* ndsv5.c global Var. */
 /********************************************************************/
 uint64_t LM_BASE = 0xa0000000;
@@ -42,6 +62,17 @@ uint32_t ndsv5_dis_cache_busmode;
 uint32_t ndsv5_dmi_busy_retry_times = 100;
 uint64_t MSTATUS_VS = 0x01800000;
 uint64_t L2C_BASE = (uint64_t)-1;
+
+uint64_t ndsv5_ilm_bpa, ndsv5_ilm_lmsz;
+uint64_t ndsv5_dlm_bpa, ndsv5_dlm_lmsz;
+uint32_t ndsv5_ilm_ena, ndsv5_dlm_ena;
+uint32_t ndsv5_local_memory_slave_port;
+uint32_t ndsv5_check_idlm_capability_before;
+uint64_t ndsv5_backup_mstatus;
+
+char *ndsv5_script_custom_reset;
+char *ndsv5_script_custom_reset_halt;
+char *ndsv5_script_custom_initial;
 /********************************************************************/
 
 
@@ -1005,7 +1036,7 @@ struct cache_element {
 /* This is the number of cache entries. User should change it if necessary. */
 #define CACHE_SET_NUM 0x1000
 #define CACHE_WAY_NUM 0x8
-struct cache_element ce[CACHE_SET_NUM][CACHE_WAY_NUM];
+static struct cache_element ce[CACHE_SET_NUM][CACHE_WAY_NUM];
 #define NDS_PAGE_SHIFT 12		/* for PAGE_SIZE 4KB */
 #define NDS_PAGE_SIZE  (1UL << NDS_PAGE_SHIFT)
 

@@ -20,6 +20,7 @@
 #endif
 
 #include "nds32_tlb.h"
+#include "nds32_reg.h"
 
 struct page_table_walker_info_s page_table_info[PAGE_SIZE_NUM] = {
 	/* 4K page */

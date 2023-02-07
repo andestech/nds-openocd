@@ -23,6 +23,7 @@
 
 #include <target/target.h>
 #include <target/nds32_new/nds32_log.h>
+#include <target/nds32_new/nds32_reg.h>
 #include "aice_port.h"
 #include "aice_apis.h"
 #include "aice_jdp.h"

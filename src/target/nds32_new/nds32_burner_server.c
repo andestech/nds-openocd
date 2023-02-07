@@ -22,9 +22,10 @@
 #endif
 #include <server/server.h>
 #include <helper/log.h>
+#include <jtag/aice2/aice_jdp.h>
 #include "nds32.h"
 #include "nds32_aice.h"
-#include <jtag/aice2/aice_jdp.h>
+#include "nds32_reg.h"
 
 const char *burner_port = "2354";
 unsigned int burner_coreid;
