@@ -300,7 +300,7 @@ COMMAND_HANDLER(handle_log_output_command)
 
 
 		char name_tmp[2048] = {0};
-		strncpy(name_tmp, log_output_path, strlen(log_output_path));
+		strcpy(name_tmp, log_output_path);
 		char *c = strstr(name_tmp, "iceman_debug0.log");
 		if (c)
 			*c = '\0';
@@ -575,9 +575,9 @@ void nds_dump_detail_debug_info(uint32_t if_final)
 		if (c)
 			*c = '\0';
 
-		strncpy(filename, log_output_path, strlen(log_output_path));
+		strcpy(filename, log_output_path);
 	}
-	strncat(filename, name_tmp, strlen(name_tmp));
+	strcat(filename, name_tmp);
 
 	char name_delete[2048];
 	memset(name_tmp, 0, sizeof(name_tmp));
@@ -588,17 +588,17 @@ void nds_dump_detail_debug_info(uint32_t if_final)
 			memset(name_delete, 0, sizeof(name_delete));
 			sprintf(name_tmp, "iceman_detail%02d.log", i);
 			if (log_output_path)
-				strncpy(name_delete, log_output_path, strlen(log_output_path));
+				strcpy(name_delete, log_output_path);
 
-			strncat(name_delete, name_tmp, strlen(name_tmp));
+			strcat(name_delete, name_tmp);
 			/*NDS_INFO("remove: %s", name_delete);*/
 			remove(name_delete);
 		}
 		memset(name_delete, 0, sizeof(name_delete));
 		if (log_output_path)
-			strncpy(name_delete, log_output_path, strlen(log_output_path));
+			strcpy(name_delete, log_output_path);
 		strcpy(name_tmp, "iceman_detail_last.log");
-		strncat(name_delete, name_tmp, strlen(name_tmp));
+		strcat(name_delete, name_tmp);
 		remove(name_delete);
 	}
 	/*

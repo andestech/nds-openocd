@@ -40,30 +40,17 @@ int ndsv5_set_vector_register(struct target *target, enum gdb_regno r, char *pRe
 
 
 #include "target/ndsv5_ace.h"
-bool isAceCsrEnable;
-struct riscv_batch *busmode_batch;
-uint32_t nds_sys_bus_supported;
+extern uint32_t nds_sys_bus_supported;
 extern uint32_t nds_dmi_access_mem;
 extern uint32_t nds_halt_on_reset;
 extern uint32_t nds_dmi_busy_retry_times;
-uint32_t read_abstract_reg_number, write_abstract_reg_number;
 #define MAX_RETRY  3
 
 #if _NDS_DMI_CHECK_TIMEOUT_
-struct timeval begin_time;
-struct timeval end_time;
 extern uint32_t v5_count_to_check_dm;
 double timeval_diff_ms(struct timeval *a_timeval_begin, struct timeval *a_timeval_end);
 int dmi_check_timeout(struct target *target);
 #endif /* _NDS_DMI_CHECK_TIMEOUT_ */
-
-#if _NDS_JTAG_SCANS_OPTIMIZE_EXE_PBUF
-struct riscv_batch *write_debug_buffer_batch;
-#endif /* _NDS_JTAG_SCANS_OPTIMIZE_EXE_PBUF */
-
-#if _NDS_JTAG_SCANS_OPTIMIZE_R_PBUF
-uint64_t backup_debug_buffer[RISCV_MAX_HARTS][16];
-#endif /* _NDS_JTAG_SCANS_OPTIMIZE_R_PBUF */
 
 #if _NDS_MEM_Q_ACCESS_
 int ndsv5_read_memory_quick_access(struct target *target, target_addr_t address,
@@ -140,15 +127,17 @@ const char * const dmi_reg_string[] = {
 */
 extern uint32_t nds_jtag_scans_optimize;
 extern uint32_t nds_jtag_max_scans;
-unsigned acr_reg_count_v5;
-unsigned acr_type_count_v5;
+extern unsigned acr_reg_count_v5;
+extern unsigned acr_type_count_v5;
 extern uint32_t v5_dmi_busy_delay_count;
-bool reset_halt;
+extern bool reset_halt;
 extern bool rv32e;
+
 int read_memory_bus_v1_opt(struct target *target, target_addr_t address,
 	uint32_t size, uint32_t count, uint8_t *buffer);
 int write_memory_bus_v1_opt(struct target *target, target_addr_t address,
 	uint32_t size, uint32_t count, const uint8_t *buffer);
+
 extern uint32_t nds_no_crst_detect;
 
 

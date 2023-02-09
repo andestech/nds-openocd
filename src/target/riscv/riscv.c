@@ -527,7 +527,7 @@ static void riscv_free_registers(struct target *target)
 				free(target->reg_cache->reg_list[0].arch_info);
 			/* Free the ones we allocated separately. */
 			for (unsigned i = GDB_REGNO_COUNT; i < target->reg_cache->num_regs; i++) {
-				printf("free #%d 0x%x", i, target->reg_cache->reg_list[i].arch_info);
+				/* printf("free #%d 0x%x", i, target->reg_cache->reg_list[i].arch_info); */
 				free(target->reg_cache->reg_list[i].arch_info);
 			}
 			free(target->reg_cache->reg_list);

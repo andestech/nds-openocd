@@ -25,6 +25,7 @@
 #include <target/target.h>
 #include <target/nds32.h>
 #include <target/nds32_log.h>
+#include <target/nds32_reg.h>
 #include "aice_usb.h"
 #include "aice_apis.h"
 #include "aice_usb_command.h"

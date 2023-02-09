@@ -143,9 +143,11 @@ static struct reg_arch_type vtarget_riscv_reg_arch_type = {
  * CSRs in this list.
  * The list is either NULL, or a series of ranges (inclusive), terminated with
  * 1,0. */
-struct {
+/*
+static struct {
 	uint16_t low, high;
 } *expose_csr;
+*/
 
 /** target functions **/
 /**
@@ -1005,7 +1007,7 @@ static dmi_status_t dmi_scan(struct target *target, uint16_t *address_in,
 {
 	RISCV_INFO(info);
 	uint8_t in[8] = {0};
-	uint8_t out[8];
+	uint8_t out[8] = {0};
 	struct scan_field field = {
 		.num_bits = info->abits + DTM_DMI_OP_LENGTH + DTM_DMI_DATA_LENGTH,
 		.out_value = out,

@@ -365,7 +365,7 @@ static int telnet_input(struct connection *connection)
 	if (collect_remotetargetburn_file) {
 		collect_remotetargetburn_file = false;
 		int remain = nds_remotetargetburn_fsize;
-		buf_p = nds_remotetargetburn_buffer;
+		buf_p = (unsigned char *)nds_remotetargetburn_buffer;
 		while (remain > 0) {
 			bytes_read = connection_read(connection, buf_p, remain);
 			if (bytes_read == 0) {

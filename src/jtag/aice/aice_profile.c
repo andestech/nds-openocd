@@ -24,12 +24,14 @@
 #include <helper/log.h>
 #include <helper/time_support.h>
 #include <target/target.h>
-#include "aice_usb.h"
-#include "aice_apis.h"
 #include <target/nds32.h>
 #include <target/nds32_disassembler.h>
 #include <target/target_request.h>
 #include <target/nds32_tracer.h>
+#include <target/nds32_reg.h>
+#include "aice_usb.h"
+#include "aice_apis.h"
+
 
 #define DTR_INDEX (0)
 #define DTR_BUF (R0)
@@ -1018,16 +1020,16 @@ static void write_gmon_2(struct nds32 *nds32)
 	if( c ) {
 		*c = '\0';
 	}
-	strncpy(filename, log_output_path, strlen(log_output_path));
+	strcpy(filename, log_output_path);
 	uint32_t coreid = target_to_coreid(nds32->target);
 	LOG_DEBUG("coreid: %d", coreid);
 	if (coreid == 0)
-		strncat(filename, "gmon.out", 8);
+		strcat(filename, "gmon.out");
 	else {
 		char name_tmp[32];
 		memset(name_tmp, 0, sizeof(name_tmp));
 		sprintf(name_tmp, "gmon_core%02d.out", coreid);
-		strncat(filename, name_tmp, strlen(name_tmp));
+		strcat(filename, name_tmp);
 	}
 	LOG_INFO("filename: %s", filename);
 
@@ -1332,11 +1334,11 @@ void nds32_pwr_write_file(struct nds32 *nds32)
 	if( c ) {
 		*c = '\0';
 	}
-	strncpy(filename, log_output_path, strlen(log_output_path));
+	strcpy(filename, log_output_path);
 	if (dump_pwr_path == NULL)
-		strncat(filename, "sample.pwr", 10);
+		strcat(filename, "sample.pwr");
 	else
-		strncat(filename, dump_pwr_path, strlen(dump_pwr_path));
+		strcat(filename, dump_pwr_path);
 	LOG_INFO("dump filename: %s", filename);
 	FILE *f = fopen(filename, "wb");
 	if (f == NULL)

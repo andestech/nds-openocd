@@ -32,6 +32,22 @@
 #include "ndsv5.h"
 #include "ndsv5-013.h"
 #include "target/nds32_log.h"
+
+bool reset_halt;
+unsigned acr_reg_count_v5;
+unsigned acr_type_count_v5;
+
+#if _NDS_JTAG_SCANS_OPTIMIZE_EXE_PBUF
+struct riscv_batch *write_debug_buffer_batch;
+#endif /* _NDS_JTAG_SCANS_OPTIMIZE_EXE_PBUF */
+
+#if _NDS_JTAG_SCANS_OPTIMIZE_R_PBUF
+uint64_t backup_debug_buffer[RISCV_MAX_HARTS][16];
+#endif /* _NDS_JTAG_SCANS_OPTIMIZE_R_PBUF */
+
+bool isAceCsrEnable;
+static struct riscv_batch *busmode_batch;
+uint32_t nds_sys_bus_supported;
 #endif
 
 
@@ -510,7 +526,7 @@ static dmi_status_t dmi_scan(struct target *target, uint32_t *address_in,
 	//uint8_t in[num_bytes];
 	//uint8_t out[num_bytes];
 	uint8_t in[8] = {0};
-	uint8_t out[8];
+	uint8_t out[8] = {0};
 	struct scan_field field = {
 		.num_bits = num_bits,
 		.out_value = out,
@@ -557,7 +573,7 @@ static dmi_status_t dmi_scan(struct target *target, uint32_t *address_in,
 	int idle_count = info->dmi_busy_delay;
 
 #if _NDS_V5_ONLY_
-	if ( idle_count < info->dtmcs_idle )
+	if (idle_count < (int)info->dtmcs_idle)
 		idle_count = info->dtmcs_idle;
 #endif /* _NDS_V5_ONLY_ */
 
@@ -1849,6 +1865,7 @@ static int set_haltgroup(struct target *target, bool *supported)
 	return ERROR_OK;
 }
 
+/*
 static int discover_vlenb(struct target *target, int hartid)
 {
 	RISCV_INFO(r);
@@ -1862,6 +1879,7 @@ static int discover_vlenb(struct target *target, int hartid)
 
 	return ERROR_OK;
 }
+*/
 
 static int examine(struct target *target)
 {
@@ -2173,7 +2191,7 @@ static int examine(struct target *target)
 	target_set_examined(target);
 
 	if (target->smp) {
-		bool haltgroup_supported;
+		bool haltgroup_supported = false;
 		if (set_haltgroup(target, &haltgroup_supported) != ERROR_OK)
 			return ERROR_FAIL;
 		if (haltgroup_supported)
@@ -3793,7 +3811,7 @@ static int read_memory(struct target *target, target_addr_t address,
 			(get_field(info->sbcs, DMI_SBCS_SBACCESS128) && size == 16)) {
 		if (get_field(info->sbcs, DMI_SBCS_SBVERSION) == 0)
 			return read_memory_bus_v0(target, address, size, count, buffer);
-		else if (get_field(info->sbcs, DMI_SBCS_SBVERSION) == 1)
+		else if (get_field(info->sbcs, DMI_SBCS_SBVERSION) == 1) {
 #if _NDS_V5_ONLY_
 			if (nds_jtag_scans_optimize > 0) {
 				result = read_memory_bus_v1_opt(target, address, size, count, buffer);
@@ -3805,6 +3823,7 @@ static int read_memory(struct target *target, target_addr_t address,
 #else /* _NDS_V5_ONLY_ */
 			return read_memory_bus_v1(target, address, size, count, buffer);
 #endif /* _NDS_V5_ONLY_ */
+		}
 	}
 
 #if _NDS_V5_ONLY_
@@ -4045,6 +4064,10 @@ static int write_memory_bus_v1(struct target *target, target_addr_t address,
 static int write_memory_progbuf(struct target *target, target_addr_t address,
 		uint32_t size, uint32_t count, const uint8_t *buffer)
 {
+#if _NDS_V5_ONLY_
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+#endif
+
 	RISCV013_INFO(info);
 
 	if (riscv_xlen(target) < size * 8) {
@@ -4101,7 +4124,6 @@ static int write_memory_progbuf(struct target *target, target_addr_t address,
 	if (riscv_enable_virtual && info->progbufsize >= 4 && get_field(mstatus, MSTATUS_MPRV))
 		riscv_program_csrrci(&program, GDB_REGNO_ZERO,  CSR_DCSR_MPRVEN, GDB_REGNO_DCSR);
 #if _NDS_V5_ONLY_
-	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
 	if (nds32->nds_const_addr_mode == 0)
 		riscv_program_addi(&program, GDB_REGNO_S0, GDB_REGNO_S0, size);
 #else /* _NDS_V5_ONLY_ */
@@ -6099,13 +6121,16 @@ static int ndsv5_write_abstract_arg_pack(struct target *target, unsigned index, 
 	unsigned xlen = riscv_xlen(target);
 	unsigned offset = index * xlen / 32;
 	switch (xlen) {
+		case 64:
+			riscv_batch_add_dmi_write(ndsv5_access_memory_pack_batch, DMI_DATA0 + offset + 1, value >> 32);
+			riscv_batch_add_dmi_write(ndsv5_access_memory_pack_batch, DMI_DATA0 + offset, value);
+			break;
+		case 32:
+			riscv_batch_add_dmi_write(ndsv5_access_memory_pack_batch, DMI_DATA0 + offset, value);
+			break;
 		default:
 			LOG_ERROR("Unsupported xlen: %d", xlen);
 			return ERROR_FAIL;
-		case 64:
-			riscv_batch_add_dmi_write(ndsv5_access_memory_pack_batch, DMI_DATA0 + offset + 1, value >> 32);
-		case 32:
-			riscv_batch_add_dmi_write(ndsv5_access_memory_pack_batch, DMI_DATA0 + offset, value);
 	}
 	return ERROR_OK;
 }
@@ -6816,16 +6841,21 @@ ndsv5_read_memory_quick_access_retry:
 		buffer[0] = value;
 		buffer[1] = value >> 8;
 		break;
-	case 8:
-		buffer[4] = value_h;
-		buffer[5] = value_h >> 8;
-		buffer[6] = value_h >> 16;
-		buffer[7] = value_h >> 24;
 	case 4:
 		buffer[0] = value;
 		buffer[1] = value >> 8;
 		buffer[2] = value >> 16;
 		buffer[3] = value >> 24;
+		break;
+	case 8:
+		buffer[0] = value;
+		buffer[1] = value >> 8;
+		buffer[2] = value >> 16;
+		buffer[3] = value >> 24;
+		buffer[4] = value_h;
+		buffer[5] = value_h >> 8;
+		buffer[6] = value_h >> 16;
+		buffer[7] = value_h >> 24;
 		break;
 	default:
 		LOG_ERROR("unsupported access size: %d", size);

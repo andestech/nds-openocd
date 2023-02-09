@@ -701,8 +701,8 @@ COMMAND_HANDLER(handle_nds32_set_watch_command)
 		/* fall through */
 	case 4:
 		COMMAND_PARSE_NUMBER(u32, CMD_ARGV[3], data_value);
-		/* fall through */
 		do_value_compare = 1;
+		/* fall through */
 	case 3:
 		switch (CMD_ARGV[2][0]) {
 		case 'r':

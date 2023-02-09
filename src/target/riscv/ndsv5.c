@@ -33,6 +33,25 @@ extern uint32_t dtmcontrol_scan(struct target *target, uint32_t out);	/* declear
 /********************************************************************/
 
 
+/********************************************************************/
+/* NDSV5 flags */
+/********************************************************************/
+uint32_t ndsv5_use_mprv_mode;
+uint32_t nds_skip_dmi;
+uint32_t ndsv5_system_bus_access;
+uint32_t ndsv5_without_announce;
+uint32_t ndsv5_dmi_abstractcs;
+uint32_t ndsv5_byte_access_from_burn;
+
+#if _NDS_MEM_Q_ACCESS_
+uint32_t nds_dmi_quick_access;
+uint32_t nds_dmi_abstractcs;
+uint32_t nds_dmi_quick_access_ena;
+#endif /* _NDS_MEM_Q_ACCESS_ */
+
+uint32_t ndsv5_l2c_support;
+/********************************************************************/
+
 
 
 /********************************************************************/
@@ -43,6 +62,19 @@ uint32_t ndsv5_dis_cache_busmode = 1;
 uint32_t ndsv5_dmi_busy_retry_times = 100;
 uint64_t MSTATUS_VS = 0x01800000;
 uint64_t L2C_BASE = (uint64_t)-1;
+
+int ndsv5_triggered_hart;
+uint64_t ndsv5_ilm_bpa, ndsv5_ilm_lmsz;
+uint64_t ndsv5_dlm_bpa, ndsv5_dlm_lmsz;
+uint32_t ndsv5_ilm_ena, ndsv5_dlm_ena;
+uint32_t ndsv5_local_memory_slave_port;
+uint32_t ndsv5_check_idlm_capability_before;
+uint64_t ndsv5_backup_mstatus;
+
+
+char *ndsv5_script_custom_reset;
+char *ndsv5_script_custom_reset_halt;
+char *ndsv5_script_custom_initial;
 /********************************************************************/
 
 
@@ -1001,7 +1033,7 @@ struct cache_element {
 /* This is the number of cache entries. User should change it if necessary. */
 #define CACHE_SET_NUM 0x1000
 #define CACHE_WAY_NUM 0x8
-struct cache_element ce[CACHE_SET_NUM][CACHE_WAY_NUM];
+static struct cache_element ce[CACHE_SET_NUM][CACHE_WAY_NUM];
 #define NDS_PAGE_SHIFT 12		/* for PAGE_SIZE 4KB */
 #define NDS_PAGE_SIZE  (1UL << NDS_PAGE_SHIFT)
 
@@ -1051,8 +1083,8 @@ int ndsv5_init_cache(struct target *target)
 		icache->log2_line_size = 0;
 	}
 
-	LOG_DEBUG("\ticache set: %lld, way: %lld, line size: %lld, "
-			"log2(set): %lld, log2(line_size): %lld",
+	LOG_DEBUG("\ticache set: %lu, way: %lu, line size: %lu, "
+			"log2(set): %lu, log2(line_size): %lu",
 			icache->set, icache->way, icache->line_size,
 			icache->log2_set, icache->log2_line_size);
 
@@ -1074,8 +1106,8 @@ int ndsv5_init_cache(struct target *target)
 		dcache->log2_line_size = 0;
 	}
 
-	LOG_DEBUG("\tdcache set: %lld, way: %lld, line size: %lld, "
-			"log2(set): %lld, log2(line_size): %lld",
+	LOG_DEBUG("\tdcache set: %lu, way: %lu, line size: %lu, "
+			"log2(set): %lu, log2(line_size): %lu",
 			dcache->set, dcache->way, dcache->line_size,
 			dcache->log2_set, dcache->log2_line_size);
 
@@ -1154,7 +1186,7 @@ int ndsv5_dump_cache(struct target *target, unsigned int cache_type, const char*
 	line_bits = cache->log2_line_size;
 	line_size = cache->line_size;
 	way_offset = set_bits + line_bits;
-	LOG_DEBUG("Way:%lld, Set:%lld, Line Size:%lld", ways, sets, line_size);
+	LOG_DEBUG("Way:%lu, Set:%lu, Line Size:%lu", ways, sets, line_size);
 
 	/* check cpu id == 0x45 and dcache, tag no used bit = shift_bit, shift bit = log2 line_size + log2 set;
 	 * others, shift bit = 10 */
@@ -1174,7 +1206,7 @@ int ndsv5_dump_cache(struct target *target, unsigned int cache_type, const char*
 		word_size = xlen / 8;
 	word_num = line_size / word_size;
 	total_cache = ways * sets * word_num;
-	LOG_DEBUG("Total cache:%lld", total_cache);
+	LOG_DEBUG("Total cache:%lu", total_cache);
 
 	/* READ TAG/DATA COMMAND :auto count idx or no auto count idx */
 	if (idx_auto) {
@@ -1185,7 +1217,7 @@ int ndsv5_dump_cache(struct target *target, unsigned int cache_type, const char*
 				for (way = 0; way < ways; way++) {
 					ndsv5_set_register_value(reg_mcctlcommand, read_tag_cmd);
 					tag = ndsv5_get_register_value(reg_mcctldata);
-					LOG_DEBUG("idx_auto tag: %llx", tag);
+					LOG_DEBUG("idx_auto tag: %" PRIu64, tag);
 
 					mesi = tag & 0x7;
 					ce[idx][way].inval = (mesi == 0);
@@ -1202,7 +1234,7 @@ int ndsv5_dump_cache(struct target *target, unsigned int cache_type, const char*
 				for (way = 0; way < ways; way++) {
 					ndsv5_set_register_value(reg_mcctlcommand, read_tag_cmd);
 					tag = ndsv5_get_register_value(reg_mcctldata);
-					LOG_DEBUG("idx_auto tag: %llx", tag);
+					LOG_DEBUG("idx_auto tag: %" PRIu64, tag);
 
 					ce[idx][way].valid = (uint8_t)((tag & (1ULL << (xlen - 1))) >> (xlen - 1));
 					ce[idx][way].lock = (uint8_t)((tag & (1ULL << (xlen - 2))) >> (xlen - 2));
@@ -1221,7 +1253,7 @@ int ndsv5_dump_cache(struct target *target, unsigned int cache_type, const char*
 					ce[idx][way].cacheline[i] = ndsv5_get_register_value(reg_mcctldata);
 				}
 				now_cache += word_num;
-				NDS32_LOG_R("Dump Progressing...%lld%%", ((now_cache*100)/total_cache));
+				NDS32_LOG_R("Dump Progressing...%lu%%", ((now_cache*100)/total_cache));
 			}
 		}
 	} else {
@@ -1232,7 +1264,7 @@ int ndsv5_dump_cache(struct target *target, unsigned int cache_type, const char*
 				ndsv5_set_register_value(reg_mcctlbeginaddr, ra);
 				ndsv5_set_register_value(reg_mcctlcommand, read_tag_cmd);
 				tag = ndsv5_get_register_value(reg_mcctldata);
-				LOG_DEBUG("tag: %llx", tag);
+				LOG_DEBUG("tag: %" PRIu64, tag);
 
 				if (new_tagformat) {
 					mesi = tag & 0x7;
@@ -1258,7 +1290,7 @@ int ndsv5_dump_cache(struct target *target, unsigned int cache_type, const char*
 					ce[idx][way].cacheline[i] = ndsv5_get_register_value(reg_mcctldata);
 				}
 				now_cache += word_num;
-				NDS32_LOG_R("Dump Progressing...%lld%%", ((now_cache*100)/total_cache));
+				NDS32_LOG_R("Dump Progressing...%lu%%", ((now_cache*100)/total_cache));
 			}
 		}
 	}
@@ -1378,7 +1410,7 @@ int ndsv5_dump_cache_va(struct target *target, unsigned int cache_type, uint64_t
 
 	uint64_t pa = va;
 	ndsv5_get_physical_address(target, va, &pa);
-	LOG_DEBUG("physical address:0x%llx", pa);
+	LOG_DEBUG("physical address:0x%lx", pa);
 
 	/* if dcache use pa to index; if icache use va to index */
 	if (cache_type == DCACHE)
@@ -1386,7 +1418,7 @@ int ndsv5_dump_cache_va(struct target *target, unsigned int cache_type, uint64_t
 	else
 		idx = (va & (((1ULL << set_bits) - 1) << line_bits));
 
-	LOG_DEBUG("Way:%lld, Set:%lld, Line Size:%lld", ways, sets, line_size);
+	LOG_DEBUG("Way:%lu, Set:%lu, Line Size:%lu", ways, sets, line_size);
 
 	/* check cpu id == 0x45 and dcache, tag no used bit = shift_bit, shift bit = log2 line_size + log2 set;
 	 * others, shift bit = 10 */
@@ -1421,7 +1453,7 @@ int ndsv5_dump_cache_va(struct target *target, unsigned int cache_type, uint64_t
 		ndsv5_set_register_value(reg_mcctlbeginaddr, ra);
 		ndsv5_set_register_value(reg_mcctlcommand, read_tag_cmd);
 		tag = ndsv5_get_register_value(reg_mcctldata);
-		LOG_DEBUG("tag: %llx", tag);
+		LOG_DEBUG("tag: %" PRIu64, tag);
 		if (new_tagformat) {
 			mesi = tag & 0x7;
 			ces[way].inval = (mesi == 0);
@@ -1618,24 +1650,24 @@ static int ndsv5_l2c_get_reg(struct target *target, uint64_t addr, uint64_t *dat
 	ndsv5_l2c_status_idle(target);
 
 	if (target_read_memory(target, addr, size, 1, (uint8_t *)data) != ERROR_OK) {
-		LOG_ERROR("Unable to read L2C reg 0x%llx", addr);
+		LOG_ERROR("Unable to read L2C reg 0x%lx", addr);
 		return ERROR_FAIL;
 	}
 	if (size == 4)
 		*data =  *data & 0xffffffff;
-	LOG_DEBUG("L2C get reg 0x%llx data 0x%llx", addr, *data);
+	LOG_DEBUG("L2C get reg 0x%lx data 0x%lx", addr, *data);
 
 	return ERROR_OK;
 }
 
 static int ndsv5_l2c_set_reg(struct target *target, uint64_t addr, uint64_t data)
 {
-	LOG_DEBUG("L2C set reg: 0x%llx, data: 0x%llx", addr, data);
+	LOG_DEBUG("L2C set reg: 0x%lx, data: 0x%lx", addr, data);
 
 	/* Get & Check version */
 	ndsv5_l2c_status_idle(target);
 	if (target_write_memory(target, addr, 8, 1, (uint8_t *)&data) != ERROR_OK) {
-		LOG_ERROR("Unable to write L2C reg 0x%llx", addr);
+		LOG_ERROR("Unable to write L2C reg 0x%lx", addr);
 		return ERROR_FAIL;
 	}
 
@@ -1698,7 +1730,7 @@ int ndsv5_check_l2cache_exist(struct target *target, uint64_t *config)
 					GDB_REGNO_CSR0 + CSR_MCCACHE_CTL_BASE) == ERROR_OK) {
 
 			if (L2C_BASE != (uint64_t)-1 && L2C_BASE != mccache_ctl_base) {
-				LOG_INFO("L2C_BASE(0x%llx) mismatch with mccache_ctl_base(0x%llx)",
+				LOG_INFO("L2C_BASE(0x%lx) mismatch with mccache_ctl_base(0x%lx)",
 						L2C_BASE, mccache_ctl_base);
 			}
 
@@ -1743,7 +1775,7 @@ int ndsv5_check_l2cache_exist(struct target *target, uint64_t *config)
 
 int ndsv5_dump_l2cache_va(struct target *target, uint64_t va)
 {
-	LOG_DEBUG("Dump L2 Cache va=0x%llx", va);
+	LOG_DEBUG("Dump L2 Cache va=0x%lx", va);
 
 	riscv_select_current_hart(target);
 
@@ -1779,7 +1811,7 @@ int ndsv5_dump_l2cache_va(struct target *target, uint64_t va)
 		tmp_sets >>= 1;
 		set_bits++;
 	}
-	LOG_DEBUG("L2C sets: %lld", sets);
+	LOG_DEBUG("L2C sets: %lu", sets);
 
 	/* Get palen (Only get it once) */
 	if (palen == (uint64_t)-1) {
@@ -1788,17 +1820,17 @@ int ndsv5_dump_l2cache_va(struct target *target, uint64_t va)
 			return ERROR_FAIL;
 		}
 	}
-	LOG_DEBUG("L2 Palen = %llu", palen);
+	LOG_DEBUG("L2 Palen = %lu", palen);
 	tag_dw = palen - set_bits - line_bits;
 	maskTAG = (1ULL << tag_dw) - 1;
 
 	uint64_t pa = va;
 	ndsv5_get_physical_address(target, va, &pa);
-	LOG_DEBUG("physical address:0x%llx", pa);
+	LOG_DEBUG("physical address:0x%lx", pa);
 
 	/* dcache use pa to index */
 	idx = (pa & (((1ULL << set_bits) - 1) << line_bits)) >> line_bits;
-	LOG_DEBUG("Way:%lld, Set:%lld, Line Size:%lld, idx:%llx", ways, sets, line_size, idx);
+	LOG_DEBUG("Way:%lu, Set:%lu, Line Size:%lu, idx:%lu", ways, sets, line_size, idx);
 	shift_bit = set_bits + line_bits;
 
 	/* Index Example Format for CCTL Index Type Operation for 64bit icache
@@ -1843,7 +1875,7 @@ int ndsv5_dump_l2cache_va(struct target *target, uint64_t va)
 					(L2C_TGT_DATA_0 + i * word_size),
 					&ces[way].cacheline[i], word_size);
 
-			LOG_DEBUG("\tTGT_DATA: 0x%llx", ces[way].cacheline[i]);
+			LOG_DEBUG("\tTGT_DATA: 0x%lx", ces[way].cacheline[i]);
 		}
 	}
 
@@ -1890,7 +1922,7 @@ int ndsv5_dump_l2cache_va(struct target *target, uint64_t va)
 /* only for IDE: print one header + one way */
 int ndsv5_dump_l2cache_va_way(struct target *target, uint64_t va, uint64_t way)
 {
-	LOG_DEBUG("Dump L2 Cache va=0x%llx, cache line number=%lld", va, way);
+	LOG_DEBUG("Dump L2 Cache va=0x%lx, cache line number=%lu", va, way);
 	if (way >= L2C_WAYS) {
 		LOG_ERROR("the number of L2 Cache line must between 0 ~ %d", L2C_WAYS - 1);
 		return ERROR_FAIL;
@@ -1929,7 +1961,7 @@ int ndsv5_dump_l2cache_va_way(struct target *target, uint64_t va, uint64_t way)
 		tmp_sets >>= 1;
 		set_bits++;
 	}
-	LOG_DEBUG("L2C sets: %lld", sets);
+	LOG_DEBUG("L2C sets: %lu", sets);
 
 	/* Get palen (Only get it once) */
 	if (palen == (uint64_t)-1) {
@@ -1938,17 +1970,17 @@ int ndsv5_dump_l2cache_va_way(struct target *target, uint64_t va, uint64_t way)
 			return ERROR_FAIL;
 		}
 	}
-	LOG_DEBUG("L2 Palen = %llu", palen);
+	LOG_DEBUG("L2 Palen = %lu", palen);
 	tag_dw = palen - set_bits - line_bits;
 	maskTAG = (1ULL << tag_dw) - 1;
 
 	uint64_t pa = va;
 	ndsv5_get_physical_address(target, va, &pa);
-	LOG_DEBUG("physical address:0x%llx", pa);
+	LOG_DEBUG("physical address:0x%lx", pa);
 
 	/* dcache use pa to index */
 	idx = (pa & (((1ULL << set_bits) - 1) << line_bits)) >> line_bits;
-	LOG_DEBUG("Way:%lld, Set:%lld, Line Size:%lld, idx:%llx", ways, sets, line_size, idx);
+	LOG_DEBUG("Way:%lu, Set:%lu, Line Size:%lu, idx:%lu", ways, sets, line_size, idx);
 	shift_bit = set_bits + line_bits;
 
 	/* Index Example Format for CCTL Index Type Operation for 64bit icache
@@ -1992,7 +2024,7 @@ int ndsv5_dump_l2cache_va_way(struct target *target, uint64_t va, uint64_t way)
 				(L2C_TGT_DATA_0 + i * word_size),
 				&ces[0].cacheline[i], word_size);
 
-		LOG_DEBUG("\tTGT_DATA: 0x%llx", ces[0].cacheline[i]);
+		LOG_DEBUG("\tTGT_DATA: 0x%lx", ces[0].cacheline[i]);
 	}
 
 	char *fmt_str = " %8llx";
@@ -2056,8 +2088,8 @@ int ndsv5_query_l2cache_config(struct target *target)
 	line_size = cache->line_size;		/* L2 and L1 has the same cache line size */
 	sets = (size * 1024) / line_size / ways;
 
-	LOG_DEBUG("L2C sets: %lld, ways: %lld, size: %lld KB ", sets, ways, size);
-	LOG_INFO("%lld %lld %lld", sets, ways, size);
+	LOG_DEBUG("L2C sets: %lu, ways: %lu, size: %lu KB ", sets, ways, size);
+	LOG_INFO("%lu %lu %lu", sets, ways, size);
 
 	return ERROR_OK;
 }
@@ -2088,7 +2120,7 @@ int ndsv5_l2cache_wb_invalidate(struct target *target)
 	line_size = cache->line_size;		/* L2 and L1 has the same cache line size */
 
 	sets = (size * 128 * 1024) / line_size / ways;
-	LOG_DEBUG("L2C sets: %lld, ways: %lld, line size: %lld", sets, ways, line_size);
+	LOG_DEBUG("L2C sets: %lu, ways: %lu, line size: %lu", sets, ways, line_size);
 
 	/* backup register value */
 	if (nds_register_read_direct(target, &s0, GDB_REGNO_S0) != ERROR_OK)
@@ -2189,7 +2221,7 @@ int ndsv5_enableornot_cache(struct target *target, unsigned int cache_type, cons
 
 	/* check enable/disable icache/dcache PASS or FAIL */
 	new_value = ndsv5_get_register_value(reg_mcache_ctl);
-	LOG_DEBUG("reg_mcache_ctl : %llx", new_value);
+	LOG_DEBUG("reg_mcache_ctl : %lx", new_value);
 
 	/* for set icache/dcache->enable=true/false */
 	cache = cache_type ? &nds32->memory.dcache : &nds32->memory.icache;

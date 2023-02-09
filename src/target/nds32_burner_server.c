@@ -20,11 +20,12 @@
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
+
 #include <server/server.h>
 #include <helper/log.h>
-//#include <server/gdb_fileio.h>
 #include "nds32.h"
 #include "nds32_aice.h"
+#include "nds32_reg.h"
 #include <jtag/aice/aice_jdp.h>
 
 const char *burner_port = "2354";

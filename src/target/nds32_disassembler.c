@@ -25,6 +25,7 @@
 #include <helper/log.h>
 #include <target/target.h>
 #include "nds32_disassembler.h"
+#include "nds32_reg.h"
 
 static const int enable4_bits[] = {0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4};
 uint32_t nds32_if_smw_i = 0;

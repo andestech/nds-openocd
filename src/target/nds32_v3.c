@@ -29,6 +29,7 @@
 #include "nds32_v3_common.h"
 #include "nds32_v3.h"
 #include "nds32_log.h"
+#include "nds32_reg.h"
 
 extern uint32_t nds32_dis_global_stop_warning;
 extern uint32_t aice_usb_pack_command;

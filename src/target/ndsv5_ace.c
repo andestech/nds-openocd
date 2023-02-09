@@ -59,7 +59,7 @@ static int32_t get_ace_file_name(const char *aceconf, const char *marker, char *
 		return -1;            \
 	}                             \
 } while (0)
-void *handle;
+static void *handle_v5;
 /* dlopen a shared object named 'so_name'
  * dlsym certain global variables */
 static int32_t loadSharedLib(const char *so_name)
@@ -69,40 +69,40 @@ static int32_t loadSharedLib(const char *so_name)
 	LOG_DEBUG("loadSharedLib from %s", so_name);
 
 	/* dlopen a shared object named 'so_name' */
-	handle = dlopen(so_name, RTLD_NOW | RTLD_LOCAL);
+	handle_v5 = dlopen(so_name, RTLD_NOW | RTLD_LOCAL);
 	LE("unable to dlopen the shared library.");
 
-	assert(handle != NULL);
+	assert(handle_v5 != NULL);
 
-	global_acr_reg_count_v5 = (unsigned *) dlsym(handle, "acr_reg_count");
+	global_acr_reg_count_v5 = (unsigned *) dlsym(handle_v5, "acr_reg_count");
 	LE("unable to load symbol acr_reg_count");
 	LOG_DEBUG("global_acr_reg_count_v5 = %d", *global_acr_reg_count_v5);
 
-	global_acr_type_count_v5 = (unsigned *) dlsym(handle, "acr_type_count");
+	global_acr_type_count_v5 = (unsigned *) dlsym(handle_v5, "acr_type_count");
 	LE("unable to load symbol acr_type_count");
 	LOG_DEBUG("global_acr_type_count_v5 = %d", *global_acr_type_count_v5);
 
-	gen_get_value_code = dlsym(handle, "gen_get_value_code");
+	gen_get_value_code = dlsym(handle_v5, "gen_get_value_code");
 	LE("unable to load symbol gen_get_value_code");
 
-	gen_set_value_code = dlsym(handle, "gen_set_value_code");
+	gen_set_value_code = dlsym(handle_v5, "gen_set_value_code");
 	LE("unable to load symbol gen_set_value_code");
 
 	if (*global_acr_type_count_v5 != 0)
-		acr_info_list_v5 = (ACR_INFO_T_V5 *) dlsym(handle, "acr_list");
+		acr_info_list_v5 = (ACR_INFO_T_V5 *) dlsym(handle_v5, "acr_list");
 
-	ace_lib_for_gdb_len_v5 = (unsigned *) dlsym(handle, "ace_lib_for_gdb_len");
+	ace_lib_for_gdb_len_v5 = (unsigned *) dlsym(handle_v5, "ace_lib_for_gdb_len");
 	LE("unable to load symbol ace_lib_fog_gdb_len");
 	LOG_DEBUG("ace_lib_for_gdb_len_v5 = %d", *ace_lib_for_gdb_len_v5);
 
-	ace_lib_for_gdb_v5 = (const char *) dlsym(handle, "ace_lib_for_gdb");
+	ace_lib_for_gdb_v5 = (const char *) dlsym(handle_v5, "ace_lib_for_gdb");
 	LE("unable to load symbol ace_lib_for_gdb");
 
 	LOG_DEBUG("end of loadSharedLib");
 	return 0;
 }
 
-char *so_name;
+static char *so_name;
 static int32_t init_core_ace_reg_list(const char *aceconf)
 {
 	int32_t ret;

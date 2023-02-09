@@ -581,9 +581,9 @@ static int aice_pipe_execute_custom_script(struct target *target, const char *sc
 	char line[AICE_PIPE_MAXLINE];
 	char command[AICE_PIPE_MAXLINE];
 
-	memset( command, 0, AICE_PIPE_MAXLINE );
+	memset(command, 0, AICE_PIPE_MAXLINE);
 	command[0] = AICE_CUSTOM_SCRIPT;
-	strncpy( command+1, script, strlen(script) );
+	strcpy(command+1, script);
 
 	if (aice_pipe_write(command, 1+strlen(script)+1) < 0)  ///< length[ CMD, filename, '\0' ]
 		return ERROR_FAIL;
@@ -629,7 +629,7 @@ static int aice_pipe_monitor_command( uint32_t nCmd, char **command, int *len, c
 	}
 	free(send_command);
 
-    memset(line, 0, AICE_PIPE_MAXLINE);
+	memset(line, 0, AICE_PIPE_MAXLINE);
 	if (aice_pipe_read(line, AICE_PIPE_MAXLINE) < 0)
 		return ERROR_FAIL;
 
@@ -646,8 +646,8 @@ static int aice_pipe_monitor_command( uint32_t nCmd, char **command, int *len, c
 	}
 	memcpy(*ret_data, line+1, 4+ret_size);   // LEN=4-Bytes, DATA=szie-Bytes
 
-    if( line[1+4+ret_size] != 0 )
-        return handle_receive_cmd(line+1+4+ret_size);
+	if (line[1+4+ret_size] != 0)
+		return handle_receive_cmd(line+1+4+ret_size);
 
 	return ERROR_OK;
 }

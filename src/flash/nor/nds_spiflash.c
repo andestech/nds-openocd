@@ -1272,7 +1272,7 @@ int ndsspi_algorithm_apis_init(struct flash_bank *bank)
 		if (nds_algorithm_wa == NULL) {
 			if (target_alloc_working_area(target, read_size,
 						&nds_algorithm_wa) != ERROR_OK) {
-				LOG_ERROR("error: Couldn't allocate %zd-byte working area.",
+				LOG_ERROR("error: Couldn't allocate %u-byte working area.",
 						read_size);
 				retval = ERROR_FAIL;
 				goto ndsspi_init_finish;

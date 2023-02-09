@@ -496,8 +496,8 @@ static int vtarget_log_callback(void *priv)
 
 		memset(log_buffer, 0, sizeof(log_buffer));
 		if (log_output_path)
-			strncpy(log_buffer, log_output_path, strlen(log_output_path));
-		strncat(log_buffer, Log_File_Name[LogFileIdx], strlen(Log_File_Name[LogFileIdx]));
+			strcpy(log_buffer, log_output_path);
+		strcat(log_buffer, Log_File_Name[LogFileIdx]);
 		pLogFile = fopen(log_buffer, "w");
 		set_log_output(NULL, pLogFile);
 	}
@@ -640,9 +640,9 @@ COMMAND_HANDLER(handle_vtarget_query_cpuid_command)
 		number_of_core++;
 
 	if (number_of_core == 0)
-		command_print(CMD, "");
+		command_print(CMD, " ");
 	else if (number_of_core == 1)
-		command_print(CMD, "");
+		command_print(CMD, " ");
 	else {
 		/*
 		command_print(CMD, "%s%d_target%d", target->tap->tapname,

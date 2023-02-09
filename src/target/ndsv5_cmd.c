@@ -419,8 +419,11 @@ __COMMAND_HANDLER(handle_ndsv5_configure_command)
 			}
 			if (log_path_len > 0) {
 				strncpy(nds_remotetargetburn_fpath, log_output_path, log_path_len);
-				if (log_output_path[log_path_len - 1] != '/')
-					strncat(nds_remotetargetburn_fpath, "/", 1);
+				if (log_output_path[log_path_len - 1] != '/') {
+					/* strncat(nds_remotetargetburn_fpath, "/", 1); */
+					nds_remotetargetburn_fpath[log_path_len] = '/';
+					nds_remotetargetburn_fpath[log_path_len+1] = '\0';
+				}
 			}
 		}
 		strncat(nds_remotetargetburn_fpath, filename, filename_len);
@@ -429,7 +432,7 @@ __COMMAND_HANDLER(handle_ndsv5_configure_command)
 		remove(nds_remotetargetburn_fpath);
 		nds_remotetargetburn_buffer = calloc(nds_remotetargetburn_fsize, 1);
 		collect_remotetargetburn_file = true;
-		command_print(CMD, "configure: %d %s", strlen(nds_remotetargetburn_fpath), nds_remotetargetburn_fpath);
+		command_print(CMD, "configure: %lu %s", strlen(nds_remotetargetburn_fpath), nds_remotetargetburn_fpath);
 	} else if (strcmp(CMD_ARGV[0], "algorithm_bin") == 0) {
 		if (user_algorithm_path)
 			free(user_algorithm_path);
@@ -614,7 +617,7 @@ __COMMAND_HANDLER(handle_ndsv5_configure_command)
 		if (CMD_ARGC > 1)
 			COMMAND_PARSE_NUMBER(u64, CMD_ARGV[1], L2C_BASE);
 		ndsv5_l2c_support = 1;
-		command_print(CMD, "configure: %s = 0x%llx", CMD_ARGV[0], L2C_BASE);
+		command_print(CMD, "configure: %s = 0x%" PRIx64, CMD_ARGV[0], L2C_BASE);
 	} else {
 		command_print(CMD, "configure: property '%s' unknown!", CMD_ARGV[0]);
 		NDS32_LOG("<-- configure: property '%s' unknown! -->", CMD_ARGV[0]);
@@ -4050,8 +4053,8 @@ int ndsv5_get_ebreak_length(struct target *target, uint64_t reg_pc_value)
 
 #define NDS32_STRUCT_STAT_SIZE 104	/* 60 */
 #define NDS32_STRUCT_TIMEVAL_SIZE 8
-uint8_t stat_buffer[NDS32_STRUCT_STAT_SIZE];
-uint8_t timeval_buffer[NDS32_STRUCT_TIMEVAL_SIZE];
+static uint8_t stat_buffer[NDS32_STRUCT_STAT_SIZE];
+static uint8_t timeval_buffer[NDS32_STRUCT_TIMEVAL_SIZE];
 
 #define NDS32_STRUCT_TIMEVAL_SIZE_64 16
 uint8_t timeval_buffer_64[NDS32_STRUCT_TIMEVAL_SIZE_64];
@@ -4372,6 +4375,7 @@ void ndsv5_decode_progbuf(char *text, uint32_t cur_instr)
 								gpr_and_fpu_name[bits(cur_instr, 11, 7)],
 								gpr_and_fpu_name[bits(cur_instr, 19, 15)],
 								bits(cur_instr, 30, 20));
+							break;
 						case 4:/* vsetvl rd, rs1, rs2 */
 							sprintf(text, "%s %s, %s, %s",
 								vector_description[i].name,

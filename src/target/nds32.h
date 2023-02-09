@@ -27,14 +27,13 @@
 #include "target_type.h"
 #include "register.h"
 #include "breakpoints.h"
-#include "nds32_reg.h"
 #include "nds32_insn.h"
 #include "nds32_edm.h"
 
 #if (_NDS32_ONLY_ == 0)
 #define DBG_REASON_TRACE_BUFFULL         8
 #define DBG_REASON_HIT_MONITOR_WATCH     9
-	
+
 #define BP_WP_LENGTH_MASK    (~0xFF000000)
 #define BP_WP_NON_SIMPLE     0x80000000
 #define BP_WP_TRIGGER_ON     0x40000000

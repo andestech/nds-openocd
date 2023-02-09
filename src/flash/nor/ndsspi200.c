@@ -1099,7 +1099,7 @@ static int ndsspi200_erase(struct flash_bank *bank, int first, int last)
 			target_free_working_area(target, nds_algorithm_wa);
 			nds_algorithm_wa = NULL;
 		} else
-			LOG_DEBUG("write code to 0x%" TARGET_PRIxADDR ": 0x%x bytes",
+			LOG_DEBUG("write code to 0x%" TARGET_PRIxADDR ": 0x%lx bytes",
 				nds_algorithm_wa->address, sizeof(algorithm_bin));
 	}
 
@@ -1229,7 +1229,7 @@ static int ndsspi200_write(struct flash_bank *bank, const uint8_t *buffer,
 			target_free_working_area(target, nds_algorithm_wa);
 			nds_algorithm_wa = NULL;
 		} else
-			LOG_DEBUG("write code to 0x%" TARGET_PRIxADDR ": 0x%x bytes",
+			LOG_DEBUG("write code to 0x%" TARGET_PRIxADDR ": 0x%lx bytes",
 					nds_algorithm_wa->address, sizeof(algorithm_bin));
 	}
 
