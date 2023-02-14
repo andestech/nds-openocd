@@ -4163,6 +4163,11 @@ static bool gdb_regno_cacheable(enum gdb_regno regno, bool write)
 	/* access_stack_protection_regs_v5 will modified $sp during test */
 	if (regno == GDB_REGNO_SP)
 		return false;
+	/* For ACE */
+	if (regno == GDB_REGNO_T0 ||
+	    regno == GDB_REGNO_T1 ||
+	    regno == GDB_REGNO_T2)
+		return false;
 #endif
 
 	/* GPRs, FPRs, vector registers are just normal data stores. */
