@@ -331,10 +331,12 @@ static int riscv_examine(struct target *target)
 	info->dtmcontrol_idle = get_field(dtmcontrol, DTM_DTMCS_IDLE);
 
 	uint32_t dmstatus = dmi_read(target, DMI_DMSTATUS);
-	if (get_field(dmstatus, DMI_DMSTATUS_VERSION) != 2 ||
-	    get_field(dmstatus, DMI_DMSTATUS_VERSION) != 3) {
-		LOG_ERROR("OpenOCD only supports Debug Module version 2 or 3, not %d "
-				"(dmstatus=0x%x)", get_field(dmstatus, DMI_DMSTATUS_VERSION), dmstatus);
+	int dmstatus_version = get_field(dmstatus, DMI_DMSTATUS_VERSION);
+	if (dmstatus_version != 2 && dmstatus_version != 3) {
+		LOG_ERROR("OpenOCD only supports Debug Module version 2 (0.13) and 3 (0.14), not "
+				"%d (dmstatus=0x%x). This error might be caused by a JTAG "
+				"signal issue. Try reducing the JTAG clock speed.",
+				get_field(dmstatus, DMI_DMSTATUS_VERSION), dmstatus);
 		return ERROR_FAIL;
 	}
 
