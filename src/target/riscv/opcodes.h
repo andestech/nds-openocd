@@ -238,6 +238,11 @@ static uint32_t fence_i(void)
 static uint32_t lui(unsigned int dest, uint32_t imm) __attribute__ ((unused));
 static uint32_t lui(unsigned int dest, uint32_t imm)
 {
+#if _NDS_V5_ONLY_
+	return (bits(imm, 19, 0) << 12) |
+		(dest << 7) |
+		MATCH_LUI;
+#endif
 	return imm_u(imm) | inst_rd(dest) | MATCH_LUI;
 }
 
