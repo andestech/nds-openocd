@@ -2611,6 +2611,7 @@ exit:
 	return result;
 }
 
+extern int ndsv5_tracer_polling(struct target *target);
 /*** OpenOCD Interface ***/
 int riscv_openocd_poll(struct target *target)
 {
@@ -2618,6 +2619,7 @@ int riscv_openocd_poll(struct target *target)
 	int halted_hart = -1;
 	enum target_state old_state = target->state;
 
+	ndsv5_tracer_polling(target);
 	if (target->smp) {
 		unsigned halts_discovered = 0;
 		unsigned should_remain_halted = 0;

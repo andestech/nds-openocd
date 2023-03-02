@@ -123,6 +123,8 @@ extern uint32_t ndsv5_check_idlm_capability_before;
 extern uint64_t ndsv5_backup_mstatus;
 extern uint64_t MSTATUS_VS;
 extern uint64_t L2C_BASE;
+
+extern char *ndsv5_dump_trace_folder;
 /********************************************************************/
 
 

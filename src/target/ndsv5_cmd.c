@@ -7,7 +7,7 @@
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
- 
+
 #include <assert.h>
 #include <stdlib.h>
 #include <time.h>
@@ -40,6 +40,21 @@ extern int ndsv5_profile_init(struct target *target);
 extern int ndsv5_profile_state(struct target *target);
 extern int ndsv5_profile_post(struct target *target);
 extern int ndsv5_burner_server_init(struct target *target);
+
+/* Trace */
+extern uint32_t ndsv5_tracer_all_cores_setting(void);
+extern uint32_t ndsv5_tracer_disable(struct target *target);
+extern int ndsv5_tracer_dumpfile(struct target *target, char *pFileName);
+extern int ndsv5_tracer_decode_pktfile(char *pFileName);
+extern int ndsv5_tracer_polling(struct target *target);
+extern int ndsv5_tracer_capability_check(struct target *target);
+extern uint32_t nds_tracer_action;
+extern uint32_t nds_tracer_stop_on_wrap;
+extern uint32_t nds_trTeSyncMax, nds_trTeInstMode;
+extern uint32_t nds_teInhibitSrc;
+extern uint64_t nds_tracer_active_id;
+extern uint32_t nds_timestamp_on, nds_trTsControl;
+extern uint32_t nds_trTeFilteriMatchInst;
 
 /* global command context from openocd.c */
 extern struct command_context *global_cmd_ctx;
@@ -93,6 +108,7 @@ uint32_t nds_bak_debug_buf_size;
 
 struct nds32_v5 *gpnds32_v5;
 extern unsigned int MaxLogFileSize;
+char *ndsv5_dump_trace_folder;
 
 
 static const char *const NDS_MEMORY_ACCESS_NAME[] = {
@@ -682,6 +698,15 @@ __COMMAND_HANDLER(handle_ndsv5_configure_command)
 
 		command_print(CMD, "configure: %s = 0x%08x", CMD_ARGV[0], option);
 		nds32->no_n22_workaround_imprecise_div = option;
+	} else if (strcmp(CMD_ARGV[0], "dump-trace-folder") == 0) {
+		if (CMD_ARGC > 1)
+			ndsv5_dump_trace_folder = strdup(CMD_ARGV[1]);
+
+		if (!ndsv5_dump_trace_folder) {
+			LOG_ERROR("configure: %s failed", CMD_ARGV[0]);
+			return ERROR_FAIL;
+		}
+		command_print(CMD, "configure: %s = %s", CMD_ARGV[0], ndsv5_dump_trace_folder);
 	} else {
 		command_print(CMD, "configure: property '%s' unknown!", CMD_ARGV[0]);
 		NDS32_LOG("<-- configure: property '%s' unknown! -->", CMD_ARGV[0]);
@@ -1732,17 +1757,18 @@ static const char * const p_target_state[] = {
 };
 
 static const char * const target_debug_reason[] = {
-	"debug-request",
+	"debug-request", /* 0 */
 	"breakpoint",
 	"watchpoint",
 	"watchpoint-and-breakpoint",
 	"single-step",
-	"target-not-halted",
+	"target-not-halted", /* 5 */
 	"program-exit",
+	"exc_catch",
 	"undefined",
-	"buf-full",
-	"hit-user-watch",
-	"hit-exceptions",
+	"buf-full",          /* 9  */
+	"hit-user-watch",    /* 10 */
+	"hit-exceptions",    /* 11 */
 };
 
 int ndsv5_handle_poll(struct target *target)
@@ -4560,5 +4586,90 @@ void ndsv5_decode_progbuf(char *text, uint32_t cur_instr)
 	/*
 	NDS_INFO("%s", text);
 	*/
+}
+
+__COMMAND_HANDLER(handle_ndsv5_tracer_command)
+{
+	struct target *target = get_current_target(CMD_CTX);
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	LOG_DEBUG("NDS tracer on [%s] hart %d", target->tap->dotted_name, target->coreid);
+
+	if (nds32 == NULL) {
+		LOG_ERROR("gpnds32_v5 is NULL");
+		return ERROR_FAIL;
+	}
+
+	if (strcmp(CMD_ARGV[0], "on") == 0) {
+		LOG_DEBUG("trace on");
+		nds_tracer_action = CSR_MCONTROL_ACTION_TRACE_OFF;
+		nds_tracer_stop_on_wrap = 1;
+		ndsv5_tracer_all_cores_setting();
+	} else if (strcmp(CMD_ARGV[0], "off") == 0) {
+		LOG_DEBUG("trace off");
+		ndsv5_tracer_disable(target);
+	} else if (strcmp(CMD_ARGV[0], "to") == 0) {
+		LOG_DEBUG("trace to");
+		nds_tracer_action = CSR_MCONTROL_ACTION_TRACE_OFF;
+		nds_tracer_stop_on_wrap = 0;
+		ndsv5_tracer_all_cores_setting();
+	} else if (strcmp(CMD_ARGV[0], "from") == 0) {
+		LOG_DEBUG("trace from");
+		/* nds_tracer_action = CSR_MCONTROL_ACTION_TRACE_ON; */
+		nds_tracer_action = CSR_MCONTROL_ACTION_TRACE_OFF;
+		nds_tracer_stop_on_wrap = 1;
+		ndsv5_tracer_all_cores_setting();
+	} else if (strcmp(CMD_ARGV[0], "dump-trace-file") == 0) {
+		LOG_DEBUG("trace dump-trace-file %s", CMD_ARGV[1]);
+		ndsv5_tracer_dumpfile(target, (char *)CMD_ARGV[1]);
+	} else if (strcmp(CMD_ARGV[0], "decode-trace-file") == 0) {
+		LOG_DEBUG("trace decode-trace-file %s", CMD_ARGV[1]);
+		ndsv5_tracer_decode_pktfile((char *)CMD_ARGV[1]);
+	} else if (strcmp(CMD_ARGV[0], "sync-period") == 0) {
+		unsigned int sync_period = 0;
+		COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], sync_period);
+		LOG_DEBUG("sync-period 0x%x", sync_period);
+		nds_trTeSyncMax = sync_period;
+	} else if ((strcmp(CMD_ARGV[0], "src-field") == 0) && (CMD_ARGC > 1)) {
+		unsigned int IfSrcBit = 0;
+		COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], IfSrcBit);
+		LOG_DEBUG("src-field 0x%x", IfSrcBit);
+		if (IfSrcBit)
+			nds_teInhibitSrc = 0;
+		else
+			nds_teInhibitSrc = 1;
+	} else if ((strcmp(CMD_ARGV[0], "trace-hart") == 0) && (CMD_ARGC > 1)) {
+		unsigned long active_src = 0;
+		COMMAND_PARSE_NUMBER(u64, CMD_ARGV[1], active_src);
+		LOG_DEBUG("trace-hart 0x%lx", active_src);
+		nds_tracer_active_id = active_src;
+	} else if ((strcmp(CMD_ARGV[0], "inst-mode") == 0) && (CMD_ARGC > 1)) {
+		unsigned int InstMode = 0;
+		COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], InstMode);
+		LOG_DEBUG("inst-mode 0x%x", InstMode);
+		nds_trTeInstMode = InstMode;
+	} else if ((strcmp(CMD_ARGV[0], "match-inst") == 0) && (CMD_ARGC > 1)) {
+		unsigned int matchinst = 0;
+		COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], matchinst);
+		LOG_DEBUG("match-inst 0x%x", matchinst);
+		nds_trTeFilteriMatchInst = matchinst;
+	} else if (strcmp(CMD_ARGV[0], "timestamp") == 0) {
+		unsigned int timestamp_on = 0;
+		if (CMD_ARGC > 1) {
+			COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], timestamp_on);
+			LOG_DEBUG("timestamp_on = 0x%x", timestamp_on);
+		}
+
+		unsigned int trTsControl = 0;
+		if (CMD_ARGC > 2) {
+			COMMAND_PARSE_NUMBER(u32, CMD_ARGV[2], trTsControl);
+			LOG_DEBUG("trTsControl = 0x%x", trTsControl);
+		}
+		LOG_DEBUG("timestamp 0x%x", trTsControl);
+		nds_trTsControl = trTsControl;
+		nds_timestamp_on = timestamp_on;
+	} else {
+		command_print(CMD, "NDS tracer command ERROR");
+	}
+	return ERROR_OK;
 }
 

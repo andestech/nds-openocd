@@ -3066,3 +3066,301 @@
 #define DMI_SERRX_DATA_OFFSET               0
 #define DMI_SERRX_DATA_LENGTH               0x20
 #define DMI_SERRX_DATA                      0xffffffffU
+
+/* Trace Encoder Base Address */
+#define DMI_TEADDRESSBASE    0x2000
+
+/* General */
+#define DMI_TECONTROL        0x0000 /* Trace Encoder/Funnel Control Register */
+#define DMI_TEIMPL           0x0001 /* Trace Encoder/Funnel Implementation Information */
+#define DMI_TEINSTFEATURES   0x0002 /* Extra Instruction Trace Encoder Features */
+
+/* Timestamp Register */
+#define DMI_TSCONTROL        0x0010 /* Timestamp Control Register */
+#define DMI_TSLOWER          0x0011 /* Lower 32 Bits of Timestamp Counter */
+#define DMI_TSUPPER          0x0012 /* Upper Bits of Timestamp Counter */
+
+/* External Trigger Register Interface */
+#define DMI_XTRIGINCONTROL   0x015 /* External Trigger Input Control Register */
+#define DMI_XTRIGOUTCONTROL  0x016 /* External Trigger Output Control Register */
+
+/* Trace Filter Control */
+#define DMI_TEFILTER         0x100 /* Filter Control Register */
+#define DMI_TEFILTERMATCH0   0x101 /* Filter Match Control Register 0 */
+#define DMI_TEFILTERMATCH1   0x104 /* Filter Match Control Register 1 */
+#define DMI_TEFILTERMATCH2   0x105 /* Filter Match Control Register 2 */
+
+/* Miscellaneous Registers */
+#define DMI_ATBCONTROL       0x400 /* Control Registers for ATB Trace Sink */
+
+/* Trace Buffer Base Address */
+#define DMI_TBADDRESSBASE    0x800
+
+/* Function Mode Registers */
+#define  DMI_TRRAMCONTROL    (DMI_TBADDRESSBASE + 0x00) /* Trace Buffer Control Register */
+#define  DMI_TRRAMIMPL       (DMI_TBADDRESSBASE + 0x01) /* Trace Buffer Control Register */
+#define  DMI_TRRAMSTARTLOW   (DMI_TBADDRESSBASE + 0x04) /* Trace Buffer Start Register */
+#define  DMI_TRRAMSTARTHIGH  (DMI_TBADDRESSBASE + 0x05) /* Trace Buffer Start High Bits Register */
+#define  DMI_TRRAMLIMITLOW   (DMI_TBADDRESSBASE + 0x06) /* Trace Buffer Limit Register */
+#define  DMI_TRRAMLIMITHIGH  (DMI_TBADDRESSBASE + 0x07) /* Trace Buffer Limit High Bits Register */
+#define  DMI_TRRAMWPLOW      (DMI_TBADDRESSBASE + 0x08) /* Trace Buffer Write Pointer Register */
+#define  DMI_TRRAMWPHIGH     (DMI_TBADDRESSBASE + 0x09) /* Trace Buffer Write Pointer High Bits Register */
+#define  DMI_TRRAMRPLOW      (DMI_TBADDRESSBASE + 0x0A) /* Trace Buffer Read Pointer Register */
+#define  DMI_TRRAMRPHIGH     (DMI_TBADDRESSBASE + 0x0B) /* Trace Buffer Read Pointer High Bits Register */
+#define  DMI_TRRAMDATA       (DMI_TBADDRESSBASE + 0x10) /* Trace Buffer Data Register */
+
+#define DMI_TFCONTROL   DMI_TRRAMCONTROL
+#define DMI_TFIMPL      DMI_TRRAMIMPL
+#define DMI_TFRAMBASE   DMI_TRRAMSTARTLOW
+#define DMI_TFRAMLIMIT  DMI_TRRAMLIMITLOW
+#define DMI_TERAMWP     DMI_TRRAMWPLOW
+#define DMI_TERAMRP     DMI_TRRAMRPLOW
+#define DMI_TERAMDATA   DMI_TRRAMDATA
+
+/* older version ncetrace200 */
+/* #define DMI_TFCONTROL   (DMI_TBADDRESSBASE + 0x000) // Trace Buffer Control Register */
+/* #define DMI_TFIMPL      (DMI_TBADDRESSBASE + 0x001) // Trace Buffer Implementation Information Register */
+/* #define DMI_TFRAMBASE   (DMI_TBADDRESSBASE + 0x004) // Trace Buffer RAM Base Register */
+/* #define DMI_TFRAMLIMIT  (DMI_TBADDRESSBASE + 0x006) // Trace Buffer RAM Limit Register */
+/* #define DMI_TERAMWP     (DMI_TBADDRESSBASE + 0x007) // Trace Buffer Write Pointer Register */
+/* #define DMI_TERAMRP     (DMI_TBADDRESSBASE + 0x008) // Trace Buffer Read Pointer Register */
+/* #define DMI_TERAMDATA   (DMI_TBADDRESSBASE + 0x009) // Trace Buffer Data Register */
+
+
+/* CoreSight Integration Registers */
+#define ITATBDATA0      (DMI_TBADDRESSBASE + 0x7BB) /* Integration Test ATB Data Register 0 */
+#define ITATBCTR2       (DMI_TBADDRESSBASE + 0x7BC) /* Integration Test ATB Control Register 2 */
+#define ITATBCTR1       (DMI_TBADDRESSBASE + 0x7BD) /* Integration Test ATB Control Register 1 */
+#define ITATBCTR0       (DMI_TBADDRESSBASE + 0x7BE) /* Integration Test ATB Control Register 0 */
+
+/* CoreSight Registers */
+#define ITCTRL          (DMI_TBADDRESSBASE + 0x7C0)
+#define CLAIMSET        (DMI_TBADDRESSBASE + 0x7E8)
+#define CLAIMCLR        (DMI_TBADDRESSBASE + 0x7E9)
+#define AUTHSTATUS      (DMI_TBADDRESSBASE + 0x7EE)
+#define TB_DEVARCH      (DMI_TBADDRESSBASE + 0x7EF)
+#define DEVID           (DMI_TBADDRESSBASE + 0x7F2)
+#define DEVTYPE         (DMI_TBADDRESSBASE + 0x7F3)
+#define PIDR4           (DMI_TBADDRESSBASE + 0x7F4)
+#define PIDR5           (DMI_TBADDRESSBASE + 0x7F5)
+#define PIDR6           (DMI_TBADDRESSBASE + 0x7F6)
+#define PIDR7           (DMI_TBADDRESSBASE + 0x7F7)
+#define PIDR0           (DMI_TBADDRESSBASE + 0x7F8)
+#define PIDR1           (DMI_TBADDRESSBASE + 0x7F9)
+#define PIDR2           (DMI_TBADDRESSBASE + 0x7FA)
+#define PIDR3           (DMI_TBADDRESSBASE + 0x7FB)
+#define CIDR0           (DMI_TBADDRESSBASE + 0x7FC)
+#define CIDR1           (DMI_TBADDRESSBASE + 0x7FD)
+#define CIDR2           (DMI_TBADDRESSBASE + 0x7FE)
+#define CIDR3           (DMI_TBADDRESSBASE + 0x7FF)
+
+
+/* Trace Multiplexer Base Address */
+#define DMI_TMUXADDRESSBASE     0x1000
+#define TMUX_trFunnelControl   (DMI_TMUXADDRESSBASE + 0x0)   /* trFunnelControl, Control Register */
+#define TMUX_trFunnelImpl      (DMI_TMUXADDRESSBASE + 0x1)   /* trFunnelImpl, Implementation register */
+#define TMUX_ITTMUXCTRL        (DMI_TMUXADDRESSBASE + 0x7BF) /* Integration Test Control Register */
+#define TMUX_DEVARCH           (DMI_TMUXADDRESSBASE + 0x7EF) /* 0x1FBC DEVARCH, Device Architecture Register */
+
+/* trFunnelActive Primary enable for trace funnel
+When 0, the Trace Funnel may have clocks gated off or be powered down */
+#define TMUX_trFunnelControl_trFunnelActive    0x01
+/* trFunnelEnable Trace Funnel enabled */
+#define TMUX_trFunnelControl_trFunnelEnable    0x02
+
+/* PLDM Abstract Command Macros */
+#define CMD_ACCESS_REG      0x0
+#define CMD_QUICK_ACCESS    0x1
+#define CMD_QUICK_MEM       0x2
+
+/* for the transfer field */
+#define CMD_INSTFEED        0x0
+#define CMD_ABSCMD          0x1
+
+/* for the size field */
+#define CMD_SIZE_32         0x2
+#define CMD_SIZE_64         0x3
+#define CMD_SIZE_128        0x4
+
+/* for postexec */
+#define CMD_NOPOSTEXEC      0x0
+#define CMD_POSTEXEC        0x1
+
+/* for the write field */
+#define CMD_READ     0x0
+#define CMD_WRITE    0x1
+
+/* PLDM System Bus Access Macros */
+/* for sbversion field */
+#define SB_VER_DRAFT17      0x0
+#define SB_VER_DRAFT18      0x1
+
+/* for sbbusyerror field (Draft-18) */
+#define SB_KEEPBUSYERROR    0x0
+#define SB_CLEARBUSYERROR   0x1
+
+/* for sbsingleread field (Draft-17) */
+#define SB_NOSINGLEREAD     0x0
+#define SB_SINGLEREAD       0x1
+
+/* for sbreadonaddr field (Draft-18) */
+#define SB_NOREADONADDR     0x0
+#define SB_READONADDR       0x1
+
+/* for sbaccess field */
+#define SB_SIZE_8		  0x0
+#define SB_SIZE_16		0x1
+#define SB_SIZE_32		0x2
+#define SB_SIZE_64		0x3
+#define SB_SIZE_128		0x4
+
+/* for sbautoincrement field */
+#define SB_NOAUTOINCREMENT	0x0
+#define SB_AUTOINCREMENT	0x1
+
+/* for sbautoread field (Draft-17) */
+#define SB_NOAUTOREAD		0x0
+#define SB_AUTOREAD			0x1
+
+/* for sbreadondata field (Draft-18) */
+#define SB_NOREADONDATA		0x0
+#define SB_READONDATA		0x1
+
+/* for sberror field */
+#define SB_KEEPERROR		0x0
+#define SB_CLEARERROR		0x7
+
+/* for busy check */
+#define BUS_ACCESS			0x1
+#define FORCE_CHECK_BUSY	0x1
+#define MAYBE_CHECK_BUSY	0x0
+
+/* Trace Encoder/Funnel Control Register */
+#define DMI_TECONTROL_teSink_MASK      (0x0f << 28)
+#define DMI_TECONTROL_teFormat_MASK    (0x07 << 24)
+#define DMI_TECONTROL_teSyncMax_SHIFT  20
+#define DMI_TECONTROL_teSyncMax_MASK   (0x0f << DMI_TECONTROL_teSyncMax_SHIFT)
+#define DMI_TECONTROL_teSyncMode_SHIFT 16
+#define DMI_TECONTROL_teSyncMode_MASK  (0x03 << DMI_TECONTROL_teSyncMode_SHIFT)
+
+#define DMI_TECONTROL_teInhibitSrc     (0x01 << 15)
+#define DMI_TECONTROL_teInstStallEn    (0x01 << 13)
+#define DMI_TECONTROL_teInstStallOrOverflow (0x01 << 12)
+
+#define DMI_TECONTROL_teInstTrigEn     (0x01 << 11)
+#define DMI_TECONTROL_ndsSyncExtra     (0x01 << 9)  /* ndsTraceOnDebug ? */
+#define DMI_TECONTROL_ndsTracePID      (0x01 << 8)
+#define DMI_TECONTROL_ndsTracePRIV     (0x01 << 7)
+#define DMI_TECONTROL_teInstMode_SHIFT 4
+#define DMI_TECONTROL_teInstMode_MASK  (0x07 << DMI_TECONTROL_teInstMode_SHIFT)
+#define DMI_TECONTROL_teEmpty          (0x01 << 3)
+#define DMI_TECONTROL_teInstTracing    (0x01 << 2)
+#define DMI_TECONTROL_teEnable         (0x01 << 1)
+#define DMI_TECONTROL_teActive         (0x01 << 0)
+
+/* teInstFeatures, Extra Instruction Trace Encoder Features */
+#define	DMI_TEINSTFEATURES_trTeInstExtendAddrMSB      (0x01 << 10)
+#define	DMI_TEINSTFEATURES_teInstEnJumpTargetCache    (0x01 << 5)
+#define	DMI_TEINSTFEATURES_teInstEnBranchPrediction   (0x01 << 4)
+#define	DMI_TEINSTFEATURES_teInstEnCallStack          (0x01 << 3)
+#define	DMI_TEINSTFEATURES_teInstEnSequentialJump     (0x01 << 2)
+#define	DMI_TEINSTFEATURES_teInstNoTrapAddr           (0x01 << 1)
+#define	DMI_TEINSTFEATURES_teInstNoAddrDiff           (0x01 << 0)
+
+/* tsControl,  Timestamp Control Register */
+#define	DMI_TSCONTROL_tsWidth_SHIFT             24
+#define	DMI_TSCONTROL_tsWidth_MASK              (0xff << DMI_TSCONTROL_tsWidth_SHIFT)
+#define	DMI_TSCONTROL_ndsTimestampSelect_SHIFT  15
+#define	DMI_TSCONTROL_ndsTimestampSelect_MASK   (0x01 << DMI_TSCONTROL_ndsTimestampSelect_SHIFT)
+#define	DMI_TSCONTROL_tsPrescale_SHIFT          8
+#define	DMI_TSCONTROL_tsPrescale_MASK           (0x03 << DMI_TSCONTROL_tsPrescale_SHIFT)
+#define	DMI_TSCONTROL_tsType_SHIFT              4
+#define	DMI_TSCONTROL_tsType_MASK               (0x07 << DMI_TSCONTROL_tsType_SHIFT)
+#define	DMI_TSCONTROL_tsDebug                   (0x01 << 3)
+#define	DMI_TSCONTROL_tsReset                   (0x01 << 2)
+#define	DMI_TSCONTROL_tsCount                   (0x01 << 1)
+#define	DMI_TSCONTROL_tsActive                  (0x01 << 0)
+
+/* atbControl, Control Registers for ATB Trace Sink */
+#define	DMI_ATBCONTROL_atbId_SHIFT     8
+#define	DMI_ATBCONTROL_atbId_MASK      (0x7f << DMI_ATBCONTROL_atbId_SHIFT)
+#define	DMI_ATBCONTROL_atbEmpty        (0x01 << 3)
+#define	DMI_ATBCONTROL_atbEnable       (0x01 << 1)
+#define	DMI_ATBCONTROL_atbActive       (0x01 << 0)
+
+/* tfControl, Trace Buffer Control Register */
+#define	DMI_TFCONTROL_trRamStopOnWrap    (0x01 << 8)
+#define	DMI_TFCONTROL_trRamModeSBA       (0x01 << 4)
+#define	DMI_TFCONTROL_trRamEmpty         (0x01 << 3)
+#define	DMI_TFCONTROL_trRamEnable        (0x01 << 1)
+#define	DMI_TFCONTROL_trRamActive        (0x01 << 0)
+
+#define	DMI_TFCONTROL_tfSink_SHIFT     28
+#define	DMI_TFCONTROL_tfSink_MASK      (0x0f << DMI_TFCONTROL_tfSink_SHIFT)
+#define	DMI_TFCONTROL_teFormat_SHIFT   24
+#define	DMI_TFCONTROL_teFormat_MASK    (0x07 << DMI_TFCONTROL_teFormat_SHIFT)
+/* older version */
+/* #define	DMI_TFCONTROL_tfStopOnWrap     (0x01 << 14) */
+/* #define	DMI_TFCONTROL_tfEmpty          (0x01 << 3) */
+/* #define	DMI_TFCONTROL_tfEnable         (0x01 << 1) */
+/* #define	DMI_TFCONTROL_atbActive        (0x01 << 0) */
+#define	DMI_TFCONTROL_tfStopOnWrap     DMI_TFCONTROL_trRamStopOnWrap
+#define	DMI_TFCONTROL_tfEmpty          DMI_TFCONTROL_trRamEmpty
+#define	DMI_TFCONTROL_tfEnable         DMI_TFCONTROL_trRamEnable
+#define	DMI_TFCONTROL_atbActive        DMI_TFCONTROL_trRamActive
+
+/* Trace Buffer Write Pointer Register */
+#define	DMI_TERAMWP_teWrap             (0x01 << 0)
+#define	DMI_TERAMWP_teRamWp_MASK       (0xFFFFFFFC)
+
+/* debug trigger action */
+/* #define	ACTION_TRACE_ON		0x2, CSR_MCONTROL_ACTION_TRACE_ON */
+/* #define	ACTION_TRACE_OFF	0x3, CSR_MCONTROL_ACTION_TRACE_OFF */
+
+/* trace recording format */
+#define	NEXUS_TRACE_FORMAT        1
+#define	CORESIGHT_TRACE_FORMAT    7
+
+/* 6-MDO + 2-MSEO bits */
+/* MSEO[1:0] Description */
+#define MSEO_MASK       0x03
+/* The start of a message, fixed-length fields,
+	or in the middle of a variable-length fields;
+	All messages start with fixed-length fields (6-bit TCODE)
+	and these fields are packed together into bit [7:2] without any special marks. */
+#define MSEO_START      0x00
+/* The end of a variable-length field; variable-length fields are padded to align with MDO-boundaries. */
+#define MSEO_END_FIELD  0x01
+/* 0x03 The end of message. */
+#define MSEO_END_MSG    0x03
+
+/* TCODE,  Message Type (6-bits) */
+#define TCODE_OwnershipTrace          2
+#define TCODE_DirectBranch            3
+#define TCODE_IndirectBranch          4
+#define TCODE_Error                   8
+#define TCODE_ProgramTraceSync        9
+#define TCODE_DirectBranchSync        11
+#define TCODE_IndirectBranchSync      12
+#define TCODE_ResourceFull            27
+#define TCODE_IndirectBranchHist      28
+#define TCODE_IndirectBranchHistSync  29
+#define TCODE_ProgramCorrelation      33
+
+/* SYNC, Reason for Synchronization (4-bits) */
+#define SYNC_Exit_from_Reset       1 /* Exit from System Reset */
+#define SYNC_Period_Msg            2 /* Periodic Message Counter */
+#define SYNC_Exit_from_Debug       3 /* Exit from Debug */
+#define SYNC_Trace_Enable          5 /* Trace Enable */
+#define SYNC_Watchpoint            6 /* Watchpoint */
+#define SYNC_FIFO_Overrun          7 /* FIFO Overrun */
+#define SYNC_Exit_from_Power_down  9 /* Exit from Power-down */
+
+/* EVCODE, Reason to Generate Program Correlation */
+#define EVCODE_Entry_Debug_mode         0   /* Entry into Debug mode */
+#define EVCODE_Entry_LowPower_mode      1   /* Entry into Low-power mode */
+#define EVCODE_Program_Trace_Disabled   4   /* Program Trace Disabled */
+#define EVCODE_Process_ID_Change        5   /* Process ID Change */
+#define EVCODE_Privilege_Level_Change   8   /* Privilege Level Change (ndsExtension) */
+#define EVCODE_Entry_Prohibited_Region  15  /* Entry into Prohibited Region (ndsExtension) */
+
