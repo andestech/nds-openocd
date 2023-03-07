@@ -2797,10 +2797,18 @@ _exit:
 
 
 #if _NDS_V5_ONLY_ & _NDS_SUPPORT_WITHOUT_ANNOUNCING_
-	if (ndsv5_without_announce) {
-		ndsv5_without_announce = 0;
-		return success ? ERROR_OK : ERROR_FAIL;
-	}
+		if (ndsv5_without_announce) {
+			ndsv5_without_announce = 0;
+			return success ? ERROR_OK : ERROR_FAIL;
+		}
+
+
+		/* Reset all other debug reason */
+		struct target_list *tlist;
+		foreach_smp_target(tlist, target->smp_targets) {
+			struct target *t = tlist->target;
+			t->debug_reason = DBG_REASON_DBGRQ;
+		}
 #endif /* _NDS_V5_ONLY_ */
 
 		target->debug_reason = DBG_REASON_SINGLESTEP;
