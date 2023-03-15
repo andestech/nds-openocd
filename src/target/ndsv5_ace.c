@@ -229,7 +229,10 @@ int32_t get_ace_file_name_for_gdb_v5(const char *aceconf,
 			soname = (char *) malloc(16); /* must be malloc because there was a free() afterwards */
 			const char *str;
 
-			if (strcmp(platform, os.sysname) == 0) {
+			LOG_DEBUG("platform: %s", platform);
+			LOG_DEBUG("os.sysname: %s", platform);
+
+			if (strncmp(platform, os.sysname, 5) == 0) {
 				/* Return binary share library.  */
 				str = ace_lib_for_gdb_v5;
 			} else
