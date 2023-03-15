@@ -26,6 +26,7 @@ fi
 # bootstrap the autotools
 (
 set -x
+os_type=`uname`
 if [ "$os_type" = "Darwin" ]; then
 	aclocal -I $LIBTOOL_DIR -I /usr/local/share/aclocal
 else
