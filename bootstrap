@@ -28,6 +28,7 @@ fi
 set -x
 aclocal --warnings=all
 # Apparently, not all versions of libtoolize support option --warnings=all .
+os_type=`uname`
 if [ "$os_type" = "Darwin" ]; then
 	aclocal --warnings=all -I $LIBTOOL_DIR -I /usr/local/share/aclocal
 else
