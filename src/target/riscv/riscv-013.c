@@ -2096,6 +2096,11 @@ static int examine(struct target *target)
 		return ERROR_FAIL;
 	}
 
+#if _NDS_V5_ONLY_
+	if (register_read_direct(target, &r->marchid, (CSR_MARCHID + GDB_REGNO_CSR0)))
+		LOG_ERROR("Fatal: Failed to read MARCHID from hart %d.", r->current_hartid);
+#endif
+
 	if (riscv_supports_extension(target, 'V')) {
 		if (discover_vlenb(target) != ERROR_OK)
 			return ERROR_FAIL;

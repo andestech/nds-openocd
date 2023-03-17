@@ -1226,6 +1226,47 @@ static int old_or_new_riscv_step(struct target *target, int current,
 #endif
 {
 	RISCV_INFO(r);
+
+#if _NDS_V5_ONLY_
+	if (target->debug_reason == DBG_REASON_WPTANDBKPT) {
+		if ((r->marchid & 0xff) == 0x22) {
+			/* e-23516 Handling N22 Imprecise */
+			LOG_DEBUG("Handle N22 Imprecise");
+			if (current) {
+				riscv_reg_t pc;
+				riscv_get_register(target, &pc, GDB_REGNO_PC);
+
+
+				/* Read the original instruction. */
+				uint32_t instr = 0;
+				if (riscv_read_by_any_size(target, pc, 4, (uint8_t *)&instr) != ERROR_OK) {
+					LOG_ERROR("Failed to read original instruction at 0x%" TARGET_PRIxADDR, pc);
+					return ERROR_FAIL;
+				}
+
+				/* Check OPCODE */
+				/* LB/LH/LW/LBU/LHU: 0x3 */
+				/* SB/SH/SW: 0x23 */
+				LOG_DEBUG("instr: %x", instr);
+				if ((instr&0x7f) == 0x3 ||
+				    (instr&0x7f) == 0x23) {
+					riscv_set_register(target, GDB_REGNO_PC, pc+4);
+					register_cache_invalidate(target->reg_cache);
+
+					/* Pretending single step */
+					target->state = TARGET_RUNNING;
+					target_call_event_callbacks(target, TARGET_EVENT_RESUMED);
+					target->state = TARGET_HALTED;
+
+					target->debug_reason = DBG_REASON_SINGLESTEP;
+					target_call_event_callbacks(target, TARGET_EVENT_HALTED);
+					return ERROR_OK;
+				}
+			}
+		}
+	}
+#endif
+
 	LOG_DEBUG("handle_breakpoints=%d", handle_breakpoints);
 	if (!r->is_halted)
 		return oldriscv_step(target, current, address, handle_breakpoints);

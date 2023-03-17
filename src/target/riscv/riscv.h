@@ -119,6 +119,11 @@ typedef struct {
 	/* It's possible that each core has a different supported ISA set. */
 	int xlen;
 	riscv_reg_t misa;
+
+#if _NDS_V5_ONLY_
+	riscv_reg_t marchid;
+#endif
+
 	/* Cached value of vlenb. 0 if vlenb is not readable for some reason. */
 	unsigned int vlenb;
 
