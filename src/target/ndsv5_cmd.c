@@ -668,6 +668,20 @@ __COMMAND_HANDLER(handle_ndsv5_configure_command)
 			nds32->suppressed_hsp_exception = option;
 		else
 			return ERROR_FAIL;
+	} else if (strcmp(CMD_ARGV[0], "no-n22-workaround-imprecise-ldst") == 0) {
+		bool option = false;
+		if (CMD_ARGC > 1)
+			COMMAND_PARSE_ON_OFF(CMD_ARGV[1], option);
+
+		command_print(CMD, "configure: %s = 0x%08x", CMD_ARGV[0], option);
+		nds32->no_n22_workaround_imprecise_ldst = option;
+	} else if (strcmp(CMD_ARGV[0], "no-n22-workaround-imprecise-div") == 0) {
+		bool option = false;
+		if (CMD_ARGC > 1)
+			COMMAND_PARSE_ON_OFF(CMD_ARGV[1], option);
+
+		command_print(CMD, "configure: %s = 0x%08x", CMD_ARGV[0], option);
+		nds32->no_n22_workaround_imprecise_div = option;
 	} else {
 		command_print(CMD, "configure: property '%s' unknown!", CMD_ARGV[0]);
 		NDS32_LOG("<-- configure: property '%s' unknown! -->", CMD_ARGV[0]);

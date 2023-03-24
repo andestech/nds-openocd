@@ -1245,11 +1245,27 @@ static int old_or_new_riscv_step(struct target *target, int current,
 				}
 
 				/* Check OPCODE */
-				/* LB/LH/LW/LBU/LHU: 0x3 */
-				/* SB/SH/SW: 0x23 */
-				LOG_DEBUG("instr: %x", instr);
-				if ((instr&0x7f) == 0x3 ||
-				    (instr&0x7f) == 0x23) {
+				struct nds32_v5 *ndsv5 = target_to_nds32_v5(target);
+				uint8_t opcode = instr & 0x7f;
+				uint8_t funct3 = (instr >> 12) & 0x7;
+				bool should_skip = false;
+				LOG_DEBUG("instr: %x, opcode: %x, funct3: %x", instr, opcode, funct3);
+				if (!ndsv5->no_n22_workaround_imprecise_ldst &&
+				    ((opcode == 0x3) || (opcode == 0x23) || (opcode == 0x2F))) {
+					/* LB/LH/LW/LBU/LHU: 0x3 */
+					/* SB/SH/SW: 0x23 */
+					/* LR.W, SC.W, AMOSWAP.W, AMOADD.W, AMOAND.W, AMOOR.W,
+					 * AMOXOR.W, AMOMIN.W, AMOMAX.W, AMOMINU.W, AMOMAXU.W: 0x2F */
+					should_skip = true;
+				} else if (!ndsv5->no_n22_workaround_imprecise_div &&
+					   ((opcode == 0x33) && ((funct3>>2) == 1))) {
+					/* DIV, DIVU, REM, REMU: 0x33(and funct3 MSB=1) */
+					should_skip = true;
+				}
+
+				if (should_skip) {
+					LOG_DEBUG("Should Handle N22 Imprecise");
+
 					riscv_set_register(target, GDB_REGNO_PC, pc+4);
 					register_cache_invalidate(target->reg_cache);
 

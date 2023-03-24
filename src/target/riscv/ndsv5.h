@@ -334,6 +334,9 @@ struct nds32_v5 {
 	bool nds_do_fencei;
 
 	bool suppressed_hsp_exception;
+
+	bool no_n22_workaround_imprecise_ldst;
+	bool no_n22_workaround_imprecise_div;
 };
 
 extern char *ndsv5_script_custom_reset;
