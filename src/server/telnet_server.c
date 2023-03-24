@@ -373,7 +373,7 @@ static int telnet_input(struct connection *connection)
 				free(nds_remotetargetburn_buffer);
 				return ERROR_SERVER_REMOTE_CLOSED;
 			} else if (bytes_read == -1) {
-				if (errno == 11) {
+				if (errno == EAGAIN) {
 					/* try again; */
 					continue;
 				} else {
