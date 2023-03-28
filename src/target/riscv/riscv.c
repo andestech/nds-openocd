@@ -1233,49 +1233,8 @@ static int old_or_new_riscv_step(struct target *target, int current,
 			/* e-23516 Handling N22 Imprecise */
 			LOG_DEBUG("Handle N22 Imprecise");
 			if (current) {
-				riscv_reg_t pc;
-				riscv_get_register(target, &pc, GDB_REGNO_PC);
-
-
-				/* Read the original instruction. */
-				uint32_t instr = 0;
-				if (riscv_read_by_any_size(target, pc, 4, (uint8_t *)&instr) != ERROR_OK) {
-					LOG_ERROR("Failed to read original instruction at 0x%" TARGET_PRIxADDR, pc);
-					return ERROR_FAIL;
-				}
-
-				/* Check OPCODE */
-				struct nds32_v5 *ndsv5 = target_to_nds32_v5(target);
-				uint8_t opcode = instr & 0x7f;
-				uint8_t funct3 = (instr >> 12) & 0x7;
-				bool should_skip = false;
-				LOG_DEBUG("instr: %x, opcode: %x, funct3: %x", instr, opcode, funct3);
-				if (!ndsv5->no_n22_workaround_imprecise_ldst &&
-				    ((opcode == 0x3) || (opcode == 0x23) || (opcode == 0x2F))) {
-					/* LB/LH/LW/LBU/LHU: 0x3 */
-					/* SB/SH/SW: 0x23 */
-					/* LR.W, SC.W, AMOSWAP.W, AMOADD.W, AMOAND.W, AMOOR.W,
-					 * AMOXOR.W, AMOMIN.W, AMOMAX.W, AMOMINU.W, AMOMAXU.W: 0x2F */
-					should_skip = true;
-				} else if (!ndsv5->no_n22_workaround_imprecise_div &&
-					   ((opcode == 0x33) && ((funct3>>2) == 1))) {
-					/* DIV, DIVU, REM, REMU: 0x33(and funct3 MSB=1) */
-					should_skip = true;
-				}
-
-				if (should_skip) {
-					LOG_DEBUG("Should Handle N22 Imprecise");
-
-					riscv_set_register(target, GDB_REGNO_PC, pc+4);
-					register_cache_invalidate(target->reg_cache);
-
-					/* Pretending single step */
-					target->state = TARGET_RUNNING;
-					target_call_event_callbacks(target, TARGET_EVENT_RESUMED);
-					target->state = TARGET_HALTED;
-
-					target->debug_reason = DBG_REASON_SINGLESTEP;
-					target_call_event_callbacks(target, TARGET_EVENT_HALTED);
+				if (ndsv5_handle_n22_imprecise(target) == ERROR_OK) {
+					LOG_DEBUG("Handle N22 Imprecise Done");
 					return ERROR_OK;
 				}
 			}

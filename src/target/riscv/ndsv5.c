@@ -2952,3 +2952,108 @@ int ndsv5_suppressed_hsp_exception(struct target *target, bool option)
 	return ERROR_OK;
 }
 
+int ndsv5_handle_n22_imprecise(struct target *target)
+{
+	riscv_reg_t pc;
+	riscv_get_register(target, &pc, GDB_REGNO_PC);
+
+	/* Read the original instruction. */
+	uint32_t instr = 0;
+
+	/* Avoid misaligned issue */
+	if ((pc % 4) == 0) {
+		if (riscv_read_by_any_size(target, pc, 4, (uint8_t *)&instr) != ERROR_OK) {
+			LOG_ERROR("Failed to read original instruction at 0x%" TARGET_PRIxADDR, pc);
+			return ERROR_FAIL;
+		}
+	} else {
+		if (riscv_read_by_any_size(target, pc, 2, (uint8_t *)&instr) != ERROR_OK) {
+			LOG_ERROR("Failed to read original instruction at 0x%" TARGET_PRIxADDR, pc);
+			return ERROR_FAIL;
+		}
+	}
+
+	/* Check OPCODE */
+	struct nds32_v5 *ndsv5 = target_to_nds32_v5(target);
+	bool should_skip = false;
+
+	if ((instr&0x3) == 0x3) {
+		/* 32-bits instruction */
+		uint8_t opcode = instr & 0x7f;
+		uint8_t funct3 = (instr >> 12) & 0x7;
+		uint8_t funct2 = (instr >> 12) & 0x3;
+		LOG_DEBUG("instr: 0x%x, opcode: 0x%x, funct3: 0x%x, funct2: 0x%x",
+				instr, opcode, funct3, funct2);
+
+		if (!ndsv5->no_n22_workaround_imprecise_ldst) {
+			switch (opcode) {
+				case 0x3:	/* LB/LH/LW/LBU/LHU: 0x3 */
+				case 0x23:	/* SB/SH/SW: 0x23 */
+				case 0x2F:	/* LR.W, SC.W, AMOSWAP.W, AMOADD.W, AMOAND.W, AMOOR.W,
+						   AMOXOR.W, AMOMIN.W, AMOMAX.W, AMOMINU.W, AMOMAXU.W: 0x2F*/
+				case 0x2B:	/* LHGP, LHUGP, LDGP, LWGP, LWUGP, SHGP, SWGP, SDGP: 0x2B */
+					should_skip = true;
+					break;
+				case 0xB:
+					/* LBGP(funct2: 0x0), LBUGP(funct2: 0x2), SBGP(funct2: 0x3) */
+					if ((funct2 == 0x0) || (funct2 == 0x2) || (funct2 == 0x3))
+						should_skip = true;
+					break;
+				default:
+					break;
+			}
+		}
+
+		if (!ndsv5->no_n22_workaround_imprecise_div) {
+			if ((opcode == 0x33) && ((funct3>>2) == 1)) {
+				/* DIV, DIVU, REM, REMU: 0x33(and funct3's MSB=1) */
+				should_skip = true;
+			}
+		}
+	} else {
+		uint8_t op = instr & 0x3;
+		uint8_t funct3 = (instr >> 13) & 0x7;
+		LOG_DEBUG("instr: 0x%x, op: 0x%x, funct3: 0x%x",
+				instr, op, funct3);
+		/* 16-bits instruction */
+		if (!ndsv5->no_n22_workaround_imprecise_ldst) {
+			switch (funct3) {
+				/* case 0b001:  FLD, FLDSP */
+				case 0b010: /* LW, LWSP */
+				/* case 0b011:  LD, LDSP */
+				/* case 0b101:  FSD, FSDSP */
+				case 0b110: /* SW, SWSP */
+				/* case 0b111:  FSW, FSWSP */
+					if ((op == 0b00) || (op == 0b10))
+						should_skip = true;
+				default:
+					break;
+			}
+		}
+	}
+
+	if (should_skip) {
+		LOG_DEBUG("Should Handle N22 Imprecise");
+
+		if ((instr&0x3) == 0x3) {
+			LOG_DEBUG("32-bits instruction $PC += 4");
+			riscv_set_register(target, GDB_REGNO_PC, pc+4);
+		} else {
+			LOG_DEBUG("16-bits instruction $PC += 2");
+			riscv_set_register(target, GDB_REGNO_PC, pc+2);
+		}
+		register_cache_invalidate(target->reg_cache);
+
+		/* Pretending single step */
+		target->state = TARGET_RUNNING;
+		target_call_event_callbacks(target, TARGET_EVENT_RESUMED);
+		target->state = TARGET_HALTED;
+
+		target->debug_reason = DBG_REASON_SINGLESTEP;
+		target_call_event_callbacks(target, TARGET_EVENT_HALTED);
+		return ERROR_OK;
+	}
+
+	return ERROR_FAIL;
+}
+
