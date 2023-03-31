@@ -1,22 +1,32 @@
 /*
  * SPDX-License-Identifier: GPL-2.0+
  * Copyright (c) 2019 Andes Technology, Ya-Ting Lin <yating@andestech.com>
- * Copyright (C) 2019 Hellosun Wu <wujiheng.tw@gmail.com>
+ * Copyright (C) 2023 Hellosun Wu <wujiheng.tw@gmail.com>
  */
 
 #ifndef __NDSV5_ENCODING_H_
 #define __NDSV5_ENCODING_H_
+
+/* RISC-V Standard Machine Mode */
+/* Should be removed when after sync with official repo */
+#define CSR_MINTTHRESH          0x347
+
 
 /* AndeStar V5 Machine Mode - 9.2. Configuration Control & Status Registers */
 #define CSR_MICM_CFG		0xFC0
 #define CSR_MDCM_CFG		0xFC1
 #define CSR_MMSC_CFG		0xFC2
 #define CSR_MMSC_CFG2		0xFC3
+#define CSR_MMSC_CFG3		0xFC4
 #define CSR_MCRASH_STATESAVE	0xFC8
 #define CSR_MSTATUS_CRASHSAVE	0xFC9
 #define CSR_MVEC_CFG		0xFC7
 #define CSR_MCCACHE_CTL_BASE    0xFCF
 #define CSR_MRVARCH_CFG         0xFCA
+#define CSR_MRVARCH_CFG2        0xFCB
+
+#define CSR_MHVM_CFG            0xFD0
+#define CSR_MHVMB               0xFD1
 
 
 /* AndeStar V5 Machine Mode - 9.3. Memory and Miscellaneous CSRs */
@@ -109,6 +119,11 @@
 #define CSR_PMAADDR15		0xBDF
 
 
+/* AndeStar V5 Machine Mode - 9.10. Extended CSRs */
+#define CSR_MNDSX_RDATA         0x7DD
+#define CSR_MNDSX_WDATA         0x7DE
+
+
 /* 10. AndeStar V5 Debug Mode Control and Status Registers */
 #define CSR_DEXC2DBG		0x7E0
 #define CSR_DDCAUSE		0x7E1
@@ -147,6 +162,7 @@
 #define CSR_WFE			0x810
 #define CSR_SLEEPVALUE		0x811
 #define CSR_TXEVT		0x812
+#define CSR_UMISC_CTL           0x813
 
 
 /* RISC-V standard machine mode CSRs */
@@ -193,15 +209,22 @@
 
 
 #ifdef DECLARE_CSR
+DECLARE_CSR(mintthresh, CSR_MINTTHRESH)
+
 DECLARE_CSR(micm_cfg, CSR_MICM_CFG)
 DECLARE_CSR(mdcm_cfg, CSR_MDCM_CFG)
 DECLARE_CSR(mmsc_cfg, CSR_MMSC_CFG)
 DECLARE_CSR(mmsc_cfg2, CSR_MMSC_CFG2)
+DECLARE_CSR(mmsc_cfg3, CSR_MMSC_CFG3)
 DECLARE_CSR(mcrash_statesave, CSR_MCRASH_STATESAVE)
 DECLARE_CSR(mstatus_crashsave, CSR_MSTATUS_CRASHSAVE)
 DECLARE_CSR(mvec_cfg, CSR_MVEC_CFG)
 DECLARE_CSR(ml2c_ctl_base, CSR_MCCACHE_CTL_BASE)
 DECLARE_CSR(mrvarch_cfg, CSR_MRVARCH_CFG)
+DECLARE_CSR(mrvarch_cfg2, CSR_MRVARCH_CFG2)
+
+DECLARE_CSR(mhvm_cfg, CSR_MHVM_CFG)
+DECLARE_CSR(mhvmb, CSR_MHVMB)
 
 DECLARE_CSR(milmb, CSR_MILMB)
 DECLARE_CSR(mdlmb, CSR_MDLMB)
@@ -269,6 +292,9 @@ DECLARE_CSR(pmaaddr13, CSR_PMAADDR13)
 DECLARE_CSR(pmaaddr14, CSR_PMAADDR14)
 DECLARE_CSR(pmaaddr15, CSR_PMAADDR15)
 
+DECLARE_CSR(mndsx_rdata, CSR_MNDSX_RDATA)
+DECLARE_CSR(mndsx_wdata, CSR_MNDSX_WDATA)
+
 DECLARE_CSR(dexc2dbg, CSR_DEXC2DBG)
 DECLARE_CSR(ddcause, CSR_DDCAUSE)
 
@@ -298,6 +324,7 @@ DECLARE_CSR(ucctlcommand, CSR_UCCTLCOMMAND)
 DECLARE_CSR(wfe, CSR_WFE)
 DECLARE_CSR(sleepvalue, CSR_SLEEPVALUE)
 DECLARE_CSR(txevt, CSR_TXEVT)
+DECLARE_CSR(umisc_ctl, CSR_UMISC_CTL)
 
 DECLARE_CSR(mcountinhibit, CSR_MCOUNTINHIBIT)
 
