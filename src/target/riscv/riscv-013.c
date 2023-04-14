@@ -2146,6 +2146,9 @@ static int examine(struct target *target)
 		riscv013_step_or_resume_current_hart(target, false, false);
 		target->state = TARGET_RUNNING;
 	}
+
+	/* Bug-27408 */
+	target_set_examined(target);
 #else /* _NDS_V5_ONLY_ */
 	if (!halted)
 		riscv013_step_or_resume_current_hart(target, false, false);
