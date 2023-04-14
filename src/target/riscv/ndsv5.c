@@ -314,12 +314,12 @@ int ndsv5_examine(struct target *target)
 			break;
 	}
 
+	ndsv5_handle_examine(target);
 	if (riscv_examine(target) != ERROR_OK) {
 		LOG_ERROR("Examine failed!");
 		return ERROR_FAIL;
 	}
 
-	ndsv5_handle_examine(target);
 	return ERROR_OK;
 }
 
