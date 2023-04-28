@@ -2381,6 +2381,33 @@ COMMAND_HANDLER(handle_openocd_info)
 	return ERROR_OK;
 }
 
+char *p_nds_cmdline;
+COMMAND_HANDLER(handle_nds32_set_args_command)
+{
+	unsigned int i;
+	LOG_DEBUG("%s", __func__);
+
+	if (p_nds_cmdline) {
+		free(p_nds_cmdline);
+		p_nds_cmdline = NULL;
+	}
+	p_nds_cmdline = CMD_ARGC > 0 ? strdup(CMD_ARGV[0]) : NULL;
+
+	if (CMD_ARGC > 0) {
+		for (i = 1; i < CMD_ARGC; i++) {
+			char *cmdline = alloc_printf("%s %s", p_nds_cmdline, CMD_ARGV[i]);
+			if (!cmdline)
+				break;
+			free(p_nds_cmdline);
+			p_nds_cmdline = cmdline;
+		}
+	} else
+		LOG_ERROR("expected more argument to nds set_args arg1 arg2");
+
+	LOG_DEBUG("virtual hosting command line is [%s]", p_nds_cmdline);
+	return ERROR_OK;
+}
+
 static const struct command_registration nds32_query_command_handlers[] = {
 	{
 		.name = "target",
@@ -2919,6 +2946,13 @@ const struct command_registration nds32_exec_command_handlers[] = {
 		.mode = COMMAND_ANY,
 		.usage = "openocd_mem",
 		.help = "Print current OpenOCD info.",
+	},
+	{
+		.name = "set_args",
+		.handler = handle_nds32_set_args_command,
+		.mode = COMMAND_ANY,
+		.usage = "",
+		.help = "set_args 1 2 3",
 	},
 	COMMAND_REGISTRATION_DONE
 };

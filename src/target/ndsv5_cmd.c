@@ -28,6 +28,8 @@
 #include <jtag/interfaces.h>
 #include <jtag/adapter.h>
 
+#include "semihosting_common.h"
+
 extern char *user_algorithm_path;
 extern bool algorithm_bin_read;
 extern uint64_t g_value_milmb;
@@ -3319,8 +3321,11 @@ uint64_t nds_support_syscall_id[NDS_EBREAK_NUMS] = {
 	NDS_EBREAK_FSTAT,
 	NDS_EBREAK_STAT,
 	NDS_EBREAK_GETTIMEOFDAY,
+
+	SEMIHOSTING_SYS_GET_CMDLINE,
 };
 
+extern char *p_nds_cmdline;
 int ndsv5_virtual_hosting_check(struct target *target)
 {
 	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
@@ -3423,7 +3428,40 @@ int ndsv5_virtual_hosting_check(struct target *target)
 			/* Check  syscall id */
 			uint32_t i;
 			for (i = 0; i < NDS_EBREAK_NUMS; i++) {
-				if ((reg_syscall_value&0xFFFF) == (nds_support_syscall_id[i]&0xFFFF)) {
+				if ((reg_syscall_value&0xFFFF) == (SEMIHOSTING_SYS_GET_CMDLINE&0xFFFF)) {
+					NDS_INFO("Virtual hosting get cmdline");
+
+					if (!p_nds_cmdline) {
+						LOG_ERROR("Unable to find any args, use set_args first!!");
+						return ERROR_FAIL;
+					}
+
+					struct reg *reg_a0 = register_get_by_name(target->reg_cache, "a0", 1);
+					reg_a0->type->get(reg_a0);
+					uint64_t addr = buf_get_u64(reg_a0->value, 0, reg_a0->size);
+
+					struct reg *reg_a1 = register_get_by_name(target->reg_cache, "a1", 1);
+					reg_a1->type->get(reg_a1);
+					uint64_t size = buf_get_u64(reg_a1->value, 0, reg_a1->size);
+
+					uint32_t len = strlen(p_nds_cmdline) + 1;
+					if (len > size) {
+						LOG_ERROR("Unable to copy buffer, len(%d) > buffer size(%ld)", len, size);
+						return ERROR_FAIL;
+					}
+
+					int retval = target_write_buffer(target, addr, len, (uint8_t *)p_nds_cmdline);
+					if (retval != ERROR_OK) {
+						LOG_ERROR("Write cmdline failed!!");
+						return ERROR_FAIL;
+					}
+
+					riscv_reg_t pc;
+					riscv_get_register(target, &pc, GDB_REGNO_PC);
+					riscv_set_register(target, GDB_REGNO_PC, pc + 4);
+					LOG_DEBUG("next_pc: 0x%" TARGET_PRIxADDR, pc+4);
+					return ERROR_FAIL;
+				} else if ((reg_syscall_value&0xFFFF) == (nds_support_syscall_id[i]&0xFFFF)) {
 					nds32->active_syscall_id = (uint32_t)nds_support_syscall_id[i];
 					nds32->hit_syscall = true;
 					nds32->active_target = target;

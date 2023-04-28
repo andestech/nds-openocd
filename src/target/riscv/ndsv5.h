@@ -187,7 +187,7 @@ enum target_run_mode {
 	RUN_MODE_MAX,
 };
 
-#define NDS_EBREAK_NUMS 11
+#define NDS_EBREAK_NUMS 12
 enum nds32_syscall_id {
 	NDS_EBREAK_UNDEFINED    = 0,
 	NDS_EBREAK_OPEN         = 0x400,
