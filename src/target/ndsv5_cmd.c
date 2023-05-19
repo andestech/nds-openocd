@@ -700,6 +700,13 @@ __COMMAND_HANDLER(handle_ndsv5_configure_command)
 
 		command_print(CMD, "configure: %s = 0x%08x", CMD_ARGV[0], option);
 		nds32->no_n22_workaround_imprecise_div = option;
+	} else if (strcmp(CMD_ARGV[0], "no-group") == 0) {
+		bool option = false;
+		if (CMD_ARGC > 1)
+			COMMAND_PARSE_ON_OFF(CMD_ARGV[1], option);
+
+		command_print(CMD, "configure: %s = 0x%08x", CMD_ARGV[0], option);
+		nds32->no_group = option;
 	} else if (strcmp(CMD_ARGV[0], "dump-trace-folder") == 0) {
 		if (CMD_ARGC > 1)
 			ndsv5_dump_trace_folder = strdup(CMD_ARGV[1]);

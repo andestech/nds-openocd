@@ -416,7 +416,8 @@ static void decode_dmi(char *text, unsigned address, unsigned data)
 		{ DM_DMCS2, DM_DMCS2_HGSELECT, "hgselect" },
 		{ DM_DMCS2, DM_DMCS2_HGWRITE, "hgwrite" },
 		{ DM_DMCS2, DM_DMCS2_GROUP, "group" },
-		{ DM_DMCS2, DM_DMCS2_DMEXTTRIGGER, "exttrigger" },
+		{ DM_DMCS2, DM_DMCS2_DMEXTTRIGGER, "dmexttrigger" },
+		{ DM_DMCS2, DM_DMCS2_GROUPTYPE, "grouptype" },
 #endif /* _NDS_V5_ONLY_ */
 	};
 
@@ -1798,16 +1799,32 @@ typedef enum {
 } grouptype_t;
 static int set_group(struct target *target, bool *supported, unsigned group, grouptype_t grouptype)
 {
+#if _NDS_V5_ONLY_
+	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+	if (nds32->no_group) {
+		LOG_DEBUG("no group ON");
+		*supported = false;
+		return ERROR_OK;
+	}
+#endif
+
 	uint32_t write_val = DM_DMCS2_HGWRITE;
 	assert(group <= 31);
 	write_val = set_field(write_val, DM_DMCS2_GROUP, group);
-	write_val = set_field(write_val, DM_DMCS2_GROUPTYPE, (grouptype == HALTGROUP) ? 1 : 0);
+	write_val = set_field(write_val, DM_DMCS2_GROUPTYPE, (grouptype == HALTGROUP) ? 0 : 1);
 	if (dmi_write(target, DM_DMCS2, write_val) != ERROR_OK)
 		return ERROR_FAIL;
 	uint32_t read_val;
 	if (dmi_read(target, &read_val, DM_DMCS2) != ERROR_OK)
 		return ERROR_FAIL;
+#if _NDS_V5_ONLY_
+	if (grouptype == HALTGROUP)
+		*supported = get_field(read_val, DM_DMCS2_GROUP) == group;
+	else
+		*supported = get_field(read_val, DM_DMCS2_GROUPTYPE) == 1;
+#else
 	*supported = get_field(read_val, DM_DMCS2_GROUP) == group;
+#endif
 	return ERROR_OK;
 }
 
@@ -2183,6 +2200,19 @@ static int examine(struct target *target)
 		else
 			LOG_INFO("Core %d could not be made part of halt group %d.",
 					target->coreid, target->smp);
+#if _NDS_V5_ONLY_
+		r->group_halt_supported = haltgroup_supported;
+
+		if (set_group(target, &haltgroup_supported, target->smp, RESUMEGROUP) != ERROR_OK)
+			return ERROR_FAIL;
+		if (haltgroup_supported)
+			LOG_INFO("Core %d made part of resume group %d.", target->coreid,
+					target->smp);
+		else
+			LOG_INFO("Core %d could not be made part of resume group %d.",
+					target->coreid, target->smp);
+		r->group_resume_supported = haltgroup_supported;
+#endif /* NDS_V5_ONLY_ */
 	}
 
 	/* Some regression suites rely on seeing 'Examined RISC-V core' to know
@@ -5723,6 +5753,14 @@ static int riscv013_on_step_or_resume(struct target *target, bool step)
 		dcsr = set_field(dcsr, CSR_DCSR_EBREAKU, 0);
 		dcsr = set_field(dcsr, CSR_DCSR_STEPIE , 0);
 	}
+
+	/* Disable SMP group resume */
+	RISCV_INFO(r);
+	if (step && target->smp && r->group_resume_supported) {
+		LOG_DEBUG("Disable SMP group resume before stepping");
+		bool haltgroup_supported;
+		set_group(target, &haltgroup_supported, 0, RESUMEGROUP);
+	}
 #endif /* _NDS_V5_ONLY_ */
 
 	if (riscv_set_register(target, GDB_REGNO_DCSR, dcsr) != ERROR_OK)
@@ -5773,6 +5811,14 @@ static int riscv013_step_or_resume_current_hart(struct target *target,
 #if _NDS_V5_ONLY_
 		/* e-15336, when resuming, clear issued_halt */
 		target->halt_issued = false;
+
+
+		/* Disable SMP group resume */
+		if (step && target->smp && r->group_resume_supported) {
+			LOG_DEBUG("Re-enable SMP group resume after stepping");
+			bool haltgroup_supported;
+			set_group(target, &haltgroup_supported, target->smp, RESUMEGROUP);
+		}
 #endif /* _NDS_V5_ONLY_ */
 		return ERROR_OK;
 	}

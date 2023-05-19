@@ -339,6 +339,8 @@ struct nds32_v5 {
 
 	bool no_n22_workaround_imprecise_ldst;
 	bool no_n22_workaround_imprecise_div;
+
+	bool no_group;
 };
 
 extern char *ndsv5_script_custom_reset;
