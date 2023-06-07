@@ -440,6 +440,8 @@ int ndsv5_lm_slvp_support(struct target *target, target_addr_t address, uint32_t
 char *ndsv5_base64_decode(const char *data, int input_length, int *output_length);
 int ndsv5_suppressed_hsp_exception(struct target *target, bool option);
 extern int ndsv5_handle_n22_imprecise(struct target *target);
+uint32_t ndsv5_count_smp_target(struct target *target);
+int ndsv5_mml_capability_check(struct target *target);
 
 
 
@@ -459,5 +461,7 @@ int riscv_program_vsetvli(struct riscv_program *p, enum gdb_regno rd, uint32_t S
 int riscv_program_vmv_x_s(struct riscv_program *p, enum gdb_regno rd, enum gdb_regno vs2);
 int riscv_program_vslide1down_vx(struct riscv_program *p, enum gdb_regno rd, enum gdb_regno vs2, enum gdb_regno rs1);
 /********************************************************************/
+
+extern int ndsv5013_hart_count(struct target *target);
 
 #endif /* __NDSV5_H_ */

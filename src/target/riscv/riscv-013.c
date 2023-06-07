@@ -206,6 +206,12 @@ typedef struct {
 	/* The program buffer stores executable code. 0 is an illegal instruction,
 	 * so we use 0 to mean the cached value is invalid. */
 	uint32_t progbuf_cache[16];
+
+#if _NDS_V5_ONLY_
+	int ndsv5_hart_count;
+#endif
+
+
 } dm013_info_t;
 
 typedef struct {
@@ -314,6 +320,11 @@ dm013_info_t *get_dm(struct target *target)
 		dm->abs_chain_position = abs_chain_position;
 		dm->current_hartid = -1;
 		dm->hart_count = -1;
+
+#if _NDS_V5_ONLY_
+		dm->ndsv5_hart_count = -1;
+#endif
+
 		INIT_LIST_HEAD(&dm->target_list);
 		list_add(&dm->list, &dm_list);
 	}
@@ -8775,6 +8786,34 @@ int ndsv5_tracer_decode_pktfile(char *pPktFileName)
 	free(pPktBuf);
 
 	return 0;
+}
+
+int ndsv5013_hart_count(struct target *target)
+{
+	dm013_info_t *dm = get_dm(target);
+	if (!dm)
+		return 1;
+
+	if (dm->ndsv5_hart_count < 0) {
+		RISCV_INFO(r);
+		int bak_hartid = r->current_hartid;
+		for (int i = 0; i < RISCV_MAX_HARTS; ++i) {
+			r->current_hartid = i;
+			if (riscv013_select_current_hart(target) != ERROR_OK)
+				return 1;
+
+			uint32_t s;
+			if (dmstatus_read(target, &s, true) != ERROR_OK)
+				return 1;
+			if (get_field(s, DM_DMSTATUS_ANYNONEXISTENT))
+				break;
+			dm->ndsv5_hart_count = i + 1;
+		}
+		r->current_hartid = bak_hartid;
+		if (riscv013_select_current_hart(target) != ERROR_OK)
+			return 1;
+	}
+	return dm->ndsv5_hart_count;
 }
 
 #endif /* _NDS_V5_ONLY_ */

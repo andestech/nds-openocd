@@ -254,6 +254,7 @@ __COMMAND_HANDLER(handle_ndsv5_query_capability_command)
 	uint32_t hit_exception = 1, if_targetburn = 1;
 	uint32_t if_pwr_sample = 0;
 	uint32_t q_access_mode = 0;
+	uint32_t no_cctl_idx = 0;
 
 	/* According to eticket 16199: system bus access incomplete support by hardware,
 	 * so report 0 to AndeSight query(means:bus mode auto refresh not support),
@@ -285,6 +286,18 @@ __COMMAND_HANDLER(handle_ndsv5_query_capability_command)
 	/* Bug-26232, set disbus to 1 when HW system bus access is not supported */
 	disable_busmode = (system_bus_access)? 0 : 1;
 
+	/* tracer capability checking */
+	if (ndsv5_tracer_capability_check(target) == ERROR_OK)
+		if_tracer = 1;
+	else
+		if_tracer = 0;
+
+	/* check IX CCTL command support */
+	if (ndsv5_mml_capability_check(target) != ERROR_OK)
+		no_cctl_idx = 1;
+	else
+		no_cctl_idx = 0;
+
 	command_print(CMD, "tracer:%d;"
 			   "profiling:%d;"
 			   "disbus:%d;"
@@ -295,7 +308,8 @@ __COMMAND_HANDLER(handle_ndsv5_query_capability_command)
 			   "sysbusaccess:%d;"
 			   "l1i_support:%d;"
 			   "l1d_support:%d;"
-			   "l2c_support:%d",
+			   "l2c_support:%d;"
+			   "no_cctl_idx:%d;",
 				if_tracer,
 				if_profiling,
 				disable_busmode,
@@ -306,7 +320,8 @@ __COMMAND_HANDLER(handle_ndsv5_query_capability_command)
 				system_bus_access,
 				((icache != NULL && icache->line_size) ? 1 : 0),
 				((dcache != NULL && dcache->line_size) ? 1 : 0),
-				ndsv5_l2c_support);
+				ndsv5_l2c_support,
+				no_cctl_idx);
 	return ERROR_OK;
 }
 
@@ -1583,6 +1598,16 @@ COMMAND_HANDLER(ndsv5_handle_stepie_handlers)
 	return ERROR_OK;
 }
 
+COMMAND_HANDLER(ndsv5_get_smp_target_count)
+{
+	struct target *target = get_current_target(CMD_CTX);
+	uint32_t count = ndsv5_count_smp_target(target);
+
+	NDS_INFO("smp_target_count: %d", count);
+	command_print(CMD, "smp_target_count: %d", count);
+	return ERROR_OK;
+}
+
 extern const struct command_registration riscv_exec_command_handlers[];
 extern const struct command_registration nds32_exec_command_handlers[];
 static const struct command_registration ndsv5_exec_command_handlers[] = {
@@ -1707,6 +1732,13 @@ static const struct command_registration ndsv5_exec_command_handlers[] = {
 		.mode = COMMAND_ANY,
 		.help = " ",
 		.usage = " ",
+	},
+	{
+		.name = "smp_target_count",
+		.handler = ndsv5_get_smp_target_count,
+		.mode = COMMAND_EXEC,
+		.help = "Retrun SMP target count",
+		.usage = "nds smp_target_count",
 	},
 	{
 		.chain = riscv_exec_command_handlers,
