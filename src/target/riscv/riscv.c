@@ -1225,7 +1225,7 @@ static int old_or_new_riscv_step(struct target *target, int current,
 
 #if _NDS_V5_ONLY_
 	if (target->debug_reason == DBG_REASON_WPTANDBKPT) {
-		if ((r->marchid & 0xff) == 0x22) {
+		if ((r->marchid & 0xff) == 0x22 && (r->marchid & 0xF0000) == 0x0) {
 			/* e-23516 Handling N22 Imprecise */
 			LOG_DEBUG("Handle N22 Imprecise");
 			if (current) {
@@ -1381,6 +1381,9 @@ int halt_prep(struct target *target)
 	if (riscv_select_current_hart(target) != ERROR_OK)
 		return ERROR_FAIL;
 	if (riscv_is_halted(target)) {
+#if _NDS_V5_ONLY_
+		target->state = TARGET_HALTED;
+#endif
 		LOG_DEBUG("[%s] Hart is already halted (debug_reason=%d).",
 				target_name(target), target->debug_reason);
 		if (target->debug_reason == DBG_REASON_NOTHALTED) {
@@ -1497,6 +1500,11 @@ static int riscv_assert_reset(struct target *target)
 	/* Avoid use reg_cache when target not examined (CPU unavailable on examine) */
 	LOG_DEBUG("Assert reset on [%s] hart %d", target->tap->dotted_name, target->coreid);
 	riscv_select_current_hart(target);
+	if (!target_was_examined(target)) {
+		LOG_DEBUG("Assert reset only!!");
+		return tt->assert_reset(target);
+	}
+
 	if (target_was_examined(target))
 		riscv_invalidate_register_cache(target);
 #else /* _NDS_V5_ONLY_ */
@@ -2651,7 +2659,33 @@ int riscv_openocd_poll(struct target *target)
 	int halted_hart = -1;
 	enum target_state old_state = target->state;
 
+#if _NDS_V5_ONLY_
 	ndsv5_tracer_polling(target);
+	/*
+	 * Checking any hart RPH_DISCOVERED_HALTED
+	 * if yes, do riscv_openocd_poll()
+	 * else return riscv_openocd_poll()
+	 */
+	RISCV_INFO(rr);
+	if ((rr->group_halt_supported) && (target->smp)) {
+		unsigned nobody_trigger_halted = 1;
+		struct target_list *list;
+		foreach_smp_target(list, target->smp_targets) {
+			struct target *t = list->target;
+			if (!target_was_examined(t))
+				continue;
+			riscv_info_t *r = riscv_info(t);
+			enum riscv_poll_hart out = riscv_poll_hart(t, r->current_hartid);
+			if (out == RPH_DISCOVERED_HALTED) {
+				nobody_trigger_halted = 0;
+				break;
+			}
+		}
+		if (nobody_trigger_halted)
+			return ERROR_OK;
+	}
+#endif /* _NDS_V5_ONLY_ */
+
 	if (target->smp) {
 		unsigned halts_discovered = 0;
 		unsigned should_remain_halted = 0;

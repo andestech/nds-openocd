@@ -3609,6 +3609,19 @@ static bool gdb_handle_vcont_packet(struct connection *connection, const char *p
 		--packet_size;
 	}
 
+	char packet_buf[GDB_BUFFER_SIZE] = {0};
+	if ((parse[0] == 'C') || (parse[0] == 'S')) {
+		strncpy(packet_buf, parse, packet_size);
+		/* C sig[;addr] Continue with signal, vCont;C1e:0;c , Step with signal , vCont;S1e:0;c */
+		if (packet_buf[0] == 'C')
+			packet_buf[2] = 'c';
+		else
+			packet_buf[2] = 's';
+		LOG_DEBUG("packet_buf: %s ", packet_buf);
+		packet_size -= 2;
+		parse = &packet_buf[2];
+	}
+
 	/* simple case, a continue packet */
 	if (parse[0] == 'c') {
 #if _NDS32_ONLY_

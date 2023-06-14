@@ -3024,10 +3024,18 @@ static int deassert_reset(struct target *target)
 		}
 
 #if _NDS_V5_ONLY_
+		/* for reset-run, halt again */
 		if (!target->reset_halt) {
 			struct nds32_v5 *nds32 = target_to_nds32_v5(target);
 			alive_sleep(nds32->boot_time);
-			riscv013_halt_go(target);
+			if (riscv013_halt_go(target) != ERROR_OK) {
+				LOG_ERROR("[%s] Fatal: Hart %d failed to halt during deassert_reset()",
+						target_name(target), r->current_hartid);
+
+				/* Reset target status */
+				target->state = TARGET_RUNNING;
+				target->debug_reason = DBG_REASON_UNDEFINED;
+			}
 		}
 #endif /* _NDS_V5_ONLY_ */
 
@@ -3043,10 +3051,12 @@ static int deassert_reset(struct target *target)
 	} else
 		ndsv5_haltonreset(target, 0);
 
-	uint64_t dpc;
-	riscv_get_register(target, &dpc, GDB_REGNO_PC);
-	NDS_INFO("[%s] hart[%d] halt at 0x%" PRIx64, target->tap->dotted_name,
-			riscv_current_hartid(target), dpc);
+	if (target->state == TARGET_HALTED) {
+		uint64_t dpc;
+		riscv_get_register(target, &dpc, GDB_REGNO_PC);
+		NDS_INFO("[%s] hart[%d] halt at 0x%" PRIx64, target->tap->dotted_name,
+				riscv_current_hartid(target), dpc);
+	}
 #endif /* _NDS_V5_ONLY_ */
 
 	info->dmi_busy_delay = dmi_busy_delay;
@@ -5783,7 +5793,7 @@ static int riscv013_on_step_or_resume(struct target *target, bool step)
 
 	/* Disable SMP group resume */
 	RISCV_INFO(r);
-	if (step && target->smp && r->group_resume_supported) {
+	if ((step || nds32->target_burn_attached) && target->smp && r->group_resume_supported) {
 		LOG_DEBUG("Disable SMP group resume before stepping");
 		bool haltgroup_supported;
 		set_group(target, &haltgroup_supported, 0, RESUMEGROUP);
@@ -5841,7 +5851,8 @@ static int riscv013_step_or_resume_current_hart(struct target *target,
 
 
 		/* Disable SMP group resume */
-		if (step && target->smp && r->group_resume_supported) {
+		struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+		if ((step || nds32->target_burn_attached) && target->smp && r->group_resume_supported) {
 			LOG_DEBUG("Re-enable SMP group resume after stepping");
 			bool haltgroup_supported;
 			set_group(target, &haltgroup_supported, target->smp, RESUMEGROUP);

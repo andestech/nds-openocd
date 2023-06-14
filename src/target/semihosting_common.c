@@ -888,7 +888,7 @@ int semihosting_common(struct target *target)
 			 * - A value other than 1 or 0 if an error occurs.
 			 */
 
-#if _NDS_V5_ONLY_
+#if 0 /* _NDS_V5_ONLY_ */
 			{
 				retval = semihosting_read_fields(target, 1, fields);
 				if (retval != ERROR_OK)

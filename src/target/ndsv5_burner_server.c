@@ -405,9 +405,11 @@ static int ndsv5_burner_input(struct connection *connection)
 
 			/* free run in debug mode */
 			retval = target_resume(target, 1, 0, 0, 0);
-			/* //retval = ndsv5_srst_reset_target(target); */
+			/*
+			retval = ndsv5_srst_reset_target(target);
 			if (retval != ERROR_OK)
 				buf_p[0] |= 0x80;
+			*/
 			res_length = 2;
 			break;
 

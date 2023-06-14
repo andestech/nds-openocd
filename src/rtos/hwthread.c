@@ -153,6 +153,12 @@ static int hwthread_update_threads(struct rtos *rtos)
 				curr->debug_reason = DBG_REASON_BREAKPOINT;
 				LOG_DEBUG("[%s] current_reason = %d", target_name(curr), curr->debug_reason);
 				isDBG_REASON_WPTANDBKPT = true;
+			} else if (curr->debug_reason == DBG_REASON_TRACE_BUFFULL ||
+				   curr->debug_reason == DBG_REASON_HIT_MONITOR_WATCH ||
+				   curr->debug_reason == DBG_REASON_HIT_EXCEPTIONS) {
+				current_reason = curr->debug_reason;
+				current_thread = tid;
+				LOG_DEBUG("[%s] current_reason = %d", target_name(curr), curr->debug_reason);
 			}
 #endif
 
@@ -207,6 +213,7 @@ static int hwthread_update_threads(struct rtos *rtos)
 				}
 				break;
 			case DBG_REASON_DBGRQ:
+			case DBG_REASON_NOTHALTED:
 				/* all other reasons override debug-request */
 				if (curr->debug_reason == DBG_REASON_SINGLESTEP ||
 						curr->debug_reason == DBG_REASON_WATCHPOINT ||
