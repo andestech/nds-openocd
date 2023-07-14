@@ -376,6 +376,10 @@ static void decode_dmi(char *text, unsigned address, unsigned data)
 		{ DM_DMCONTROL, DM_DMCONTROL_NDMRESET, "ndmreset" },
 		{ DM_DMCONTROL, DM_DMCONTROL_DMACTIVE, "dmactive" },
 		{ DM_DMCONTROL, DM_DMCONTROL_ACKHAVERESET, "ackhavereset" },
+#if _NDS_V5_ONLY_
+		{ DM_DMCONTROL, DM_DMCONTROL_SETRESETHALTREQ, "setresethaltreq" },
+		{ DM_DMCONTROL, DM_DMCONTROL_CLRRESETHALTREQ, "clrresethaltreq" },
+#endif
 
 		{ DM_DMSTATUS, DM_DMSTATUS_IMPEBREAK, "impebreak" },
 		{ DM_DMSTATUS, DM_DMSTATUS_ALLHAVERESET, "allhavereset" },
@@ -2816,14 +2820,7 @@ static int assert_reset(struct target *target)
 #if _NDS_V5_ONLY_
 	/* Disable halt-on-reset when reset-run */
 	if ((nds_halt_on_reset == 1) && (target->reset_halt == 0)) {
-		if (target->smp) {
-			struct target_list *tlist;
-			foreach_smp_target(tlist, target->smp_targets) {
-				struct target *t = tlist->target;
-				ndsv5_haltonreset(t, 0);
-			}
-		} else 
-			ndsv5_haltonreset(target, 0);
+		ndsv5_haltonreset(target, 0);
 	}
 
 	if ((ndsv5_script_custom_reset_halt) && (target->reset_halt == 1)) {
@@ -2843,24 +2840,12 @@ static int assert_reset(struct target *target)
 
 #if _NDS_V5_ONLY_
 	if (target->reset_halt) {
-		/* single core no execute haltonreset: bitmap built before 2019/5 */
-		if (target->smp) {
-			struct target_list *tlist;
-			foreach_smp_target(tlist, target->smp_targets) {
-				struct target *t = tlist->target;
-				ndsv5_haltonreset(t, 1);
-			}
-		} else 
-			ndsv5_haltonreset(target, 1);
+		/* If 'reset halt', enable haltonreset */
+		/* Haltonreset is not supported on a single hart (RTL before 2019/05) */
+		ndsv5_haltonreset(target, 1);
 	} else {
-		if (target->smp) {
-			struct target_list *tlist;
-			foreach_smp_target(tlist, target->smp_targets) {
-				struct target *t = tlist->target;
-				ndsv5_haltonreset(t, 0);
-			}
-		} else 
-			ndsv5_haltonreset(target, 0);
+		/* If 'reset run', disable haltonreset */
+		ndsv5_haltonreset(target, 0);
 	}
 #endif /* _NDS_V5_ONLY_ */
 
@@ -2927,15 +2912,12 @@ static int deassert_reset(struct target *target)
 	control = set_field(control, DM_DMCONTROL_HALTREQ, target->reset_halt ? 1 : 0);
 	control = set_field(control, DM_DMCONTROL_DMACTIVE, 1);
 
-#if _NDS_V5_ONLY_
-	control = set_field(control, DM_DMCONTROL_ACKHAVERESET, 1);
-#endif
-
 	dmi_write(target, DM_DMCONTROL,
 			set_hartsel(control, r->current_hartid));
 
 	uint32_t dmstatus;
 	int dmi_busy_delay = info->dmi_busy_delay;
+
 #if _NDS_V5_ONLY_
 #else
 	time_t start = time(NULL);
@@ -2966,6 +2948,34 @@ static int deassert_reset(struct target *target)
 						index, riscv_reset_timeout_sec);
 			if (result != ERROR_OK)
 				return result;
+
+
+#if _NDS_V5_ONLY_
+			/* Bug 28320, Check CPU status before leave deassert-reset */
+			if (!get_field(dmstatus, DM_DMSTATUS_ALLUNAVAIL)) {
+				if (get_field(dmstatus, DM_DMSTATUS_ALLHALTED)) {
+					int result_halt;
+					if (target->reset_halt) {
+						NDS32_LOG(NDS32_MSG_HW_RESET_HOLD_ID, target->tap->dotted_name, index);
+						result_halt = ERROR_OK;
+					}
+
+					control = set_field(control, DM_DMCONTROL_HALTREQ, 0);
+					dmi_write(target, DM_DMCONTROL, control);
+					if (result_halt == ERROR_OK)
+						break;
+					else
+						return ERROR_FAIL;
+				} else if (get_field(dmstatus, DM_DMSTATUS_ALLRUNNING)) {
+					/* Reset run, leave when running */
+					if (!target->reset_halt)
+						break;
+				}
+
+				if (!target->reset_halt && get_field(dmstatus, DM_DMSTATUS_ALLRUNNING))
+					break;
+			}
+#else
 			/* Certain debug modules, like the one in GD32VF103
 			 * MCUs, violate the specification's requirement that
 			 * each hart is in "exactly one of four states" and,
@@ -2975,6 +2985,8 @@ static int deassert_reset(struct target *target)
 			 * the presence of any other state. */
 			if (!get_field(dmstatus, DM_DMSTATUS_ALLUNAVAIL))
 				break;
+#endif /* _NDS_V5_ONLY_ */
+
 			if (time(NULL) - start > riscv_reset_timeout_sec) {
 				LOG_ERROR("Hart %d didn't leave reset in %ds; "
 						"dmstatus=0x%x; "
@@ -2982,32 +2994,24 @@ static int deassert_reset(struct target *target)
 						index, riscv_reset_timeout_sec, dmstatus);
 
 #if _NDS_V5_ONLY_
+				/* For more detailed */
+				uint32_t dmcontrol;
+				uint32_t abstractcs;
+				dmi_read(target, &dmcontrol, DM_DMCONTROL);
+				dmi_read(target, &abstractcs, DM_ABSTRACTCS);
+				NDS32_LOG("dmcontrol : 0x%x", dmcontrol);
+				NDS32_LOG("abstractcs: 0x%x", abstractcs);
+
 				/* Release haltreq when failed to halt */
 				control = set_field(control, DM_DMCONTROL_HALTREQ, 0);
 				dmi_write(target, DM_DMCONTROL, control);
 #endif
-
 				return ERROR_FAIL;
 			}
 		}
 
-#if _NDS_V5_ONLY_
-		if (target->reset_halt) {
-			target->state = TARGET_HALTED;
-			control = set_field(control, DM_DMCONTROL_HALTREQ, 0);
-			dmi_write(target, DM_DMCONTROL,
-					set_hartsel(control, index));
-			NDS32_LOG(NDS32_MSG_HW_RESET_HOLD_ID, target->tap->dotted_name, index);
-		} else {
-			/* Halt again */
-			struct nds32_v5 *nds32 = target_to_nds32_v5(target);
-			alive_sleep(nds32->boot_time);
-			riscv013_halt_go(target);
-		}
-#else /* _NDS_V5_ONLY_ */
 		target->state = TARGET_HALTED;
 		target->debug_reason = DBG_REASON_DBGRQ;
-#endif /* _NDS_V5_ONLY_ */
 
 		if (get_field(dmstatus, DM_DMSTATUS_ALLHAVERESET)) {
 			/* Ack reset. */
@@ -3016,6 +3020,14 @@ static int deassert_reset(struct target *target)
 					DM_DMCONTROL_ACKHAVERESET);
 		}
 
+#if _NDS_V5_ONLY_
+		if (!target->reset_halt) {
+			struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+			alive_sleep(nds32->boot_time);
+			riscv013_halt_go(target);
+		}
+#endif /* _NDS_V5_ONLY_ */
+
 		if (!target->rtos)
 			break;
 	}
@@ -3023,15 +3035,8 @@ static int deassert_reset(struct target *target)
 #if _NDS_V5_ONLY_
 	/* Restore halt-on-reset */
 	if (nds_halt_on_reset == 1 && target->rtos) {
-		/* single core no execute haltonreset: bitmap built before 2019/5 */
-		if (target->smp) {
-			struct target_list *tlist;
-			foreach_smp_target(tlist, target->smp_targets) {
-				struct target *t = tlist->target;
-				ndsv5_haltonreset(t, 1);
-			}
-		} else 
-			ndsv5_haltonreset(target, 1);
+		/* Haltonreset is not supported on a single hart (RTL before 2019/05) */
+		ndsv5_haltonreset(target, 1);
 	} else
 		ndsv5_haltonreset(target, 0);
 
@@ -3754,7 +3759,7 @@ static int read_memory_progbuf_inner(struct target *target, target_addr_t addres
 		return result;
 
 	if (increment == 0 &&
-			register_write_direct(target, GDB_REGNO_S2, 0) != ERROR_OK)
+			register_write_direct(target, GDB_REGNO_A0, 0) != ERROR_OK)
 		return ERROR_FAIL;
 
 	uint32_t command = access_register_command(target, GDB_REGNO_S1,
@@ -3862,7 +3867,7 @@ static int read_memory_progbuf_inner(struct target *target, target_addr_t addres
 				/* See how far we got, clobbering dmi_data0. */
 				if (increment == 0) {
 					uint64_t counter;
-					result = register_read_direct(target, &counter, GDB_REGNO_S2);
+					result = register_read_direct(target, &counter, GDB_REGNO_A0);
 					next_index = counter;
 				} else {
 					uint64_t next_read_addr;
@@ -4092,13 +4097,13 @@ static int read_memory_progbuf(struct target *target, target_addr_t address,
 
 	/* s0 holds the next address to read from
 	 * s1 holds the next data value read
-	 * s2 is a counter in case increment is 0
+	 * a0 is a counter in case increment is 0
 	 */
 	if (riscv_save_register(target, GDB_REGNO_S0) != ERROR_OK)
 		return ERROR_FAIL;
 	if (riscv_save_register(target, GDB_REGNO_S1) != ERROR_OK)
 		return ERROR_FAIL;
-	if (increment == 0 && riscv_save_register(target, GDB_REGNO_S2) != ERROR_OK)
+	if (increment == 0 && riscv_save_register(target, GDB_REGNO_A0) != ERROR_OK)
 		return ERROR_FAIL;
 
 	/* Write the program (load, increment) */
@@ -4129,7 +4134,7 @@ static int read_memory_progbuf(struct target *target, target_addr_t address,
 		riscv_program_csrrci(&program, GDB_REGNO_ZERO,  CSR_DCSR_MPRVEN, GDB_REGNO_DCSR);
 
 	if (increment == 0)
-		riscv_program_addi(&program, GDB_REGNO_S2, GDB_REGNO_S2, 1);
+		riscv_program_addi(&program, GDB_REGNO_A0, GDB_REGNO_A0, 1);
 	else
 		riscv_program_addi(&program, GDB_REGNO_S0, GDB_REGNO_S0, increment);
 

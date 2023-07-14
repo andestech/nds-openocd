@@ -5,8 +5,8 @@
  */
 
 #include <helper/binarybuffer.h>
-#include "target/target.h"
-#include "target/register.h"
+#include <target/target.h>
+#include <target/register.h>
 #include <jtag/interfaces.h>
 #include <target/smp.h>
 #include "riscv.h"
@@ -2999,7 +2999,6 @@ uint32_t ndsv5_count_smp_target(struct target *target)
 
 	return count;
 }
-
 
 /*
  * return ERROR_OK ==> mml no lock or mseccfg no exist

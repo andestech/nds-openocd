@@ -23,39 +23,42 @@ static uint32_t select_burner_rtos_hartid;
 #define BURNER_BUFFER_SIZE 4096
 
 /* Command code table */
-#define WRITE_WORD           0x1A
-#define READ_WORD            0x1B
-#define WRITE_BYTE           0x2A
-#define READ_BYTE            0x2B
-#define WRITE_HALF           0x4A
-#define READ_HALF            0x4B
-#define FAST_READ            0x1C
-#define FAST_READ_BYTE       0x1E
-#define WRITE_IO             0x1F
-#define FAST_WRITE           0x20
-#define FAST_WRITE_BYTE      0x21
-#define BURNER_QUIT          0x04
-#define MULTIPLE_WRITE_WORD  0x5A
-#define MULTIPLE_WRITE_HALF  0x5B
-#define MULTIPLE_WRITE_BYTE  0x5C
-#define MULTIPLE_READ_WORD   0x5D
-#define MULTIPLE_READ_HALF   0x5E
-#define MULTIPLE_READ_BYTE   0x5F
-#define RESET_TARGET         0x3A
-#define RESET_HOLD           0x3B
-#define RESET_AICE           0x3C
-#define HOLD_CORE            0x1D
-#define READ_EDM_SR          0x60
-#define WRITE_EDM_SR         0x61
-#define READ_EDM_JDP         0x6E
-#define WRITE_EDM_JDP        0x6F
-#define BURNER_INIT          0x01
-#define BURNER_SELECT_CORE   0x05
-#define MONITOR_CMD          0x06
-#define BURNER_DEBUG         0x07
-#define BURNER_SELECT_TARGET 0x08
-#define READ_REG             0x70
-#define WRITE_REG            0x71
+enum burner_command_table {
+	BURNER_INIT = 0x01, /* OBSOLETE */
+	BURNER_QUIT = 0x04,
+	BURNER_SELECT_CORE = 0x05,
+	MONITOR_CMD = 0x06,
+	BURNER_DEBUG = 0x07,
+	BURNER_SELECT_TARGET = 0x08,
+	BURNER_NHART = 0x09,
+	WRITE_WORD = 0x1A,
+	READ_WORD = 0x1B,
+	FAST_READ = 0x1C,
+	HOLD_CORE = 0x1D,
+	FAST_READ_BYTE = 0x1E,
+	WRITE_IO = 0x1F, /* OBSOLETE */
+	FAST_WRITE = 0x20,
+	FAST_WRITE_BYTE = 0x21,
+	WRITE_BYTE = 0x2A,
+	READ_BYTE = 0x2B,
+	RESET_TARGET = 0x3A,
+	RESET_HOLD = 0x3B,
+	RESET_AICE = 0x3C, /* No support in V5 */
+	WRITE_HALF = 0x4A,
+	READ_HALF = 0x4B,
+	MULTIPLE_WRITE_WORD = 0x5A,
+	MULTIPLE_WRITE_HALF = 0x5B,
+	MULTIPLE_WRITE_BYTE = 0x5C,
+	MULTIPLE_READ_WORD = 0x5D,
+	MULTIPLE_READ_HALF = 0x5E,
+	MULTIPLE_READ_BYTE = 0x5F,
+	READ_EDM_SR = 0x60,
+	WRITE_EDM_SR = 0x61,
+	READ_EDM_JDP = 0x6E,
+	WRITE_EDM_JDP = 0x6F,
+	READ_REG = 0x70, /* No support in V5 */
+	WRITE_REG = 0x71, /* No support in V5 */
+};
 
 #define get_u32(buffer) le_to_h_u32((const uint8_t *)buffer)
 
@@ -312,6 +315,7 @@ static int ndsv5_burner_input(struct connection *connection)
 	unsigned char *buf_p = (unsigned char *)&cmmd_buffer[0];
 	char *target_name;
 	int retval = 0, bytes_read, res_length, name_len;
+	uint32_t count;
 
 	/* first connection for send BURNER_SELECT_TARGET or BURNER_SELECT_CORE, used current target to execute */
 	if (ndsv5_burner_target != NULL) {
@@ -454,6 +458,15 @@ static int ndsv5_burner_input(struct connection *connection)
 			res_length = 2;
 			break;
 
+		case BURNER_NHART:
+			count = ndsv5_count_smp_target(target);
+
+			buf_p[2] = (char)((count & 0xFF000000) >> 24);
+			buf_p[3] = (char)((count & 0x00FF0000) >> 16);
+			buf_p[4] = (char)((count & 0x0000FF00) >> 8);
+			buf_p[5] = (char)((count & 0x000000FF) >> 0);
+			res_length = 6;
+			break;
 		default:
 			break;
 	}
