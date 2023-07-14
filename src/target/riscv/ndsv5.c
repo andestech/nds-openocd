@@ -120,7 +120,7 @@ int ndsv5_step(
 		int handle_breakpoints)
 {
 	if (ndsv5_step_check(target) != ERROR_OK) {
-		LOG_ERROR("ndsv5_step_check failed");
+		LOG_DEBUG("ndsv5_step_check failed");
 		return ERROR_OK;
 	}
 
@@ -720,6 +720,8 @@ extern uint64_t nds_support_syscall_id[];
 static int riscv_step_virtual_hosting_checking(struct target *target)
 {
 	uint32_t cur_instr = 0;
+	uint32_t post_instr = 0;
+	struct reg *reg_a7;
 	struct reg *reg_pc = register_get_by_name(target->reg_cache, "pc", 1);
 	reg_pc->type->get(reg_pc);
 	uint64_t reg_pc_value = buf_get_u64(reg_pc->value, 0, reg_pc->size);
@@ -729,15 +731,26 @@ static int riscv_step_virtual_hosting_checking(struct target *target)
 		return ERROR_FAIL;
 	}
 	LOG_DEBUG("reg_pc_value = 0x%" TARGET_PRIxADDR ", cur_instr=0x%x", reg_pc_value, cur_instr);
-	cur_instr &= MASK_C_EBREAK;
-	if (cur_instr == MATCH_C_EBREAK) {
+	if (cur_instr == MATCH_EBREAK) {
+		if (target_read_memory(target, reg_pc_value+4, 4, 1, (uint8_t *)&post_instr) != ERROR_OK) {
+			LOG_ERROR("can't read memory: 0x%" TARGET_PRIxADDR, reg_pc_value+4);
+			return ERROR_FAIL;
+		}
+
+		if (post_instr == 0x40505013) {
+			/* for RV32I/RV64I, use $a7 */
+			reg_a7 = register_get_by_name(target->reg_cache, "a7", 1);
+		} else {
+			/* for RV32E, use $t0 */
+			reg_a7 = register_get_by_name(target->reg_cache, "t0", 1);
+		}
+
 		/* ebreak, check a7 value */
-		struct reg *reg_a7 = register_get_by_name(target->reg_cache, gpr_and_fpu_name[17], 1);
 		reg_a7->type->get(reg_a7);
 		uint64_t reg_a7_value = buf_get_u64(reg_a7->value, 0, reg_a7->size);
 		uint32_t i;
 		for (i = 0; i < NDS_EBREAK_NUMS; i++) {
-			if (reg_a7_value == nds_support_syscall_id[i])
+			if ((reg_a7_value&0xFFFF) == (nds_support_syscall_id[i]&0xFFFF))
 				break;
 		}
 		if (i == NDS_EBREAK_NUMS) {
@@ -749,6 +762,19 @@ static int riscv_step_virtual_hosting_checking(struct target *target)
 		/* WARNING: potential issue on target64 */
 		nds32->active_syscall_id = (uint32_t)reg_a7_value;
 		nds32->hit_syscall = true;
+		nds32->active_target = target;
+		NDS_INFO("nds32->active_syscall_id = 0x%x", (uint32_t)nds32->active_syscall_id);
+
+		/* Reset */
+		reg_a7_value = 0;
+		reg_a7->type->set(reg_a7, (uint8_t *)&reg_a7_value);
+		NDS_INFO("reset reg_a7/t0_value");
+
+		riscv_reg_t pc;
+		riscv_get_register(target, &pc, GDB_REGNO_PC);
+		riscv_set_register(target, GDB_REGNO_PC, pc + 4);
+		LOG_DEBUG("next_pc: 0x%" TARGET_PRIxADDR, pc+4);
+
 		target_call_event_callbacks(target, TARGET_EVENT_HALTED);
 		return ERROR_OK;
 	}

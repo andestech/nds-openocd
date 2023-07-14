@@ -122,9 +122,9 @@ typedef struct {
 
 #if _NDS_V5_ONLY_
 	riscv_reg_t marchid;
-
 	bool group_resume_supported;
 	bool group_halt_supported;
+	riscv_reg_t mhartid;
 #endif
 
 	/* Cached value of vlenb. 0 if vlenb is not readable for some reason. */

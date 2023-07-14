@@ -1929,6 +1929,21 @@ static int riscv_read_phys_memory(struct target *target, target_addr_t phys_addr
 static int riscv_read_memory(struct target *target, target_addr_t address,
 		uint32_t size, uint32_t count, uint8_t *buffer)
 {
+#if _NDS_V5_ONLY_
+	/*
+	 * 0xA0000000 0xA01FFFFF    Hart 0 Slave Port: ILM (2M)
+	 * 0xA0400000 0xA05FFFFF    Hart 1 Slave Port: ILM (2M)
+	 * 0xA0800000 0xA09FFFFF    Hart 2 Slave Port: ILM (2M)
+	 * 0xA0C00000 0xA0DFFFFF    Hart 3 Slave Port: ILM (2M)
+	 * 0xA1000000 0xA11FFFFF    Hart 4 Slave Port: ILM (2M)
+	 * 0xA1400000 0xA15FFFFF    Hart 5 Slave Port: ILM (2M)
+	 * 0xA1800000 0xA19FFFFF    Hart 6 Slave Port: ILM (2M)
+	 * 0xA1C00000 0xA1DFFFFF    Hart 7 Slave Port: ILM (2M)
+	 */
+	RISCV_INFO(rr);
+	uint32_t LM_BASE_NEW = LM_BASE + (rr->mhartid) * 0x400000;
+#endif
+
 	if (count == 0) {
 		LOG_WARNING("0-length read from 0x%" TARGET_PRIxADDR, address);
 		return ERROR_OK;
@@ -1984,11 +1999,11 @@ static int riscv_read_memory(struct target *target, target_addr_t address,
 			if (ndsv5_system_bus_access == 1) {
 				retval = ndsv5_lm_slvp_support(target, physical_address, CSR_MILMB);
 				if (retval == ERROR_OK)
-					physical_address = physical_address + LM_BASE;
+					physical_address = physical_address + LM_BASE_NEW;
 				else if (retval == ERROR_TARGET_RESOURCE_NOT_AVAILABLE) {
 					retval = ndsv5_lm_slvp_support(target, physical_address, CSR_MDLMB);
 					if (retval == ERROR_OK)
-						physical_address = physical_address + LM_BASE;
+						physical_address = physical_address + LM_BASE_NEW;
 				}
 			} else {
 				LOG_ERROR("Unsupport BUS mode");
@@ -2055,6 +2070,21 @@ static int riscv_write_phys_memory(struct target *target, target_addr_t phys_add
 static int riscv_write_memory(struct target *target, target_addr_t address,
 		uint32_t size, uint32_t count, const uint8_t *buffer)
 {
+#if _NDS_V5_ONLY_
+	/*
+	 * 0xA0000000 0xA01FFFFF    Hart 0 Slave Port: ILM (2M)
+	 * 0xA0400000 0xA05FFFFF    Hart 1 Slave Port: ILM (2M)
+	 * 0xA0800000 0xA09FFFFF    Hart 2 Slave Port: ILM (2M)
+	 * 0xA0C00000 0xA0DFFFFF    Hart 3 Slave Port: ILM (2M)
+	 * 0xA1000000 0xA11FFFFF    Hart 4 Slave Port: ILM (2M)
+	 * 0xA1400000 0xA15FFFFF    Hart 5 Slave Port: ILM (2M)
+	 * 0xA1800000 0xA19FFFFF    Hart 6 Slave Port: ILM (2M)
+	 * 0xA1C00000 0xA1DFFFFF    Hart 7 Slave Port: ILM (2M)
+	 */
+	RISCV_INFO(rr);
+	uint32_t LM_BASE_NEW = LM_BASE + (rr->mhartid) * 0x400000;
+#endif
+
 	if (count == 0) {
 		LOG_WARNING("0-length write to 0x%" TARGET_PRIxADDR, address);
 		return ERROR_OK;
@@ -2110,11 +2140,11 @@ static int riscv_write_memory(struct target *target, target_addr_t address,
 			if (ndsv5_system_bus_access == 1) {
 				retval = ndsv5_lm_slvp_support(target, physical_address, CSR_MILMB);
 				if (retval == ERROR_OK)
-					physical_address = physical_address + LM_BASE;
+					physical_address = physical_address + LM_BASE_NEW;
 				else if (retval == ERROR_TARGET_RESOURCE_NOT_AVAILABLE) {
 					retval = ndsv5_lm_slvp_support(target, physical_address, CSR_MDLMB);
 					if (retval == ERROR_OK)
-						physical_address = physical_address + LM_BASE;
+						physical_address = physical_address + LM_BASE_NEW;
 				}
 			} else {
 				LOG_ERROR("Unsupport BUS mode");

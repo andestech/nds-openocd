@@ -2150,6 +2150,9 @@ static int examine(struct target *target)
 #if _NDS_V5_ONLY_
 	if (register_read_direct(target, &r->marchid, (CSR_MARCHID + GDB_REGNO_CSR0)))
 		LOG_ERROR("Fatal: Failed to read MARCHID from hart %d.", r->current_hartid);
+
+	if (register_read_direct(target, &r->mhartid, (CSR_MHARTID + GDB_REGNO_CSR0)))
+		LOG_ERROR("Fatal: Failed to read MHARTID from hart %d.", r->current_hartid);
 #endif
 
 	if (riscv_supports_extension(target, 'V')) {
@@ -3910,8 +3913,11 @@ static int read_memory_progbuf_inner(struct target *target, target_addr_t addres
 		assert(index >= 2);
 		for (unsigned j = index - 2; j < index + reads; j++) {
 			assert(j < count);
+#if _NDS_V5_ONLY_
+#else
 			LOG_DEBUG("index=%d, reads=%d, next_index=%d, ignore_last=%d, j=%d",
 				index, reads, next_index, ignore_last, j);
+#endif
 			if (j + 3 + ignore_last > next_index)
 				break;
 
