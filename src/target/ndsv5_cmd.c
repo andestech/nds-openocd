@@ -255,6 +255,7 @@ __COMMAND_HANDLER(handle_ndsv5_query_capability_command)
 	uint32_t if_pwr_sample = 0;
 	uint32_t q_access_mode = 0;
 	uint32_t no_cctl_idx = 0;
+	uint32_t tlb_dump = 0;
 
 	/* According to eticket 16199: system bus access incomplete support by hardware,
 	 * so report 0 to AndeSight query(means:bus mode auto refresh not support),
@@ -298,6 +299,11 @@ __COMMAND_HANDLER(handle_ndsv5_query_capability_command)
 	else
 		no_cctl_idx = 0;
 
+	if (ndsv5_tlb_dump_capability_check(target) == ERROR_OK)
+		tlb_dump = 1;
+	else
+		tlb_dump = 0;
+
 	command_print(CMD, "tracer:%d;"
 			   "profiling:%d;"
 			   "disbus:%d;"
@@ -309,7 +315,9 @@ __COMMAND_HANDLER(handle_ndsv5_query_capability_command)
 			   "l1i_support:%d;"
 			   "l1d_support:%d;"
 			   "l2c_support:%d;"
-			   "no_cctl_idx:%d;",
+			   "no_cctl_idx:%d;"
+			   "tlb_dump:%d;"
+			   "btb_dump:%d;",
 				if_tracer,
 				if_profiling,
 				disable_busmode,
@@ -321,7 +329,9 @@ __COMMAND_HANDLER(handle_ndsv5_query_capability_command)
 				((icache != NULL && icache->line_size) ? 1 : 0),
 				((dcache != NULL && dcache->line_size) ? 1 : 0),
 				ndsv5_l2c_support,
-				no_cctl_idx);
+				no_cctl_idx,
+				tlb_dump,
+				0);
 	return ERROR_OK;
 }
 
@@ -1258,6 +1268,76 @@ __COMMAND_HANDLER(handle_ndsv5_dcache_command)
 	return result;
 }
 
+static COMMAND_HELPER(handle_ndsv5_tlb_command_helper, enum tlb_target type)
+{
+	struct target *target = get_current_target(CMD_CTX);
+	int result;
+
+	if (ndsv5_tlb_dump_capability_check(target) != ERROR_OK) {
+		LOG_ERROR("TLB dump not support!");
+		return ERROR_FAIL;
+	}
+
+	if (CMD_ARGC > 0) {
+		if (strcmp(CMD_ARGV[0], "dump") == 0) {
+			if (strcmp(CMD_ARGV[1], "all") == 0) {
+				if (CMD_ARGC < 2) {
+					command_print(CMD, "Usage: dump all [<filename>] / dump va <address> [<ASID>]");
+					return ERROR_FAIL;
+				}
+
+				char *filename = NULL;
+				if (CMD_ARGC == 3)
+					filename = strdup(CMD_ARGV[2]);
+				else
+					filename = strdup("tlb.dump");
+
+				LOG_DEBUG("dump all dcache to file: %s", filename);
+				result = ndsv5_dump_tlb_all(target, filename, type);
+				free(filename);
+				return result;
+			} else if (strcmp(CMD_ARGV[1], "va") == 0) {
+				uint64_t va;
+				COMMAND_PARSE_NUMBER(u64, CMD_ARGV[2], va);
+
+				uint32_t asid = (uint32_t)-1;
+				if (CMD_ARGC == 4)
+					COMMAND_PARSE_NUMBER(u32, CMD_ARGV[3], asid);
+				return ndsv5_dump_tlb_va(target, va, type, asid);
+			} else {
+				command_print(CMD, "%s: No valid parameter", target_name(target));
+				command_print(CMD, "Usage: dump all <filename>(optimal) / dump va <address>");
+				return ERROR_FAIL;
+			}
+		} else {
+			command_print(CMD, "%s: No valid parameter", target_name(target));
+		}
+	}
+
+	return ERROR_OK;
+}
+
+__COMMAND_HANDLER(handle_ndsv5_tlb_command)
+{
+	/* TLB = STLB (default) */
+	return CALL_COMMAND_HANDLER(handle_ndsv5_tlb_command_helper, NDSV5_TLB_TARGET_STLB);
+}
+
+__COMMAND_HANDLER(handle_ndsv5_itlb_command)
+{
+	return CALL_COMMAND_HANDLER(handle_ndsv5_tlb_command_helper, NDSV5_TLB_TARGET_ITLB);
+}
+
+__COMMAND_HANDLER(handle_ndsv5_dtlb_command)
+{
+	return CALL_COMMAND_HANDLER(handle_ndsv5_tlb_command_helper, NDSV5_TLB_TARGET_DTLB);
+}
+
+__COMMAND_HANDLER(handle_ndsv5_stlb_command)
+{
+	return CALL_COMMAND_HANDLER(handle_ndsv5_tlb_command_helper, NDSV5_TLB_TARGET_STLB);
+}
+
 __COMMAND_HANDLER(handle_ndsv5_reset_and_hold)
 {
 	struct target *target = get_current_target(CMD_CTX);
@@ -1739,6 +1819,27 @@ static const struct command_registration ndsv5_exec_command_handlers[] = {
 		.mode = COMMAND_EXEC,
 		.help = "Retrun SMP target count",
 		.usage = "nds smp_target_count",
+	},
+	{
+		.name = "itlb",
+		.handler = handle_ndsv5_itlb_command,
+		.mode = COMMAND_EXEC,
+		.usage = " ",
+		.help = "tlb control",
+	},
+	{
+		.name = "dtlb",
+		.handler = handle_ndsv5_dtlb_command,
+		.mode = COMMAND_EXEC,
+		.usage = " ",
+		.help = "tlb control",
+	},
+	{
+		.name = "stlb",
+		.handler = handle_ndsv5_stlb_command,
+		.mode = COMMAND_EXEC,
+		.usage = " ",
+		.help = "tlb control",
 	},
 	{
 		.chain = riscv_exec_command_handlers,

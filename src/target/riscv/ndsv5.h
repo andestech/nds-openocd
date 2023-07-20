@@ -216,6 +216,13 @@ enum nds32_syscall_id {
 	*/
 };
 
+enum tlb_target {
+	NDSV5_TLB_TARGET_NONE = 0,
+	NDSV5_TLB_TARGET_ITLB = 1,
+	NDSV5_TLB_TARGET_DTLB = 2,
+	NDSV5_TLB_TARGET_STLB = 3,
+};
+
 struct nds32_v5_cache {
 	bool enable;
 
@@ -442,6 +449,9 @@ int ndsv5_suppressed_hsp_exception(struct target *target, bool option);
 extern int ndsv5_handle_n22_imprecise(struct target *target);
 uint32_t ndsv5_count_smp_target(struct target *target);
 int ndsv5_mml_capability_check(struct target *target);
+int ndsv5_tlb_dump_capability_check(struct target *target);
+int ndsv5_dump_tlb_all(struct target *target, char *filename, uint32_t type);
+int ndsv5_dump_tlb_va(struct target *target, target_addr_t va, uint32_t type, uint32_t asid);
 
 
 

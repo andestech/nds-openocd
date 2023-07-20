@@ -80,7 +80,15 @@ char *ndsv5_script_custom_initial;
 /********************************************************************/
 /* ndsv5.c static function */
 /********************************************************************/
-static inline void ndsv5_print_console_and_server(char *str);
+static inline void ndsv5_print_console_and_server(char *str)
+{
+	/*** Print on Console ***/
+	NDS32_LOG_LF("%s", str);
+
+	/*** Print to Server ***/
+	LOG_INFO("%s", str);
+}
+
 #define NDSV5_PRINT(pFile, fmt, ...) do { \
 	char buffer[256]; \
 	snprintf(buffer, sizeof(buffer), fmt, __VA_ARGS__); \
@@ -92,7 +100,6 @@ static inline void ndsv5_print_console_and_server(char *str);
 
 
 /********************************************************************/
-
 
 #ifndef min
 #define min(a,b) \
@@ -1487,7 +1494,6 @@ int ndsv5_dump_cache(struct target *target, unsigned int cache_type, const char*
 	riscv_select_current_hart(target);
 
 	FILE *pFile;
-
 	pFile = fopen(filename, "w");
 	if (NULL == pFile) {
 		LOG_ERROR("Error!! Can't open file to write");
@@ -3075,18 +3081,62 @@ static struct tlb_element tlbe[TLB_MAX_WAY][TLB_MAX_IDX];
 /* CCTL TLB command */
 #define TLB_IX_RTAG  0x93 /* 0b10010_011 */
 #define TLB_IX_RDATA 0x94 /* 0b10010_100 */
-int ndsv5_dump_tlb_all(struct target *target, char *filename)
+static void ndsv5_parsing_tlb_tag_idx_way(struct target *target, uint32_t idx, uint32_t way)
 {
-	uint64_t idx, way;
-	uint64_t ra;
 	int xlen = riscv_xlen(target);
 
+	/* TLB Tag */
+	tlbe[way][idx].valid = tlbe[way][idx].raw_tag & 0x1;
 	if (xlen == 64) {
-		NDSV5_PRINT(stdout, "%s",
-				"IDX  WAY  TLB tag            : TLB entry          ASID   V VA                 PA                 DAGUXWRV");
+		tlbe[way][idx].asid = (tlbe[way][idx].raw_tag >> 1) & 0x1FF;
+		tlbe[way][idx].vpn  = (tlbe[way][idx].raw_tag >> 17);
 	} else {
-		NDSV5_PRINT(stdout, "%s",
-				"IDX  WAY  TLB tag    : TLB entry  ASID  V VA         PA          DAGUXWRV");
+		tlbe[way][idx].asid = (tlbe[way][idx].raw_tag >> 1) & 0xFFFF;
+		tlbe[way][idx].vpn  = (tlbe[way][idx].raw_tag >> 10);
+	}
+}
+
+static void ndsv5_parsing_tlb_data_idx_way(struct target *target, uint32_t idx, uint32_t way)
+{
+	int xlen = riscv_xlen(target);
+	/* TLB data */
+	tlbe[way][idx].tag = tlbe[way][idx].raw_data & 0xFF;
+	tlbe[way][idx].rsw = (tlbe[way][idx].raw_data >> 8) & 0x3;
+
+	if (xlen == 64)
+		tlbe[way][idx].ppn = (tlbe[way][idx].raw_data >> 10) & 0xFFFFFFFFFFF;
+	else
+		tlbe[way][idx].ppn = (tlbe[way][idx].raw_data >> 10) & 0xFFF;
+}
+
+static void ndsv5_print_tlb_idx_way(struct target *target, FILE *pFile,
+		uint32_t type, bool header, uint32_t idx, uint32_t way)
+{
+	int xlen = riscv_xlen(target);
+
+	if (header) {
+		/* Print type */
+		switch (type) {
+			case NDSV5_TLB_TARGET_ITLB:
+				NDSV5_PRINT(pFile, "%s\n", "Dump ITLB");
+				break;
+			case NDSV5_TLB_TARGET_DTLB:
+				NDSV5_PRINT(pFile, "%s\n", "Dump DTLB");
+				break;
+			case NDSV5_TLB_TARGET_STLB:
+			default:
+				NDSV5_PRINT(pFile, "%s\n", "Dump STLB");
+				break;
+		}
+
+		/* Print header */
+		if (xlen == 64) {
+			NDSV5_PRINT(pFile, "%s",
+					"IDX  WAY  TLB tag            : TLB entry          ASID   V VA                 PA                 DAGUXWRV");
+		} else {
+			NDSV5_PRINT(pFile, "%s",
+					"IDX  WAY  TLB tag    : TLB entry  ASID  V VA         PA          DAGUXWRV");
+		}
 	}
 
 	char *fmt_str;
@@ -3095,7 +3145,47 @@ int ndsv5_dump_tlb_all(struct target *target, char *filename)
 	else
 		fmt_str = "[%03d] [%1d] 0x%08llx : 0x%08llx 0x%03x %1d 0x%08llx 0x%09llx %c%c%c%c%c%c%c%c";
 
-	NDSV5_PRINT(stdout, "%s\n", "Dump STLB");
+	char D = (((tlbe[way][idx].tag >> 7) & 0x1) == 0x1) ? 'D' : '-';
+	char A = (((tlbe[way][idx].tag >> 6) & 0x1) == 0x1) ? 'A' : '-';
+	char G = (((tlbe[way][idx].tag >> 5) & 0x1) == 0x1) ? 'G' : '-';
+	char U = (((tlbe[way][idx].tag >> 4) & 0x1) == 0x1) ? 'U' : '-';
+	char X = (((tlbe[way][idx].tag >> 3) & 0x1) == 0x1) ? 'X' : '-';
+	char W = (((tlbe[way][idx].tag >> 2) & 0x1) == 0x1) ? 'W' : '-';
+	char R = (((tlbe[way][idx].tag >> 1) & 0x1) == 0x1) ? 'R' : '-';
+	char V = (((tlbe[way][idx].tag >> 0) & 0x1) == 0x1) ? 'V' : '-';
+
+	NDSV5_PRINT(pFile, fmt_str,
+			idx,
+			way,
+			tlbe[way][idx].raw_tag,
+			tlbe[way][idx].raw_data,
+			tlbe[way][idx].asid,
+			tlbe[way][idx].valid,
+			tlbe[way][idx].vpn << 12,
+			tlbe[way][idx].ppn << 12,
+			D, A, G, U, X, W, R, V);
+}
+
+
+int ndsv5_dump_tlb_all(struct target *target, char *filename, uint32_t type)
+{
+	uint32_t idx, way;
+	uint64_t ra;
+	bool header = true; /* Only prin header for first time */
+
+	LOG_DEBUG("Dump TLB all to %s", filename);
+
+	FILE *pFile;
+	if (strncmp(filename, "stdout", 6) == 0) {
+		pFile = stdout;
+	} else {
+		pFile = fopen(filename, "w");
+		if (NULL == pFile) {
+			LOG_ERROR("Error!! Can't open file to write");
+			return ERROR_FAIL;
+		}
+	}
+
 	ra = 0;
 	for (idx = 0; idx < TLB_MAX_IDX; idx++) {
 		for (way = 0; way < TLB_MAX_WAY; way++) {
@@ -3114,61 +3204,59 @@ int ndsv5_dump_tlb_all(struct target *target, char *filename)
 			riscv_set_register(target, GDB_REGNO_MCCTLCOMMAND, TLB_IX_RDATA);
 			riscv_get_register(target, &tlbe[way][idx].raw_data, GDB_REGNO_MCCTLDATA);
 
-			tlbe[way][idx].valid = tlbe[way][idx].raw_tag & 0x1;
-			if (xlen == 64) {
-				tlbe[way][idx].asid = (tlbe[way][idx].raw_tag >> 1) & 0x1FF;
-				tlbe[way][idx].vpn  = (tlbe[way][idx].raw_tag >> 17);
-			} else {
-				tlbe[way][idx].asid = (tlbe[way][idx].raw_tag >> 1) & 0xFFFF;
-				tlbe[way][idx].vpn  = (tlbe[way][idx].raw_tag >> 10);
-			}
-
-			tlbe[way][idx].tag = tlbe[way][idx].raw_data & 0xFF;
-			tlbe[way][idx].rsw = (tlbe[way][idx].raw_data >> 8) & 0x3;
-
-			if (xlen == 64)
-				tlbe[way][idx].ppn = (tlbe[way][idx].raw_data >> 10) & 0xFFFFFFFFFFF;
-			else
-				tlbe[way][idx].ppn = (tlbe[way][idx].raw_data >> 10) & 0xFFF;
-
-
-			/* Print to server */
-			char D = (((tlbe[way][idx].tag >> 7) & 0x1) == 0x1) ? 'D' : '-';
-			char A = (((tlbe[way][idx].tag >> 6) & 0x1) == 0x1) ? 'A' : '-';
-			char G = (((tlbe[way][idx].tag >> 5) & 0x1) == 0x1) ? 'G' : '-';
-			char U = (((tlbe[way][idx].tag >> 4) & 0x1) == 0x1) ? 'U' : '-';
-			char X = (((tlbe[way][idx].tag >> 3) & 0x1) == 0x1) ? 'X' : '-';
-			char W = (((tlbe[way][idx].tag >> 2) & 0x1) == 0x1) ? 'W' : '-';
-			char R = (((tlbe[way][idx].tag >> 1) & 0x1) == 0x1) ? 'R' : '-';
-			char V = (((tlbe[way][idx].tag >> 0) & 0x1) == 0x1) ? 'V' : '-';
-
-			NDSV5_PRINT(stdout, fmt_str,
-					idx,
-					way,
-					tlbe[way][idx].raw_tag,
-					tlbe[way][idx].raw_data,
-					tlbe[way][idx].asid,
-					tlbe[way][idx].valid,
-					tlbe[way][idx].vpn << 12,
-					tlbe[way][idx].ppn << 12,
-					D, A, G, U, X, W, R, V);
+			ndsv5_parsing_tlb_tag_idx_way(target, idx, way);
+			ndsv5_parsing_tlb_data_idx_way(target, idx, way);
+			ndsv5_print_tlb_idx_way(target, pFile, type, header, idx, way);
+			header = false;
 		}
 	}
 
 	return ERROR_OK;
 }
 
-int ndsv5_dump_tlb_va(struct target *target, uint64_t va)
+int ndsv5_dump_tlb_va(struct target *target, target_addr_t va, uint32_t type, uint32_t asid)
 {
+	uint32_t idx, way;
+	uint64_t ra;
+	bool header = true; /* Only prin header for first time */
+	uint64_t vpn = (va >> 12);
+
+	NDSV5_PRINT(stdout, "%s%" TARGET_PRIxADDR "\n" , "Dump TLB va 0x", va);
+
+	ra = 0;
+	for (idx = 0; idx < TLB_MAX_IDX; idx++) {
+		for (way = 0; way < TLB_MAX_WAY; way++) {
+			ra = set_field(ra, MCCTLBEGINADDR_TLB_INDEX, idx);
+			ra = set_field(ra, MCCTLBEGINADDR_TLB_WAY, way);
+			ra = set_field(ra, MCCTLBEGINADDR_TLB_TARGET, 3);	/* STLB: 0x3 */
+
+			LOG_DEBUG("ra: 0x%" PRIx64, ra);
+			riscv_set_register(target, GDB_REGNO_MCCTLBEGINADDR, ra);
+
+			/* Read tlb tag */
+			riscv_set_register(target, GDB_REGNO_MCCTLCOMMAND, TLB_IX_RTAG);
+			riscv_get_register(target, &tlbe[way][idx].raw_tag, GDB_REGNO_MCCTLDATA);
+			ndsv5_parsing_tlb_tag_idx_way(target, idx, way);
+
+			/* Check VA */
+			if (tlbe[way][idx].vpn != vpn)
+				continue;
+
+			/* Check ASID */
+			if ((asid != (uint32_t)-1) && asid != tlbe[way][idx].asid)
+				continue;
+
+			/* Read tlb data */
+			riscv_set_register(target, GDB_REGNO_MCCTLCOMMAND, TLB_IX_RDATA);
+			riscv_get_register(target, &tlbe[way][idx].raw_data, GDB_REGNO_MCCTLDATA);
+			ndsv5_parsing_tlb_data_idx_way(target, idx, way);
+
+			/* Print to console/server */
+			ndsv5_print_tlb_idx_way(target, stdout, type, header, idx, way);
+			header = false;
+		}
+	}
+
 	return ERROR_OK;
-}
-
-static inline void ndsv5_print_console_and_server(char *str)
-{
-	/*** Print on Console ***/
-	NDS32_LOG_LF("%s", str);
-
-	/*** Print to Server ***/
-	LOG_INFO("%s", str);
 }
 

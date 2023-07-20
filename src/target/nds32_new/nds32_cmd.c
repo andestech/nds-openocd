@@ -46,6 +46,7 @@ extern __COMMAND_HANDLER(handle_ndsv5_memory_access_command);
 extern __COMMAND_HANDLER(handle_ndsv5_cache_command);
 extern __COMMAND_HANDLER(handle_ndsv5_icache_command);
 extern __COMMAND_HANDLER(handle_ndsv5_dcache_command);
+extern __COMMAND_HANDLER(handle_ndsv5_tlb_command);
 extern __COMMAND_HANDLER(handle_ndsv5_query_target_command);
 extern __COMMAND_HANDLER(handle_ndsv5_query_endian_command);
 extern __COMMAND_HANDLER(handle_ndsv5_query_cpuid_command);
@@ -503,6 +504,8 @@ COMMAND_HANDLER(handle_nds32_tlb_command)
 	int result;
 
 	if (!is_nds32(nds32)) {
+		if (is_ndsv5(target))
+			return handle_ndsv5_tlb_command(cmd);
 		command_print(CMD, "current target isn't an Andes core");
 		return ERROR_FAIL;
 	}
