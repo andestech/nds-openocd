@@ -4818,7 +4818,12 @@ static int arch_state(struct target *target)
 }
 
 struct target_type riscv013_target = {
+#if _NDS_V5_ONLY_
+	.name = "riscv_013",
+	.resume = &ndsv5_resume,
+#else
 	.name = "riscv",
+#endif /* _NDS_V5_ONLY_ */
 
 	.init_target = init_target,
 	.deinit_target = deinit_target,

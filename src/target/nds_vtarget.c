@@ -1684,6 +1684,23 @@ static void write_to_buf(uint8_t *buffer, uint64_t value, unsigned size)
 	}
 }
 
+int vtarget_halt(struct target *target)
+{
+	return ERROR_OK;
+}
+
+int vtarget_resume(struct target *target, int current, target_addr_t address,
+		int handle_breakpoints, int debug_execution)
+{
+	return ERROR_OK;
+}
+
+int vtarget_step(struct target *target, int current,
+		target_addr_t address, int handle_breakpoints)
+{
+	return ERROR_OK;
+}
+
 struct target_type nds_vtarget_target = {
 	.name = "nds_vtarget",
 
@@ -1693,6 +1710,10 @@ struct target_type nds_vtarget_target = {
 
 	/* poll current target status */
 	.poll = vtarget_poll,
+
+	.halt = vtarget_halt,
+	.resume = vtarget_resume,
+	.step = vtarget_step,
 
 	/* memory access */
 	.read_memory = vtarget_read_memory,
