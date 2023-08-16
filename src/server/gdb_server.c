@@ -4823,6 +4823,7 @@ static int gdb_target_add_one(struct target *target)
 	int retval;
 	long portnumber;
 	char *end;
+	static int target_number;
 
 	while (1) {
 		retval = gdb_target_start(target, gdb_port_next);
@@ -4834,7 +4835,7 @@ static int gdb_target_add_one(struct target *target)
 			}
 		}
 		if (retval == ERROR_OK) {
-			printf("The core #%d listens on %d.\n", (int)target->target_number, (int)portnumber);
+			printf("The core #%d listens on %d.\n", target_number++, (int)portnumber);
 			break;
 		} else if ((portnumber+1) >= (int) 65535) {
 			LOG_ERROR("gdb port number fail");

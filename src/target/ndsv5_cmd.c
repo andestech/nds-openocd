@@ -16,6 +16,7 @@
 #include <target/smp.h>
 #include <helper/log.h>
 #include <helper/binarybuffer.h>
+#include <helper/jim-nvp.h>
 #include "register.h"
 #include "riscv/riscv.h"
 #include "riscv/encoding.h"
@@ -1688,6 +1689,50 @@ COMMAND_HANDLER(ndsv5_get_smp_target_count)
 	return ERROR_OK;
 }
 
+/* Copy from target.c */
+static const struct jim_nvp nvp_target_endian[] = {
+	{ .name = "big",    .value = TARGET_BIG_ENDIAN },
+	{ .name = "little", .value = TARGET_LITTLE_ENDIAN },
+	{ .name = "be",     .value = TARGET_BIG_ENDIAN },
+	{ .name = "le",     .value = TARGET_LITTLE_ENDIAN },
+	{ .name = NULL,     .value = -1 },
+};
+COMMAND_HANDLER(handle_ndsv5_targets_command)
+{
+	int retval = ERROR_OK;
+	struct target *target = all_targets;
+	command_print(CMD, "    TargetName         Type       Endian TapName            State         Coreid  ");
+	command_print(CMD, "--  ------------------ ---------- ------ ------------------ ------------- --------");
+	while (target) {
+		const char *state;
+		char marker = ' ';
+
+		if (target->tap->enabled)
+			state = target_state_name(target);
+		else
+			state = "tap-disabled";
+
+		if (CMD_CTX->current_target == target)
+			marker = '*';
+
+		/* keep columns lined up to match the headers above */
+		command_print(CMD,
+				"%2d%c %-18s %-10s %-6s %-18s %-13s %4d",
+				target->target_number,
+				marker,
+				target_name(target),
+				target_type_name(target),
+				jim_nvp_value2name_simple(nvp_target_endian,
+					target->endianness)->name,
+				target->tap->dotted_name,
+				state,
+				target->coreid);
+		target = target->next;
+	}
+
+	return retval;
+}
+
 extern const struct command_registration riscv_exec_command_handlers[];
 extern const struct command_registration nds32_exec_command_handlers[];
 extern const struct command_registration semihosting_common_handlers[];
@@ -1841,6 +1886,13 @@ static const struct command_registration ndsv5_exec_command_handlers[] = {
 		.mode = COMMAND_EXEC,
 		.usage = " ",
 		.help = "tlb control",
+	},
+	{
+		.name = "targets",
+		.handler = handle_ndsv5_targets_command,
+		.mode = COMMAND_EXEC,
+		.usage = " ",
+		.help = "[targets]",
 	},
 	{
 		.chain = riscv_exec_command_handlers,
