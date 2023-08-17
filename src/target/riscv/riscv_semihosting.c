@@ -44,6 +44,11 @@
 #include <helper/log.h>
 
 #include "target/target.h"
+
+#if _NDS_V5_ONLY_
+#include "target/target_type.h"
+#endif /* _NDS_V5_ONLY_ */
+
 #include "target/semihosting_common.h"
 #include "riscv.h"
 
@@ -57,6 +62,19 @@ void riscv_semihosting_init(struct target *target)
 {
 	semihosting_common_init(target, riscv_semihosting_setup,
 		riscv_semihosting_post_result);
+
+#if _NDS_V5_ONLY_
+	extern int ndsv5_get_gdb_fileio_info(struct target *target, struct gdb_fileio_info *fileio_info);
+	extern int ndsv5_gdb_fileio_end(struct target *target, int retcode, int fileio_errno, bool ctrl_c);
+	if (target->semihosting) {
+		target->semihosting->is_active = true;
+		target->semihosting->is_fileio = true;
+
+		target->type->get_gdb_fileio_info = ndsv5_get_gdb_fileio_info;
+		target->type->gdb_fileio_end = ndsv5_gdb_fileio_end;
+	}
+#endif
+
 }
 
 /**
@@ -141,7 +159,8 @@ semihosting_result_t riscv_semihosting(struct target *target, int *retval)
 
 		/* Check for ARM operation numbers. */
 		if ((semihosting->op >= 0 && semihosting->op <= 0x31) ||
-			(semihosting->op >= 0x100 && semihosting->op <= 0x107)) {
+			(semihosting->op >= 0x100 && semihosting->op <= 0x107) ||
+			(semihosting->op == 0x193)) {
 
 			*retval = semihosting_common(target);
 			if (*retval != ERROR_OK) {

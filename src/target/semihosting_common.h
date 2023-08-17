@@ -79,6 +79,10 @@ enum semihosting_operation_numbers {
 	SEMIHOSTING_USER_CMD_0x100 = 0x100, /* First user cmd op code */
 	SEMIHOSTING_USER_CMD_0x107 = 0x107, /* Last supported user cmd op code */
 	SEMIHOSTING_USER_CMD_0x1FF = 0x1FF, /* Last user cmd op code */
+
+#if _NDS_V5_ONLY_
+	SEMIHOSTING_SYS_TIME64 = 0x193, /* gettime64 */
+#endif
 };
 
 /** Maximum allowed Tcl command segment length in bytes*/

@@ -1690,6 +1690,7 @@ COMMAND_HANDLER(ndsv5_get_smp_target_count)
 
 extern const struct command_registration riscv_exec_command_handlers[];
 extern const struct command_registration nds32_exec_command_handlers[];
+extern const struct command_registration semihosting_common_handlers[];
 static const struct command_registration ndsv5_exec_command_handlers[] = {
 	{
 		.chain = nds32_exec_command_handlers,
@@ -1843,6 +1844,9 @@ static const struct command_registration ndsv5_exec_command_handlers[] = {
 	},
 	{
 		.chain = riscv_exec_command_handlers,
+	},
+	{
+		.chain = semihosting_common_handlers,
 	},
 	COMMAND_REGISTRATION_DONE
 };
@@ -3106,6 +3110,11 @@ static int ndsv5_gdb_attach(struct target *target)
 				t_nds32->hit_syscall = false;
 				t_nds32->gdb_run_mode = RUN_MODE_DEBUG;
 				t_nds32->is_program_exit = false;
+
+				/* clear pending status */
+				struct semihosting *semihosting = t->semihosting;
+				if (semihosting)
+					semihosting->hit_fileio = false;
 			}
 		} else {
 			ndsv5_init_reg(target);
@@ -3114,6 +3123,12 @@ static int ndsv5_gdb_attach(struct target *target)
 
 			nds32->attached = true;
 			nds32->hit_syscall = false;
+
+
+				/* clear pending status */
+			struct semihosting *semihosting = target->semihosting;
+			if (semihosting)
+				semihosting->hit_fileio = false;
 
 			/* reset to debug mode in case abnormal operations */
 			nds32->gdb_run_mode = RUN_MODE_DEBUG;
@@ -3252,8 +3267,14 @@ int ndsv5_poll_wo_announce(struct target *target)
 	return ERROR_FAIL;
 }
 
+extern int semihosting_common_fileio_info(struct target *target,
+		struct gdb_fileio_info *fileio_info);
 int ndsv5_get_gdb_fileio_info(struct target *target, struct gdb_fileio_info *fileio_info)
 {
+	struct semihosting *semihosting = target->semihosting;
+	if (semihosting && semihosting->hit_fileio)
+		return semihosting_common_fileio_info(target, fileio_info);
+
 	/* fill syscall parameters to file-I/O info */
 	if (NULL == fileio_info) {
 		LOG_ERROR("Target has not initial file-I/O data structure");
@@ -3399,8 +3420,14 @@ int ndsv5_get_gdb_fileio_info(struct target *target, struct gdb_fileio_info *fil
 	return ERROR_OK;
 }
 
+extern int semihosting_common_fileio_end(struct target *target, int result,
+		int fileio_errno, bool ctrl_c);
 int ndsv5_gdb_fileio_end(struct target *target, int retcode, int fileio_errno, bool ctrl_c)
 {
+	struct semihosting *semihosting = target->semihosting;
+	if (semihosting && semihosting->hit_fileio)
+		return semihosting_common_fileio_end(target, retcode, fileio_errno, ctrl_c);
+
 	NDS_INFO("syscall return code: 0x%x, errno: 0x%x, ctrl_c: %s",
 			retcode, fileio_errno, ctrl_c ? "true" : "false");
 

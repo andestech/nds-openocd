@@ -1164,6 +1164,21 @@ static void gdb_frontend_halted(struct target *target, struct connection *connec
 			return;
 		}
 #endif /* _NDS32_ONLY_ */
+		if (target->smp) {
+			struct target_list *list;
+			struct semihosting *semihosting;
+			foreach_smp_target(list, target->smp_targets) {
+				struct target *t = list->target;
+				semihosting = t->semihosting;
+				if (semihosting) {
+					LOG_DEBUG("hit_fileio=0x%x, is_fileio=0x%x", semihosting->hit_fileio, semihosting->is_fileio);
+					if (semihosting->hit_fileio) {
+						target = t;
+						break;
+					}
+				}
+			}
+		}
 
 		/* check fileio first */
 		if (target_get_gdb_fileio_info(target, target->fileio_info) == ERROR_OK)
@@ -4370,7 +4385,22 @@ static int gdb_fileio_response_packet(struct connection *connection,
 	LOG_DEBUG("File-I/O response, retcode: 0x%x, errno: 0x%x, ctrl-c: %s",
 			fileio_retcode, fileio_errno, fileio_ctrl_c ? "true" : "false");
 
-	retval = target_gdb_fileio_end(target, fileio_retcode, fileio_errno, fileio_ctrl_c);
+	struct target *t = target;
+	if (target->smp) {
+		struct target_list *list;
+		struct semihosting *semihosting;
+		foreach_smp_target(list, target->smp_targets) {
+			t = list->target;
+			semihosting = t->semihosting;
+			if (semihosting) {
+				LOG_DEBUG("hit_fileio=0x%x, is_fileio=0x%x",
+						semihosting->hit_fileio, semihosting->is_fileio);
+				if (semihosting->hit_fileio)
+					break;
+			}
+		}
+	}
+	retval = target_gdb_fileio_end(t, fileio_retcode, fileio_errno, fileio_ctrl_c);
 	if (retval != ERROR_OK)
 		return ERROR_FAIL;
 

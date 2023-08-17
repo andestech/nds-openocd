@@ -16,6 +16,7 @@
 #include "ndsv5-013.h"
 #include <helper/log.h>
 #include "target/nds32_new/nds32_log.h"
+#include <target/semihosting_common.h>
 
 /********************************************************************/
 /* Copy from riscv.c                                                */
@@ -762,6 +763,12 @@ int ndsv5_step_check(struct target *target)
 		nds32->hit_syscall = false;
 		nds32->active_target = NULL;
 	}
+
+	/* clear pending status */
+	struct semihosting *semihosting = target->semihosting;
+	if (semihosting)
+		semihosting->hit_fileio = false;
+
 	if (nds32->virtual_hosting_ctrl_c == true) {
 		LOG_DEBUG("virtual_hosting_ctrl_c = true");
 		nds32->virtual_hosting_ctrl_c = false;
@@ -838,6 +845,12 @@ int ndsv5_resume_check(struct target *target)
 		nds32->hit_syscall = false;
 		nds32->active_target = NULL;
 	}
+
+	/* clear pending status */
+	struct semihosting *semihosting = target->semihosting;
+	if (semihosting)
+		semihosting->hit_fileio = false;
+
 	if (nds32->virtual_hosting_ctrl_c == true) {
 		LOG_DEBUG("virtual_hosting_ctrl_c = true");
 		nds32->virtual_hosting_ctrl_c = false;

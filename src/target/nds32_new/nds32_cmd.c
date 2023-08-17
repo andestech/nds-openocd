@@ -2385,6 +2385,7 @@ COMMAND_HANDLER(handle_openocd_info)
 }
 
 char *p_nds_cmdline;
+extern __COMMAND_HANDLER(handle_common_semihosting_cmdline);
 COMMAND_HANDLER(handle_nds32_set_args_command)
 {
 	unsigned int i;
@@ -2408,6 +2409,10 @@ COMMAND_HANDLER(handle_nds32_set_args_command)
 		LOG_ERROR("expected more argument to nds set_args arg1 arg2");
 
 	LOG_DEBUG("virtual hosting command line is [%s]", p_nds_cmdline);
+
+	struct target *target = get_current_target(CMD_CTX);
+	if (target->semihosting)
+		CALL_COMMAND_HANDLER(handle_common_semihosting_cmdline);
 	return ERROR_OK;
 }
 

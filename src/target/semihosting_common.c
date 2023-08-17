@@ -52,6 +52,11 @@
 #include <helper/log.h>
 #include <sys/stat.h>
 
+
+#if _NDS_V5_ONLY_
+#include "register.h"
+#endif /* _NDS_V5_ONLY_ */
+
 /**
  * It is not possible to use O_... flags defined in sys/stat.h because they
  * are not guaranteed to match the values defined by the GDB Remote Protocol.
@@ -98,10 +103,17 @@ static const int open_host_modeflags[12] = {
 	O_RDWR   | O_CREAT | O_APPEND | O_BINARY
 };
 
+#if _NDS_V5_ONLY_
+int semihosting_common_fileio_info(struct target *target,
+	struct gdb_fileio_info *fileio_info);
+int semihosting_common_fileio_end(struct target *target, int result,
+	int fileio_errno, bool ctrl_c);
+#else
 static int semihosting_common_fileio_info(struct target *target,
 	struct gdb_fileio_info *fileio_info);
 static int semihosting_common_fileio_end(struct target *target, int result,
 	int fileio_errno, bool ctrl_c);
+#endif
 
 static int semihosting_read_fields(struct target *target, size_t number,
 	uint8_t *fields);
@@ -456,7 +468,57 @@ int semihosting_common(struct target *target)
 			 */
 			semihosting->result = semihosting->sys_errno;
 			break;
+#if _NDS_V5_ONLY_
+		case SEMIHOSTING_SYS_EXIT:		/* 0x18 */
+			semihosting->hit_fileio = true;
+			fileio_info->identifier = "exit";
+			fileio_info->param_1 = 0;
 
+			if (semihosting->word_size_bytes == 8) {
+				retval = semihosting_read_fields(target, 2, fields);
+				if (retval != ERROR_OK)
+					return retval;
+				else {
+					int type = semihosting_get_field(target, 0, fields);
+					int code = semihosting_get_field(target, 1, fields);
+					fileio_info->param_1 = (unsigned)code;
+
+					LOG_DEBUG("semihosting: application exception type %#x with %#x\n",
+							type, code);
+				}
+			} else {
+				if (semihosting->param == ADP_STOPPED_APPLICATION_EXIT) {
+					LOG_DEBUG("semihosting: *** application exited normally ***");
+					fileio_info->param_1 = 0;
+				} else if (semihosting->param == ADP_STOPPED_RUN_TIME_ERROR) {
+					LOG_DEBUG("semihosting: *** application exited with error ***");
+					fileio_info->param_1 = (unsigned)-1;
+				} else {
+					LOG_DEBUG("semihosting: application exception %#x\n",
+							(unsigned) semihosting->param);
+					fileio_info->param_1 = (unsigned) semihosting->param;
+				}
+			}
+			break;
+
+		case SEMIHOSTING_SYS_EXIT_EXTENDED:	/* 0x20 */
+			semihosting->hit_fileio = true;
+			fileio_info->identifier = "exit";
+			fileio_info->param_1 = 0;
+
+			retval = semihosting_read_fields(target, 2, fields);
+			if (retval != ERROR_OK)
+				return retval;
+			else {
+				int type = semihosting_get_field(target, 0, fields);
+				int code = semihosting_get_field(target, 1, fields);
+				fileio_info->param_1 = (unsigned)code;
+
+				LOG_DEBUG("semihosting: application exception type %#x with %#x\n",
+						type, code);
+			}
+			break;
+#else /* _NDS_V5_ONLY_ */
 		case SEMIHOSTING_SYS_EXIT:	/* 0x18 */
 			/*
 			 * Note: SYS_EXIT was called angel_SWIreason_ReportException in
@@ -620,6 +682,7 @@ int semihosting_common(struct target *target)
 				return target_call_event_callbacks(target, TARGET_EVENT_HALTED);
 			}
 			break;
+#endif /* _NDS_V5_ONLY_ */
 
 		case SEMIHOSTING_SYS_FLEN:	/* 0x0C */
 			/*
@@ -637,6 +700,37 @@ int semihosting_common(struct target *target)
 			 * successful.
 			 * - –1 if an error occurs.
 			 */
+#if _NDS_V5_ONLY_
+			retval = semihosting_read_fields(target, 1, fields);
+			if (retval != ERROR_OK)
+				return retval;
+			else {
+				int fd = semihosting_get_field(target, 0, fields);
+				if (semihosting->is_fileio) {
+					/* reference qemu to allocate a mem space after sp - 64 */
+					struct reg *reg_sp = register_get_by_name(target->reg_cache, "sp", 1);
+					reg_sp->type->get(reg_sp);
+					uint64_t reg_sp_value = buf_get_u64(reg_sp->value, 0, reg_sp->size);
+
+					semihosting->hit_fileio = true;
+					fileio_info->identifier = "fstat";
+					fileio_info->param_1 = fd;
+					fileio_info->param_2 = reg_sp_value - 64;
+					LOG_DEBUG("fstat(%d) at %" PRIx64, fd, reg_sp_value - 64);
+				} else {
+					struct stat buf;
+					semihosting->result = fstat(fd, &buf);
+					if (semihosting->result == -1) {
+						semihosting->sys_errno = errno;
+						LOG_DEBUG("fstat(%d)=%d", fd, (int)semihosting->result);
+						break;
+					}
+					LOG_DEBUG("fstat(%d)=%d", fd, (int)semihosting->result);
+					semihosting->result = buf.st_size;
+				}
+			}
+			break;
+#else
 			if (semihosting->is_fileio) {
 				semihosting->result = -1;
 				semihosting->sys_errno = EINVAL;
@@ -656,6 +750,7 @@ int semihosting_common(struct target *target)
 				LOG_DEBUG("fstat(%d)=%d", fd, (int)semihosting->result);
 				semihosting->result = buf.st_size;
 			}
+#endif /* _NDS_V5_ONLY_ */
 			break;
 
 		case SEMIHOSTING_SYS_GET_CMDLINE:	/* 0x15 */
@@ -792,6 +887,18 @@ int semihosting_common(struct target *target)
 			 * - 0 if the handle identifies a file.
 			 * - A value other than 1 or 0 if an error occurs.
 			 */
+
+#if _NDS_V5_ONLY_
+			{
+				retval = semihosting_read_fields(target, 1, fields);
+				if (retval != ERROR_OK)
+					return retval;
+				int fd = semihosting_get_field(target, 0, fields);
+				semihosting->result = isatty(fd);
+				semihosting->sys_errno = errno;
+				LOG_DEBUG("isatty(%d)=%d", fd, (int)semihosting->result);
+			}
+#else
 			if (semihosting->is_fileio) {
 				semihosting->hit_fileio = true;
 				fileio_info->identifier = "isatty";
@@ -805,6 +912,7 @@ int semihosting_common(struct target *target)
 				semihosting->sys_errno = errno;
 				LOG_DEBUG("isatty(%d)=%d", fd, (int)semihosting->result);
 			}
+#endif /* _NDS_V5_ONLY_ */
 			break;
 
 		case SEMIHOSTING_SYS_OPEN:	/* 0x01 */
@@ -1505,6 +1613,36 @@ int semihosting_common(struct target *target)
 			break;
 		}
 
+#if _NDS_V5_ONLY_
+		case SEMIHOSTING_SYS_TIME64:    /* 0x193 */
+			/*
+			 *
+			 * Entry
+			 * On entry, the PARAMETER REGISTER contains a pointer to a
+			 * two-field argument block:
+			 * - field 1 always get 0.
+			 * - field 2 Points to a struct
+			 *
+			 * Return
+			 * On exit, the RETURN REGISTER contains the return status.
+			 * */
+			retval = semihosting_read_fields(target, 2, fields);
+			if (retval != ERROR_OK)
+				return retval;
+			else {
+				uint64_t addr = semihosting_get_field(target, 1, fields);
+				struct timeval arg;
+				if (gettimeofday(&arg, NULL) == 0) {
+					LOG_DEBUG("addr = 0x%lx, tv_sec = 0x%lx, tv_usec = 0x%lx",
+							addr, arg.tv_sec, arg.tv_usec);
+					target_write_u64(target, addr, (uint64_t)arg.tv_sec);
+					target_write_u32(target, addr+8, (uint32_t)arg.tv_usec);
+				}
+				semihosting->result = 0;
+			}
+
+			break;
+#endif
 
 		case SEMIHOSTING_SYS_ELAPSED:	/* 0x30 */
 		/*
@@ -1602,8 +1740,13 @@ int semihosting_common(struct target *target)
 /* -------------------------------------------------------------------------
  * Local functions. */
 
+#if _NDS_V5_ONLY_
+int semihosting_common_fileio_info(struct target *target,
+	struct gdb_fileio_info *fileio_info)
+#else
 static int semihosting_common_fileio_info(struct target *target,
 	struct gdb_fileio_info *fileio_info)
+#endif
 {
 	struct semihosting *semihosting = target->semihosting;
 	if (!semihosting)
@@ -1620,8 +1763,13 @@ static int semihosting_common_fileio_info(struct target *target,
 	return ERROR_OK;
 }
 
+#if _NDS_V5_ONLY_
+int semihosting_common_fileio_end(struct target *target, int result,
+	int fileio_errno, bool ctrl_c)
+#else
 static int semihosting_common_fileio_end(struct target *target, int result,
 	int fileio_errno, bool ctrl_c)
+#endif
 {
 	struct gdb_fileio_info *fileio_info = target->fileio_info;
 	struct semihosting *semihosting = target->semihosting;
@@ -1634,6 +1782,13 @@ static int semihosting_common_fileio_end(struct target *target, int result,
 	semihosting->result = result;
 	semihosting->sys_errno = fileio_errno;
 
+
+#if _NDS_V5_ONLY_
+	uint8_t buf[1];
+	struct reg *reg_sp;
+	uint64_t reg_sp_value;
+#endif /* _NDS_V5_ONLY_ */
+
 	/*
 	 * Some fileio results do not match up with what the semihosting
 	 * operation expects; for these operations, we munge the results
@@ -1641,23 +1796,34 @@ static int semihosting_common_fileio_end(struct target *target, int result,
 	 */
 	switch (semihosting->op) {
 		case SEMIHOSTING_SYS_WRITE:	/* 0x05 */
-			if (result < 0)
-				semihosting->result = fileio_info->param_3;
-			else
-				semihosting->result = 0;
-			break;
-
 		case SEMIHOSTING_SYS_READ:	/* 0x06 */
-			if (result == (int)fileio_info->param_3)
-				semihosting->result = 0;
-			if (result <= 0)
-				semihosting->result = fileio_info->param_3;
+#if _NDS_V5_ONLY_
+			if (result == -1)
+				semihosting->result = (int64_t)-1;
+			else if (result < 0)
+#else
+			if (result < 0)
+#endif /* _NDS_V5_ONLY_ */
+				semihosting->result = fileio_info->param_3;  /* Zero bytes read/written. */
+			else
+				semihosting->result = (int64_t)fileio_info->param_3 - result;
 			break;
 
 		case SEMIHOSTING_SYS_SEEK:	/* 0x0a */
 			if (result > 0)
 				semihosting->result = 0;
 			break;
+
+#if _NDS_V5_ONLY_
+		case SEMIHOSTING_SYS_FLEN:	/* 0x0C */
+			reg_sp = register_get_by_name(target->reg_cache, "sp", 1);
+			reg_sp->type->get(reg_sp);
+			reg_sp_value = buf_get_u64(reg_sp->value, 0, reg_sp->size);
+			target_read_memory(target, reg_sp_value - 64 + 35, 1, 1, buf);
+			semihosting->result = buf[0];
+			LOG_DEBUG("fstat result: %d", buf[0]);
+			break;
+#endif /* _NDS_V5_ONLY_ */
 	}
 
 	return semihosting->post_result(target);
@@ -1938,7 +2104,11 @@ COMMAND_HANDLER(handle_common_semihosting_fileio_command)
 	return ERROR_OK;
 }
 
+#if _NDS_V5_ONLY_
+__COMMAND_HANDLER(handle_common_semihosting_cmdline)
+#else
 COMMAND_HANDLER(handle_common_semihosting_cmdline)
+#endif
 {
 	struct target *target = get_current_target(CMD_CTX);
 	unsigned int i;
@@ -1965,8 +2135,13 @@ COMMAND_HANDLER(handle_common_semihosting_cmdline)
 		semihosting->cmdline = cmdline;
 	}
 
+#if _NDS_V5_ONLY_
+	LOG_DEBUG("semihosting command line is [%s]",
+		semihosting->cmdline);
+#else
 	command_print(CMD, "semihosting command line is [%s]",
 		semihosting->cmdline);
+#endif /* _NDS_V5_ONLY_ */
 
 	return ERROR_OK;
 }

@@ -19,6 +19,7 @@
 #include "riscv/riscv.h"
 #include "riscv/ndsv5.h"
 #include "register.h"
+#include "semihosting_common.h"
 
 #define NDS32_PROFILE_SAMPLES_PER_S   100/*(2)*/
 #define NDS32_PROFILE_PROBE_MS        (1000/NDS32_PROFILE_SAMPLES_PER_S)
@@ -348,8 +349,11 @@ int ndsv5_profile_post(struct target *target)
 	    (nds32->active_syscall_id == NDS32_SYSCALL_EXIT) ||
 	    (nds32->active_syscall_id == NDS32_VIRTUAL_EXIT)) {
 	*/
-	if (((target->state == TARGET_HALTED) && (!nds32->hit_syscall)) ||
-	    (nds32->active_syscall_id == NDS_EBREAK_EXIT)) {
+	struct semihosting *semihosting = target->semihosting;
+	if (((target->state == TARGET_HALTED) && (!nds32->hit_syscall) && (semihosting && !semihosting->hit_fileio)) ||
+	    (nds32->active_syscall_id == NDS_EBREAK_EXIT) ||
+	    (semihosting && semihosting->op == SEMIHOSTING_SYS_EXIT) ||
+	    (semihosting && semihosting->op == SEMIHOSTING_SYS_EXIT_EXTENDED)) {
 		nds32->is_in_profiling = false;
 		write_gmon_1(nds32, nds32->prof_num_samples);
 		write_gmon_2(nds32);

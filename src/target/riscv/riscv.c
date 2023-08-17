@@ -416,11 +416,7 @@ static int riscv_init_target(struct command_context *cmd_ctx,
 			bscan_tunnel_nested_tap_select_dmi[2].num_bits = bscan_tunnel_ir_width;
 	}
 
-#if _NDS_V5_ONLY_
-	/* To support NDS virtual hosting */
-#else
 	riscv_semihosting_init(target);
-#endif /* _NDS_V5_ONLY_ */
 
 	target->debug_reason = DBG_REASON_DBGRQ;
 
@@ -1704,6 +1700,8 @@ int riscv_resume(
 		foreach_smp_target_direction(resume_order == RO_NORMAL,
 									 tlist, target->smp_targets) {
 			struct target *t = tlist->target;
+			if (t->state == TARGET_RUNNING)
+				continue;
 			if (resume_prep(t, current, address, handle_breakpoints,
 						debug_execution) != ERROR_OK)
 				result = ERROR_FAIL;
@@ -1713,6 +1711,8 @@ int riscv_resume(
 									 tlist, target->smp_targets) {
 			struct target *t = tlist->target;
 			riscv_info_t *i = riscv_info(t);
+			if (t->state == TARGET_RUNNING)
+				continue;
 			if (i->prepped) {
 				if (resume_go(t, current, address, handle_breakpoints,
 							debug_execution) != ERROR_OK)
@@ -1723,6 +1723,8 @@ int riscv_resume(
 		foreach_smp_target_direction(resume_order == RO_NORMAL,
 									 tlist, target->smp_targets) {
 			struct target *t = tlist->target;
+			if (t->state == TARGET_RUNNING)
+				continue;
 			if (resume_finish(t, debug_execution) != ERROR_OK)
 				result = ERROR_FAIL;
 		}
@@ -2679,6 +2681,8 @@ int riscv_openocd_poll(struct target *target)
 		if (should_remain_halted && should_resume) {
 			LOG_WARNING("%d harts should remain halted, and %d should resume.",
 						should_remain_halted, should_resume);
+			should_remain_halted = 0;
+			LOG_WARNING("force set %d harts should remain halted", should_remain_halted);
 		}
 		if (should_remain_halted) {
 			LOG_DEBUG("halt all");
@@ -5687,8 +5691,10 @@ struct target_type ndsv5_target = {
 
 	.commands = ndsv5_command_handlers,
 	.target_create = riscv_create_target,
+
 	.get_gdb_fileio_info = ndsv5_get_gdb_fileio_info,
 	.gdb_fileio_end = ndsv5_gdb_fileio_end,
+
 	.hit_watchpoint = ndsv5_hit_watchpoint,
 };
 #endif /* _NDS_V5_ONLY_ */
