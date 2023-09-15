@@ -3107,6 +3107,12 @@ static int ndsv5_init_reg(struct target *target)
 			r->type = &ndsv5_vector_reg_access_type;
 	}
 
+	/* Support register alias name */
+	LOG_DEBUG("Support Register alias name");
+	struct reg *r_mccache_ctl_base = &target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MCCACHE_CTL_BASE];
+	r_mccache_ctl_base->alias_name = strdup("mccache_ctl_base");
+	LOG_DEBUG("Support Register alias name Done!");
+
 	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
 	gpBitFieldFileName = gpBitFieldFileNameV5;
 	if (riscv_xlen(target) == 64) {

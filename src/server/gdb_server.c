@@ -2750,6 +2750,35 @@ static int gdb_generate_target_description(struct target *target, char **tdesc_o
 
 				xml_printf(&retval, &tdesc, &pos, &size,
 						"/>\n");
+
+#if _NDS_V5_ONLY_
+				if (reg_list[i]->alias_name) {
+					xml_printf(&retval, &tdesc, &pos, &size,
+							"<reg name=\"%s\"", reg_list[i]->alias_name);
+					xml_printf(&retval, &tdesc, &pos, &size,
+							" bitsize=\"%" PRIu32 "\"", reg_list[i]->size);
+					xml_printf(&retval, &tdesc, &pos, &size,
+							" regnum=\"%" PRIu32 "\"", reg_list[i]->number);
+					if (reg_list[i]->caller_save)
+						xml_printf(&retval, &tdesc, &pos, &size,
+								" save-restore=\"yes\"");
+					else
+						xml_printf(&retval, &tdesc, &pos, &size,
+								" save-restore=\"no\"");
+
+					xml_printf(&retval, &tdesc, &pos, &size,
+							" type=\"%s\"", type_str);
+
+					if (reg_list[i]->group)
+						xml_printf(&retval, &tdesc, &pos, &size,
+								" group=\"%s\"", reg_list[i]->group);
+
+					xml_printf(&retval, &tdesc, &pos, &size,
+							"/>\n");
+				}
+#endif
+
+
 			}
 
 			xml_printf(&retval, &tdesc, &pos, &size,
