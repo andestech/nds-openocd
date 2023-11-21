@@ -254,7 +254,7 @@ static int ndsv5_profile_probe_pc(void *priv)
 				nds32->prof_samples[nds32->prof_num_samples] = reg_pc_value;
 				nds32->prof_num_samples++;
 				if (nds32->prof_num_samples >= NDS32_MAX_PROFILE_SAMPLES) {
-					LOG_ERROR("prof_num_samples overflow: %x", nds32->prof_num_samples);
+					LOG_ERROR("prof_num_samples overflow: 0x%x", nds32->prof_num_samples);
 					nds32->prof_num_samples--;
 				}
 
@@ -268,7 +268,7 @@ static int ndsv5_profile_probe_pc(void *priv)
 			nds32->prof_samples[nds32->prof_num_samples] = reg_pc_value;
 			nds32->prof_num_samples++;
 			if (nds32->prof_num_samples >= NDS32_MAX_PROFILE_SAMPLES) {
-				LOG_ERROR("prof_num_samples overflow: %x", nds32->prof_num_samples);
+				LOG_ERROR("prof_num_samples overflow: 0x%x", nds32->prof_num_samples);
 				nds32->prof_num_samples--;
 			}
 		}
@@ -294,12 +294,12 @@ static int ndsv5_profile_probe_pc(void *priv)
 	nds32->prof_samples[nds32->prof_num_samples] = reg_value_pc;
 	nds32->prof_num_samples++;
 	if (nds32->prof_num_samples >= NDS32_MAX_PROFILE_SAMPLES) {
-		LOG_ERROR("prof_num_samples overflow: %x", nds32->prof_num_samples);
+		LOG_ERROR("prof_num_samples overflow: 0x%x", nds32->prof_num_samples);
 		nds32->prof_num_samples--;
 	}
 
 	/* current pc, addr = 0, do not handle breakpoints, not debugging */
-	int retval = tt->resume(target, 1, 0, 0, 0);
+	int retval = riscv_resume(target, 1, 0, 0, 0, false);
 	nds32->gdb_run_mode_acting = true;
 	ndsv5_without_announce = 0;
 	NDS_INFO("reg_value_pc: 0x%lx", (long unsigned int)reg_value_pc);
@@ -319,6 +319,7 @@ int ndsv5_profile_state(struct target *target)
 
 	if ((nds32->prof_num_samples >= nds32->prof_sample_threshold) ||
 		(target->state == TARGET_HALTED)) {
+		LOG_ERROR("prof_num_samples overflow: 0x%x", nds32->prof_num_samples);
 		write_gmon_1(nds32, nds32->prof_num_samples); /* merge gmon data */
 		nds32->prof_num_samples = 0;
 	}
