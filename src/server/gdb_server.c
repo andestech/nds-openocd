@@ -4877,6 +4877,7 @@ static int gdb_target_add_one(struct target *target)
 			}
 		}
 		if (retval == ERROR_OK) {
+			target->targetid = target_number;
 			printf("The core #%d listens on %d.\n", target_number++, (int)portnumber);
 			break;
 		} else if ((portnumber+1) >= (int) 65535) {
