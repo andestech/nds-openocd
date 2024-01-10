@@ -149,16 +149,11 @@ static void write_gmon_2(struct nds32_v5 *nds32)
 
 	struct target *target = nds32->target;
 	uint32_t coreid = target->coreid;
-	LOG_DEBUG("coreid: %d", coreid);
-	if (coreid == 0)
-		strcat(filename, "gmon.out");
-	else {
-		char name_tmp[32];
-		memset(name_tmp, 0, sizeof(name_tmp));
-		sprintf(name_tmp, "gmon_core%02d.out", coreid);
-		strcat(filename, name_tmp);
-	}
-	LOG_INFO("filename: %s", filename);
+	char name_tmp[32];
+	memset(name_tmp, 0, sizeof(name_tmp));
+	sprintf(name_tmp, "gmon_%s.out", target_name(target));
+	strcat(filename, name_tmp);
+	LOG_INFO("coreid: %d, filename: %s", coreid, filename);
 
 	FILE *f = fopen(filename, "wb");
 	if (f == NULL)
