@@ -51,6 +51,7 @@ extern int ndsv5_tracer_dumpfile(struct target *target, char *pFileName);
 extern int ndsv5_tracer_decode_pktfile(char *pFileName);
 extern int ndsv5_tracer_polling(struct target *target);
 extern int ndsv5_tracer_capability_check(struct target *target);
+extern int ndsv5_tracer_smem_capability_check(struct target *target);
 extern uint32_t nds_tracer_action;
 extern uint32_t nds_tracer_stop_on_wrap;
 extern uint32_t nds_trTeSyncMax, nds_trTeInstMode;
@@ -58,6 +59,10 @@ extern uint32_t nds_teInhibitSrc;
 extern uint64_t nds_tracer_active_id;
 extern uint32_t nds_timestamp_on, nds_trTsControl;
 extern uint32_t nds_trTeFilteriMatchInst;
+extern uint64_t nds_trRamStart;
+extern uint64_t nds_trRamSize;
+extern uint64_t nds_trRamLimit;
+
 
 /* global command context from openocd.c */
 extern struct command_context *global_cmd_ctx;
@@ -252,6 +257,7 @@ __COMMAND_HANDLER(handle_ndsv5_query_capability_command)
 	/* AndeSight query disbus value to decide bus mode icon exist or
 	 * not(default value 0 mean bus mode icon exist) */
 	uint32_t if_tracer = 0, if_profiling = 1, disable_busmode = 0;
+	uint32_t if_tracer_smem = 0;
 	uint32_t hit_exception = 1, if_targetburn = 1;
 	uint32_t if_pwr_sample = 0;
 	uint32_t q_access_mode = 0;
@@ -288,11 +294,20 @@ __COMMAND_HANDLER(handle_ndsv5_query_capability_command)
 	/* Bug-26232, set disbus to 1 when HW system bus access is not supported */
 	disable_busmode = (system_bus_access)? 0 : 1;
 
+
 	/* tracer capability checking */
 	if (ndsv5_tracer_capability_check(target) == ERROR_OK)
 		if_tracer = 1;
 	else
 		if_tracer = 0;
+
+
+	if (if_tracer == 0) {
+		if_tracer_smem = 0;
+	} else {
+		if (ndsv5_tracer_smem_capability_check(target) == ERROR_OK)
+			if_tracer_smem = 1;
+	}
 
 	/* check IX CCTL command support */
 	if (ndsv5_mml_capability_check(target) != ERROR_OK)
@@ -306,6 +321,7 @@ __COMMAND_HANDLER(handle_ndsv5_query_capability_command)
 		tlb_dump = 0;
 
 	command_print(CMD, "tracer:%d;"
+			   "tracer_smem:%d;"
 			   "profiling:%d;"
 			   "disbus:%d;"
 			   "exception:%d;"
@@ -320,6 +336,7 @@ __COMMAND_HANDLER(handle_ndsv5_query_capability_command)
 			   "tlb_dump:%d;"
 			   "btb_dump:%d;",
 				if_tracer,
+				if_tracer_smem,
 				if_profiling,
 				disable_busmode,
 				hit_exception,
@@ -4981,6 +4998,14 @@ __COMMAND_HANDLER(handle_ndsv5_tracer_command)
 		return ERROR_FAIL;
 	}
 
+	static int if_tracer_smem = -1;
+	if (if_tracer_smem == -1) {
+		if (ndsv5_tracer_smem_capability_check(target) == ERROR_OK)
+			if_tracer_smem = 1;
+		else
+			if_tracer_smem = 0;
+	}
+
 	if (strcmp(CMD_ARGV[0], "on") == 0) {
 		LOG_DEBUG("trace on");
 		nds_tracer_action = CSR_MCONTROL_ACTION_TRACE_OFF;
@@ -5049,6 +5074,33 @@ __COMMAND_HANDLER(handle_ndsv5_tracer_command)
 		LOG_DEBUG("timestamp 0x%x", trTsControl);
 		nds_trTsControl = trTsControl;
 		nds_timestamp_on = timestamp_on;
+	} else if ((strcmp(CMD_ARGV[0], "smem-base") == 0) && (CMD_ARGC > 1)) {
+		if (if_tracer_smem == 0) {
+			LOG_ERROR("NCETBUF RAM Sink not supports SMEM mode");
+			return ERROR_FAIL;
+		}
+
+		COMMAND_PARSE_NUMBER(u64, CMD_ARGV[1], nds_trRamStart);
+		nds_trRamStart &= ~(0xf); /* For 16-bytes align */
+		LOG_DEBUG("trRamStart 0x%lx", nds_trRamStart);
+	} else if ((strcmp(CMD_ARGV[0], "smem-size") == 0) && (CMD_ARGC > 1)) {
+		if (if_tracer_smem == 0) {
+			LOG_ERROR("NCETBUF RAM Sink not supports SMEM mode");
+			return ERROR_FAIL;
+		}
+
+		COMMAND_PARSE_NUMBER(u64, CMD_ARGV[1], nds_trRamSize);
+		if (nds_trRamSize == 0x0) {
+			LOG_DEBUG("smem-size 0, reset nds_trRamLimit!");
+			nds_trRamSize = 0;
+			nds_trRamLimit = 0;
+		} else {
+			nds_trRamLimit = nds_trRamStart + nds_trRamSize;
+			nds_trRamLimit &= ~(0xf); /* For 16-bytes align */
+			nds_trRamSize = nds_trRamLimit - nds_trRamStart;
+			nds_trRamLimit -= 1;
+		}
+		LOG_DEBUG("trRamLimit 0x%lx (Size: 0x%lx)", nds_trRamLimit, nds_trRamSize);
 	} else {
 		command_print(CMD, "NDS tracer command ERROR");
 	}

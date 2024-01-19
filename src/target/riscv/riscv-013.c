@@ -74,12 +74,17 @@ uint32_t nds_teInstNoAddrDiff;
 uint32_t nds_timestamp_on, nds_trTsControl;
 uint32_t nds_tracer_multiplexer, nds_tracer_capability;
 uint32_t nds_trTeFilteriMatchInst;
+uint64_t nds_trRamStart;
+uint64_t nds_trRamSize;
+uint64_t nds_trRamLimit;
+static bool nds_trRamSMEM;
 int ndsv5_tracer_capability_check(struct target *target);
 static int ndsv5_tracer_buffer_init(void);
 extern struct ndsv5_indirect_csr_info ndsv5_indirect_csrs[];
+int ndsv5_tracer_smem_capability_check(struct target *target);
+static uint32_t tracer_tbuf_set_ram_mode(struct target *target, uint32_t mode);
 
 uint32_t TB_RAM_SIZE = 0x2000;
-#define TRACER_TMP_BUFSIZE   0x100000  /* 1MB */
 
 #define TRACER_VERSION       1         /* version number: 0~255 */
 #endif /* _NDS_V5_ONLY_ */
@@ -8035,22 +8040,46 @@ static uint32_t tracer_tbuf_enable_recording(struct target *target)
 	}
 #endif
 
-	/* reset teRamWP before recording */
-	uint32_t teramlimitlow;
-	dmi_read(target, &teramlimitlow, DMI_TFRAMLIMIT);
-	TB_RAM_SIZE = teramlimitlow + 4;
-	LOG_DEBUG("bufsize(etb_wptr) = 0x%x(%d)", TB_RAM_SIZE, TB_RAM_SIZE);
-	dmi_write(target, DMI_TERAMWP, 0);
-	timeout_limit   = 100;
-	timeout_counter = 0;
-	while (timeout_counter < timeout_limit) {
-		dmi_read(target, &teWrap, DMI_TERAMWP);
-		if (teWrap == 0)
-			break;
-		timeout_counter++;
-	}
+	if (nds_trRamSize != 0 && ndsv5_tracer_smem_capability_check(target) == ERROR_OK) {
+		/* SMEM mode */
+		tracer_tbuf_set_ram_mode(target, 1);
 
-	dmi_write(target, DMI_TERAMRP, 0x0);
+		/* The trRamWP/trRamRP registers should be initialized to trRamStart */
+		dmi_write(target, DMI_TRRAMWPLOW, (nds_trRamStart & 0xFFFFFFFF));
+		dmi_write(target, DMI_TRRAMWPHIGH, (nds_trRamStart >> 32));
+		dmi_write(target, DMI_TRRAMRPLOW, (nds_trRamStart & 0xFFFFFFFF));
+		dmi_write(target, DMI_TRRAMRPHIGH, (nds_trRamStart >> 32));
+
+		/* trRamStart */
+		dmi_write(target, DMI_TRRAMSTARTLOW, (nds_trRamStart & 0xFFFFFFFF));
+		dmi_write(target, DMI_TRRAMSTARTHIGH, (nds_trRamStart >> 32));
+
+		/* trRamLimit */
+		dmi_write(target, DMI_TRRAMLIMITLOW, (nds_trRamLimit & 0xFFFFFFFF));
+		dmi_write(target, DMI_TRRAMLIMITHIGH, (nds_trRamLimit >> 32));
+
+		TB_RAM_SIZE = nds_trRamSize;
+	} else {
+		/* SRAM mode */
+
+		/* reset teRamWP before recording */
+		uint32_t teramlimitlow;
+		dmi_read(target, &teramlimitlow, DMI_TFRAMLIMIT);
+		TB_RAM_SIZE = teramlimitlow + 4;
+		dmi_write(target, DMI_TERAMWP, 0);
+		timeout_limit   = 100;
+		timeout_counter = 0;
+		while (timeout_counter < timeout_limit) {
+			dmi_read(target, &teWrap, DMI_TERAMWP);
+			if (teWrap == 0)
+				break;
+			timeout_counter++;
+		}
+		tracer_tbuf_set_ram_mode(target, 0);
+		dmi_write(target, DMI_TERAMRP, 0x0);
+	}
+	LOG_DEBUG("bufsize(etb_wptr) = 0x%x(%d)", TB_RAM_SIZE, TB_RAM_SIZE);
+	ndsv5_tracer_buffer_init();
 
 	dmi_read(target, &tf_ctrl_reg, DMI_TFCONTROL);
 	tf_ctrl_reg |= DMI_TFCONTROL_tfEnable;
@@ -8109,6 +8138,8 @@ static uint32_t tracer_tbuf_disable_recording(struct target *target)
 
 static uint32_t tracer_tbuf_set_trace_format(struct target *target, uint32_t format)
 {
+	return 0;  /* Should removed this!? */
+
 	uint32_t tf_ctrl_reg;
 
 	LOG_DEBUG("DBG_API:tbuf:recording format is set to %d", format);
@@ -8130,6 +8161,23 @@ static uint32_t tracer_tbuf_set_stop_on_wrap(struct target *target, uint32_t mod
 		tf_ctrl_reg |= DMI_TFCONTROL_tfStopOnWrap;
 	else
 		tf_ctrl_reg &= ~DMI_TFCONTROL_tfStopOnWrap;
+	dmi_write(target, DMI_TFCONTROL, tf_ctrl_reg);
+
+	return 0;
+}
+
+static uint32_t tracer_tbuf_set_ram_mode(struct target *target, uint32_t mode)
+{
+	nds_trRamSMEM = (mode) ? true : false;
+
+	uint32_t tf_ctrl_reg;
+
+	LOG_DEBUG("DBG_API:tbuf:trRamModeSMEM is set to %d", mode);
+	dmi_read(target, &tf_ctrl_reg, DMI_TFCONTROL);
+	if (mode)
+		tf_ctrl_reg |= DMI_TFCONTROL_trRamModeSMEM;
+	else
+		tf_ctrl_reg &= ~DMI_TFCONTROL_trRamModeSMEM;
 	dmi_write(target, DMI_TFCONTROL, tf_ctrl_reg);
 
 	return 0;
@@ -8169,9 +8217,10 @@ static int ndsv5_tracer_buffer_init(void)
 		free(p_etb_buf_start);
 		p_etb_buf_start = NULL;
 	}
-	p_etb_buf_start = (uint32_t *)malloc(TRACER_TMP_BUFSIZE);
+	LOG_DEBUG("Allocate buffer %d bytes", TB_RAM_SIZE*2);
+	p_etb_buf_start = (uint32_t *)malloc(TB_RAM_SIZE*2);
 	p_etb_buf_end = p_etb_buf_start;
-	p_etb_buf_end += (TRACER_TMP_BUFSIZE >> 2);
+	p_etb_buf_end += (TB_RAM_SIZE >> 2);
 
 	/* reset to buffer start */
 	p_etb_wptr = p_etb_buf_start;
@@ -8255,7 +8304,6 @@ uint32_t ndsv5_tracer_all_cores_setting(void)
 {
 	if (nds_tracer_on != 0)
 		return 0;
-	ndsv5_tracer_buffer_init();
 
 	struct target *target = all_targets;
 	uint32_t coreid;
@@ -8289,6 +8337,56 @@ uint32_t ndsv5_tracer_all_cores_setting(void)
 				ndsv5_tracer_setting(target);
 			}
 		}
+	}
+
+	nds_tracer_on = 1;
+	return 0;
+}
+
+static uint32_t nds_tracer_active_id_current; /* avoid using nds_tracer_active_id */
+uint32_t ndsv5_tracer_setting_current(struct target *target)
+{
+	LOG_DEBUG("nds_tracer_active_id_current: 0x%x", nds_tracer_active_id_current);
+
+	if (nds_tracer_capability == 0)
+		ndsv5_tracer_capability_check(target);
+
+	if (nds_tracer_capability != 1) {
+		LOG_DEBUG("TB_DEVARCH != 0x4200");
+		return 0;
+	}
+
+	/* First trace, enable buffer */
+	if (!nds_tracer_active_id_current) {
+		tracer_enable_multiplexer(target);
+
+		/* Activate trace buffer and set its register */
+		tracer_activate_tbuf(target);
+		tracer_tbuf_set_trace_format(target, NEXUS_TRACE_FORMAT);
+		if (nds_tracer_stop_on_wrap == 0)
+			tracer_tbuf_set_stop_on_wrap(target, 0);
+		else
+			tracer_tbuf_set_stop_on_wrap(target, 1);
+
+		/* Enable trace buffer for recording */
+		tracer_tbuf_enable_recording(target);
+	}
+
+	if (target->smp) {
+		struct target_list *tlist;
+		foreach_smp_target(tlist, target->smp_targets) {
+			struct target *t = tlist->target;
+			riscv_set_current_hartid(target, t->coreid);
+			uint32_t coreid = t->coreid;
+			LOG_DEBUG("smp-coreid: %d ", coreid);
+			nds_tracer_active_id_current |= (0x01 << coreid);
+			ndsv5_tracer_setting(t);
+		}
+	} else {
+		uint32_t coreid = target->coreid;
+		LOG_DEBUG("amp-coreid: %d ", coreid);
+		nds_tracer_active_id_current |= (0x01 << coreid);
+		ndsv5_tracer_setting(target);
 	}
 
 	nds_tracer_on = 1;
@@ -8390,8 +8488,12 @@ static int ndsv5_tracer_read_etb(struct target *target)
 		etb_rptr = etb_wptr;
 		fifo_words = TB_RAM_SIZE;
 	} else {
-		etb_rptr = 0;
-		fifo_words = etb_wptr;
+		if (nds_trRamSMEM) {
+			fifo_words = etb_wptr - etb_rptr;
+		} else {
+			etb_rptr = 0;
+			fifo_words = etb_wptr;
+		}
 	}
 	fifo_words >>= 2;
 	dmi_write(target, DMI_TERAMRP, etb_rptr);
@@ -8404,9 +8506,10 @@ static int ndsv5_tracer_read_etb(struct target *target)
 	pcurr_wptr += fifo_words;
 	LOG_DEBUG("p_etb_wptr = 0x%lx, p_etb_buf_end = 0x%lx, fifo_words = 0x%x",
 			(unsigned long)p_etb_wptr, (unsigned long)p_etb_buf_end, fifo_words);
-	if (pcurr_wptr >= p_etb_buf_end) {
-		LOG_DEBUG("PKT BUF FULL !! need to dump file");
-		return ERROR_FAIL;
+
+	if (nds_trRamSMEM) {
+		target_read_buffer(target, etb_rptr, fifo_words * 4, (uint8_t *)p_etb_buf_start);
+		p_etb_wptr += fifo_words * 4;
 	} else {
 		for (i = 0; i < fifo_words; i++) {
 			dmi_read(target, &etb_data, DMI_TERAMDATA);
@@ -8416,9 +8519,10 @@ static int ndsv5_tracer_read_etb(struct target *target)
 		dmi_read(target, &etb_rptr, DMI_TERAMRP);
 
 		LOG_DEBUG("3.etb_wptr = 0x%x, etb_rptr = 0x%x, fifo_words = 0x%x", etb_wptr, etb_rptr, fifo_words);
+
+		dmi_write(target, DMI_TERAMWP, 0x0);
 	}
 
-	dmi_write(target, DMI_TERAMWP, 0x0);
 	return ERROR_OK;
 }
 
@@ -8560,6 +8664,17 @@ int ndsv5_tracer_capability_check(struct target *target)
 	return ERROR_FAIL;
 }
 
+int ndsv5_tracer_smem_capability_check(struct target *target)
+{
+	uint32_t  tf_info_reg;
+	dmi_read(target, &tf_info_reg, DMI_TFIMPL);
+
+	/* Check trRamHasSMEM */
+	if ((tf_info_reg >> 13) & 0x1)
+		return ERROR_OK;
+	else
+		return ERROR_FAIL;
+}
 
 /* ============================================================================= */
 /*    packet parser                                                              */
