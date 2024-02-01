@@ -74,10 +74,12 @@ uint32_t nds_teInstNoAddrDiff;
 uint32_t nds_timestamp_on, nds_trTsControl;
 uint32_t nds_tracer_multiplexer, nds_tracer_capability;
 uint32_t nds_trTeFilteriMatchInst;
+uint32_t nds_trTeFilterMatchValueContext;
 uint64_t nds_trRamStart;
 uint64_t nds_trRamSize;
 uint64_t nds_trRamLimit;
 static bool nds_trRamSMEM;
+static bool nds_trace_new_bitmap;
 int ndsv5_tracer_capability_check(struct target *target);
 static int ndsv5_tracer_buffer_init(void);
 extern struct ndsv5_indirect_csr_info ndsv5_indirect_csrs[];
@@ -2127,7 +2129,12 @@ static int examine(struct target *target)
 		* program buffer. */
 	r->debug_buffer_size = info->progbufsize;
 
+#if _NDS_V5_ONLY_
+	/* For Zilsd */
+	int result = register_read_abstract(target, NULL, GDB_REGNO_S1, 64);
+#else
 	int result = register_read_abstract(target, NULL, GDB_REGNO_S0, 64);
+#endif
 	if (result == ERROR_OK)
 		r->xlen = 64;
 	else {
@@ -7600,10 +7607,17 @@ static uint32_t tracer_activate_encoder(struct target *target)
 		return 0;
 	}
 	LOG_DEBUG("DBG_API:activate TMUX_ITTMUXCTRL %d", trace_sel);
-	dmi_read(target, &tmux_ctrl_reg, TMUX_ITTMUXCTRL);
-	tmux_ctrl_reg |= (0x01 << trace_sel);
-	dmi_write(target, TMUX_ITTMUXCTRL, tmux_ctrl_reg);
-	dmi_read(target, &tmux_ctrl_reg, TMUX_ITTMUXCTRL);
+	if (nds_trace_new_bitmap) {
+		dmi_read(target, &tmux_ctrl_reg, TMUX_ITTMUXCTRL_NEW);
+		tmux_ctrl_reg |= (0x01 << trace_sel);
+		dmi_write(target, TMUX_ITTMUXCTRL_NEW, tmux_ctrl_reg);
+		dmi_read(target, &tmux_ctrl_reg, TMUX_ITTMUXCTRL_NEW);
+	} else {
+		dmi_read(target, &tmux_ctrl_reg, TMUX_ITTMUXCTRL);
+		tmux_ctrl_reg |= (0x01 << trace_sel);
+		dmi_write(target, TMUX_ITTMUXCTRL, tmux_ctrl_reg);
+		dmi_read(target, &tmux_ctrl_reg, TMUX_ITTMUXCTRL);
+	}
 	LOG_DEBUG("DBG_API: tmux_ctrl_reg 0x%x", tmux_ctrl_reg);
 
 	LOG_DEBUG("DBG_API:activate encoder%d", trace_sel);
@@ -7702,6 +7716,11 @@ static uint32_t tracer_enable_encoder(struct target *target)
 
 static uint32_t tracer_disable_encoder(struct target *target)
 {
+	if (!target->trace_on) {
+		LOG_DEBUG("Target has been trun-off tracing, skip!");
+		return 0;
+	}
+
 	uint32_t  te_ctrl_reg;
 	uint32_t  timeout_limit;
 	uint32_t  timeout_counter;
@@ -7728,6 +7747,7 @@ static uint32_t tracer_disable_encoder(struct target *target)
 	if (timeout_counter >= timeout_limit)
 		LOG_DEBUG("DBG_API:ERROR:timeout waiting teEnable to be cleared for encoder");
 
+	target->trace_on = false;
 	return 0;
 }
 
@@ -7815,25 +7835,46 @@ static uint32_t tracer_set_sync_mode(struct target *target,
 }
 
 static uint32_t tracer_set_filter(struct target *target,
-		uint32_t filtermatchinst)
+		uint32_t filtermatchinst, uint32_t filtermatchcontext)
 {
 	LOG_DEBUG("Setting filter");
 
 	/* Enable filter control */
 	uint32_t trTeFilterControl_0;
 	dmi_read(target, &trTeFilterControl_0, selected_encoder(DMI_TEFILTER));
-	trTeFilterControl_0 |= 0x3; /* trTeFilterEnable = 1, trTeFilterMatchPrivilege = 1 */
+	if (filtermatchinst)
+		trTeFilterControl_0 |= 0x3; // trTeFilterEnable = 1, trTeFilterMatchPrivilege = 1
+	if (filtermatchcontext)
+		trTeFilterControl_0 |= 0x10001; // trTeFilterEnable = 1, nds_trTeFilterMatchContext = 1
 	dmi_write(target, selected_encoder(DMI_TEFILTER), trTeFilterControl_0);
 	dmi_read(target, &trTeFilterControl_0, selected_encoder(DMI_TEFILTER));
 	LOG_DEBUG("trTeFilterControl_0: 0x%x", trTeFilterControl_0);
 
 	/* Set trTeFilteriMatchInst */
-	uint32_t trTeFilterMatchInst_0;
-	dmi_read(target, &trTeFilterMatchInst_0, selected_encoder(DMI_TEFILTERMATCH0));
-	trTeFilterMatchInst_0 = filtermatchinst;
-	dmi_write(target, selected_encoder(DMI_TEFILTERMATCH0), trTeFilterMatchInst_0);
-	dmi_read(target, &trTeFilterMatchInst_0, selected_encoder(DMI_TEFILTERMATCH0));
-	LOG_DEBUG("trTeFilterMatchInst_0: 0x%x", trTeFilterMatchInst_0);
+	if (filtermatchinst) {
+		uint32_t trTeFilterMatchInst_0;
+		dmi_read(target, &trTeFilterMatchInst_0, selected_encoder(DMI_TEFILTERMATCH0));
+		trTeFilterMatchInst_0 = filtermatchinst;
+		dmi_write(target, selected_encoder(DMI_TEFILTERMATCH0), trTeFilterMatchInst_0);
+		dmi_read(target, &trTeFilterMatchInst_0, selected_encoder(DMI_TEFILTERMATCH0));
+		LOG_DEBUG("trTeFilterMatchInst_0: 0x%x", trTeFilterMatchInst_0);
+	}
+
+	/* Set trTeFilterMatchValueContext & trTeFilterMatchMaskContext */
+	if (filtermatchcontext) {
+		uint32_t trTeFilterMatchValueContext;
+		dmi_read(target, &trTeFilterMatchValueContext, selected_encoder(DMI_TEFILTERMATCH1));
+		trTeFilterMatchValueContext = filtermatchcontext;
+		dmi_write(target, selected_encoder(DMI_TEFILTERMATCH1), trTeFilterMatchValueContext);
+		dmi_read(target, &trTeFilterMatchValueContext, selected_encoder(DMI_TEFILTERMATCH1));
+		LOG_DEBUG("trTeFilterMatchValueContext: 0x%x", trTeFilterMatchValueContext);
+
+		uint32_t trTeFilterMatchMaskContext = 0x3;
+		dmi_write(target, selected_encoder(DMI_TEFILTERMATCH2), trTeFilterMatchMaskContext);
+		dmi_read(target, &trTeFilterMatchMaskContext, selected_encoder(DMI_TEFILTERMATCH2));
+		LOG_DEBUG("trTeFilterMatchMaskContext: 0x%x", trTeFilterMatchMaskContext);
+	}
+
 
 	return 0;
 }
@@ -7909,28 +7950,7 @@ static uint32_t tracer_reset_timestamp(struct target *target)
 	dmi_write(target, selected_encoder(DMI_TSCONTROL), ts_ctrl_reg);
 	return 0;
 }
-/*
-static uint64_t tracer_get_timestamp(struct target *target)
-{
-	uint64_t	timestamp;
-	uint32_t	tsUpper;
-	uint32_t	tsUpper2;
-	uint32_t	tsLower;
 
-	while (1) {
-		dmi_read(target, &tsUpper, selected_encoder(DMI_TSUPPER));
-		dmi_read(target, &tsLower, selected_encoder(DMI_TSLOWER));
-		dmi_read(target, &tsUpper2, selected_encoder(DMI_TSUPPER));
-		if (tsUpper2 == tsUpper)
-			break;
-	}
-	timestamp = tsUpper;
-	timestamp <<= 32;
-	timestamp |= tsLower;
-	LOG_DEBUG("DBG_API:encoder%d: timestamp=0x%lx", trace_sel, timestamp);
-	return timestamp;
-}
-*/
 static int tracer_set_atbid(struct target *target, uint32_t atbid)
 {
 	uint32_t    atb_ctrl_reg;
@@ -8233,6 +8253,11 @@ static int ndsv5_tracer_buffer_free(void)
 
 uint32_t ndsv5_tracer_setting(struct target *target)
 {
+	if (target->trace_on) {
+		LOG_DEBUG("Target has been trun-on tracing, skip!");
+		return 0;
+	}
+
 	RISCV_INFO(r);
 	tracer_select_hart(r->current_hartid);
 
@@ -8249,8 +8274,8 @@ uint32_t ndsv5_tracer_setting(struct target *target)
 	/* Set teSyncMode to 1, teSyncMax to 4 */
 	tracer_set_sync_mode(target, 0x1, nds_trTeSyncMax);
 
-	if (nds_trTeFilteriMatchInst)
-		tracer_set_filter(target, nds_trTeFilteriMatchInst);
+	if (nds_trTeFilteriMatchInst || nds_trTeFilterMatchValueContext)
+		tracer_set_filter(target, nds_trTeFilteriMatchInst, nds_trTeFilterMatchValueContext);
 
 	tracer_reset_timestamp(target);
 
@@ -8260,7 +8285,7 @@ uint32_t ndsv5_tracer_setting(struct target *target)
 			/* Activate timestamp and enable internal timestamp counter, set tsDebug to 0,
 				tsType to 1(externel), tsPrescale to 0, ndsTimestampSelect to 1(trTsEnable) */
 			tsDebug = 0;
-			tsType = 3;
+			tsType = 1;  // External
 			tsPrescale = 0;
 			tsSelect = 1;
 		} else {
@@ -8292,6 +8317,7 @@ uint32_t ndsv5_tracer_setting(struct target *target)
 	/* Enable trace encoder and wait for trace-on event */
 	tracer_enable_encoder(target);
 
+	target->trace_on = true;
 	return 0;
 }
 
@@ -8311,6 +8337,11 @@ uint32_t ndsv5_tracer_all_cores_setting(void)
 	}
 
 	for (target = all_targets; target; target = target->next) {
+		if (target->trace_on) {
+			LOG_DEBUG("Target has been trun-on tracing, skip!");
+			continue;
+		}
+
 		if (target->smp) {
 			struct target_list *tlist;
 			foreach_smp_target(tlist, target->smp_targets) {
@@ -8503,8 +8534,15 @@ static int ndsv5_tracer_read_etb(struct target *target)
 			(unsigned long)p_etb_wptr, (unsigned long)p_etb_buf_end, fifo_words);
 
 	if (nds_trRamSMEM) {
-		target_read_buffer(target, etb_rptr, fifo_words * 4, (uint8_t *)p_etb_buf_start);
+		struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+		uint32_t bak_nds_va_to_pa_off = nds32->nds_va_to_pa_off;
+		enum nds_memory_access orig_channel = nds32->memory.access_channel;
+		nds32->nds_va_to_pa_off = 1;
+		nds32->memory.access_channel = NDS_MEMORY_ACC_BUS;
+		target_read_buffer(target, etb_rptr, fifo_words * 4, (uint8_t *)p_etb_buf_start); 
 		p_etb_wptr += fifo_words * 4;
+		nds32->nds_va_to_pa_off = bak_nds_va_to_pa_off;
+		nds32->memory.access_channel = orig_channel;
 	} else {
 		for (i = 0; i < fifo_words; i++) {
 			dmi_read(target, &etb_data, DMI_TERAMDATA);
@@ -8580,7 +8618,8 @@ int ndsv5_tracer_dumpfile(struct target *target, char *pFileName)
 
 	if (p_etb_wptr != p_etb_buf_start) {
 		total_pkt_bytes = (p_etb_wptr - p_etb_buf_start);
-		total_pkt_bytes <<= 2;
+		if (!nds_trRamSMEM)
+			total_pkt_bytes <<= 2;
 	}
 	LOG_DEBUG("p_etb_wptr = 0x%lx, total_pkt_bytes = 0x%x",
 		(unsigned long)p_etb_wptr, total_pkt_bytes);
@@ -8643,19 +8682,59 @@ int ndsv5_tracer_polling(struct target *target)
 
 int ndsv5_tracer_capability_check(struct target *target)
 {
+	/*
+	 * After April 24, 2024, the RTL design underwent changes,
+	 * relocating the address space of CoreSight registers from 0x1E00-0x1FFF to 0xE00 - 0xFFF
+	 * for three IPs (NCETENC200, NCETBUF200, and NCETMUX200).
+	 * Consequently, the codes for checking registers CIDR0-3 (0x1FF0-0x1FFC -> 0x0FF0-0x0FFC) and
+	 * DEVARCH (0x1FBC-> 0x0FBC) need to be modified accordingly.
+	 *
+	 * The checking procedure needs to be altered as follows:
+	 * If the expected data for CIDR0-3 or DEVARCH of encoder0 is obtained in the old address space
+	 *     Return OLD_Bitmap
+	 * Else
+	 *     If all zeros are obtained for CIDR0-3 or DEVARCH of encoder0 in the old address space,
+	 *         If the expected data for the CSRs of encoder0 is obtained in the new address space
+	 *             Return NEW_bitmap,
+	 *         Else
+	 *             return ERROR
+	 *     Else
+	 *         return ERROR
+	 *
+	 * */
+
+	uint32_t trace_sel_bak = trace_sel;
+	trace_sel = 0;
+
 	uint32_t  devarch_reg;
-	dmi_read(target, &devarch_reg, TB_DEVARCH);
-	LOG_DEBUG("TB_DEVARCH = 0x%x", devarch_reg);
-	/* TB_DEVARCH, 15:0 ARCHID Architecture ID RO 0x4200 */
-	if ((devarch_reg & 0xFFFF) == 0x4200) {
-		dmi_read(target, &devarch_reg, TMUX_DEVARCH);
+	dmi_read(target, &devarch_reg, selected_encoder(DMI_DEVARCH));
+	LOG_DEBUG("DMI_DEVARCH = 0x%x", devarch_reg);
+
+	nds_trace_new_bitmap = false;
+	if (devarch_reg == 0x0) {
+		dmi_read(target, &devarch_reg, selected_encoder(DMI_DEVARCH_NEW));
+		nds_trace_new_bitmap = true;
+		LOG_DEBUG("Maybe new bitmap");
+	}
+
+	if ((devarch_reg & 0xFFFF) == 0x4500) {
+		if (nds_trace_new_bitmap)
+			dmi_read(target, &devarch_reg, TMUX_DEVARCH_NEW);
+		else
+			dmi_read(target, &devarch_reg, TMUX_DEVARCH);
+
 		LOG_DEBUG("TMUX_DEVARCH = 0x%x", devarch_reg);
 		if ((devarch_reg & 0xFFFF) == 0x4D00)
 			nds_tracer_multiplexer = 1;
+
+		trace_sel = trace_sel_bak;
 		nds_tracer_capability = 1;
 		return ERROR_OK;
 	}
+
+	nds_trace_new_bitmap = false;
 	nds_tracer_capability = 0xFF;
+	trace_sel = trace_sel_bak;
 	return ERROR_FAIL;
 }
 
@@ -8663,6 +8742,10 @@ int ndsv5_tracer_smem_capability_check(struct target *target)
 {
 	uint32_t  tf_info_reg;
 	dmi_read(target, &tf_info_reg, DMI_TFIMPL);
+<<<<<<< HEAD
+=======
+	LOG_DEBUG("DMI_TFIMPL: 0x%x", tf_info_reg);
+>>>>>>> e5acdadfc (Squash for AST-v5.3.1)
 
 	/* Check trRamHasSMEM */
 	if ((tf_info_reg >> 13) & 0x1)

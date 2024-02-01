@@ -143,6 +143,7 @@ struct target {
 	const char *variant;				/* what variant of this chip is it? */
 	uint32_t corenums;
 	uint32_t group;					/* halt group id */
+	int32_t targetid;				/* SMP target use the same targetid */
 #endif
 
 	/** Should we defer examine to later */
@@ -236,6 +237,7 @@ struct target {
 	/* if executed reset run command, cannot change r->rtos_hartid and target->rtos->current_threadid/thread */
 	bool after_reset_run;
 	uint32_t hart_unavailable;
+	bool trace_on;
 #endif
 };
 

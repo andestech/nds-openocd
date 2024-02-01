@@ -837,9 +837,9 @@ COMMAND_HANDLER(handle_vtarget_configure_command)
 			COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], vtarget_xlen);
 		command_print(CMD, "configure: %s = 0x%08x", CMD_ARGV[0], vtarget_xlen);
 	} else {
-		command_print(CMD, "configure: property '%s' unknown!", CMD_ARGV[0]);
-		NDS32_LOG("<-- configure: property '%s' unknown! -->", CMD_ARGV[0]);
-		return ERROR_FAIL;
+		//command_print(CMD, "configure: property '%s' unknown!", CMD_ARGV[0]);
+		LOG_INFO("<-- configure: property '%s' unknown! -->", CMD_ARGV[0]);
+		//return ERROR_FAIL;
 	}
 	return ERROR_OK;
 }

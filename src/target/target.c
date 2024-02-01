@@ -2920,8 +2920,13 @@ COMMAND_HANDLER(handle_targets_command)
 	}
 
 	struct target *target = all_targets;
+#if _NDS_V5_ONLY_
+	command_print(CMD, "    TargetName         Type       Endian TapName            State         Coreid   Targetid");
+	command_print(CMD, "--  ------------------ ---------- ------ ------------------ ------------- -------- --------");
+#else
 	command_print(CMD, "    TargetName         Type       Endian TapName            State       ");
 	command_print(CMD, "--  ------------------ ---------- ------ ------------------ ------------");
+#endif /* _NDS_V5_ONLY_ */
 	while (target) {
 		const char *state;
 		char marker = ' ';
@@ -2935,6 +2940,20 @@ COMMAND_HANDLER(handle_targets_command)
 			marker = '*';
 
 		/* keep columns lined up to match the headers above */
+#if _NDS_V5_ONLY_
+		command_print(CMD,
+				"%2d%c %-18s %-10s %-6s %-18s %-13s %-8d %-8d",
+				target->target_number,
+				marker,
+				target_name(target),
+				target_type_name(target),
+				jim_nvp_value2name_simple(nvp_target_endian,
+					target->endianness)->name,
+				target->tap->dotted_name,
+				state,
+				target->coreid,
+				target->targetid);
+#else
 		command_print(CMD,
 				"%2d%c %-18s %-10s %-6s %-18s %s",
 				target->target_number,
@@ -2945,6 +2964,7 @@ COMMAND_HANDLER(handle_targets_command)
 					target->endianness)->name,
 				target->tap->dotted_name,
 				state);
+#endif /* _NDS_V5_ONLY_ */
 		target = target->next;
 	}
 

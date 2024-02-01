@@ -394,6 +394,7 @@ static int ndsv5_burner_input(struct connection *connection)
 			break;
 		case RESET_HOLD:
 			/* reset and halt all harts(AMP) */
+			ndsv5_access_memory_pack_batch_run(target, 1); /* Flush buffer */
 			retval = ndsv5_reset_halt_as_examine(target);
 			if (retval != ERROR_OK)
 				buf_p[0] |= 0x80;
@@ -401,6 +402,7 @@ static int ndsv5_burner_input(struct connection *connection)
 			break;
 		case RESET_TARGET:
 			/* TODO: Use SRST as default!! */
+			ndsv5_access_memory_pack_batch_run(target, 1); /* Flush buffer */
 			ndsv5_reset_target(target, RESET_HALT);
 
 			/* free run in debug mode */

@@ -24,9 +24,11 @@
 #define CSR_MCCACHE_CTL_BASE    0xFCF
 #define CSR_MRVARCH_CFG         0xFCA
 #define CSR_MRVARCH_CFG2        0xFCB
+#define CSR_MRVARCH_CFG3        0xFCC
 
 #define CSR_MHVM_CFG            0xFD0
 #define CSR_MHVMB               0xFD1
+#define CSR_MPL2CM_CFG          0xFDF
 
 
 /* AndeStar V5 Machine Mode - 9.3. Memory and Miscellaneous CSRs */
@@ -36,6 +38,7 @@
 #define CSR_MNVEC		0x7C3
 #define CSR_MPFT_CTL		0x7C5
 #define CSR_MCACHE_CTL		0x7CA
+#define CSR_MCACHE_CTL2		0x7EA
 #define CSR_MMISC_CTL		0x7D0
 #define CSR_MCCTLBEGINADDR	0x7CB
 #define CSR_MCCTLCOMMAND	0x7CC
@@ -119,11 +122,6 @@
 #define CSR_PMAADDR15		0xBDF
 
 
-/* AndeStar V5 Machine Mode - 9.10. Extended CSRs */
-#define CSR_MNDSX_RDATA         0x7DD
-#define CSR_MNDSX_WDATA         0x7DE
-
-
 /* 10. AndeStar V5 Debug Mode Control and Status Registers */
 #define CSR_DEXC2DBG		0x7E0
 #define CSR_DDCAUSE		0x7E1
@@ -186,6 +184,13 @@
 #define CSR_HPMCOUNTER3H	0xC83
 */
 
+/* Machine Non-Maskable Interrupt Handling */
+#define CSR_MRNXVEC             0x7DE
+#define CSR_MNSCRATCH           0x740
+#define CSR_MNEPC               0x741
+#define CSR_MNCAUSE             0x742
+#define CSR_MNSTATUS            0x744
+
 /* Sync 20220511: Removed by upstream */
 #define CSR_USTATUS 0x0
 #define CSR_UIE 0x4
@@ -214,9 +219,11 @@ DECLARE_CSR(mvec_cfg, CSR_MVEC_CFG)
 DECLARE_CSR(ml2c_ctl_base, CSR_MCCACHE_CTL_BASE)
 DECLARE_CSR(mrvarch_cfg, CSR_MRVARCH_CFG)
 DECLARE_CSR(mrvarch_cfg2, CSR_MRVARCH_CFG2)
+DECLARE_CSR(mrvarch_cfg3, CSR_MRVARCH_CFG3)
 
 DECLARE_CSR(mhvm_cfg, CSR_MHVM_CFG)
 DECLARE_CSR(mhvmb, CSR_MHVMB)
+DECLARE_CSR(mpl2cm_cfg, CSR_MPL2CM_CFG)
 
 DECLARE_CSR(milmb, CSR_MILMB)
 DECLARE_CSR(mdlmb, CSR_MDLMB)
@@ -224,6 +231,7 @@ DECLARE_CSR(mecc_code, CSR_MECC_CODE)
 DECLARE_CSR(mnvec, CSR_MNVEC)
 DECLARE_CSR(mpft_ctl, CSR_MPFT_CTL)
 DECLARE_CSR(mcache_ctl, CSR_MCACHE_CTL)
+DECLARE_CSR(mcache_ctl2, CSR_MCACHE_CTL2)
 DECLARE_CSR(mmisc_ctl, CSR_MMISC_CTL)
 DECLARE_CSR(mcctlbeginaddr, CSR_MCCTLBEGINADDR)
 DECLARE_CSR(mcctlcommand, CSR_MCCTLCOMMAND)
@@ -284,9 +292,6 @@ DECLARE_CSR(pmaaddr13, CSR_PMAADDR13)
 DECLARE_CSR(pmaaddr14, CSR_PMAADDR14)
 DECLARE_CSR(pmaaddr15, CSR_PMAADDR15)
 
-DECLARE_CSR(mndsx_rdata, CSR_MNDSX_RDATA)
-DECLARE_CSR(mndsx_wdata, CSR_MNDSX_WDATA)
-
 DECLARE_CSR(dexc2dbg, CSR_DEXC2DBG)
 DECLARE_CSR(ddcause, CSR_DDCAUSE)
 
@@ -319,6 +324,13 @@ DECLARE_CSR(txevt, CSR_TXEVT)
 DECLARE_CSR(umisc_ctl, CSR_UMISC_CTL)
 
 DECLARE_CSR(mcountinhibit, CSR_MCOUNTINHIBIT)
+
+/* Machine Non-Maskable Interrupt Handling */
+DECLARE_CSR(mrnxvec, CSR_MRNXVEC)
+DECLARE_CSR(mnscratch, CSR_MNSCRATCH)
+DECLARE_CSR(mnepc, CSR_MNEPC)
+DECLARE_CSR(mncause, CSR_MNCAUSE)
+DECLARE_CSR(mnstatus, CSR_MNSTATUS)
 
 /* Sync 20220511: Removed by upstream */
 DECLARE_CSR(ustatus, CSR_USTATUS)

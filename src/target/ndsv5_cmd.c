@@ -1,4 +1,4 @@
-/*
+			/*
  * SPDX-License-Identifier: GPL-2.0+
  * Copyright (c) 2019 Andes Technology, Ya-Ting Lin <yating@andestech.com>
  * Copyright (C) 2019 Hellosun Wu <wujiheng.tw@gmail.com>
@@ -59,6 +59,7 @@ extern uint32_t nds_teInhibitSrc;
 extern uint64_t nds_tracer_active_id;
 extern uint32_t nds_timestamp_on, nds_trTsControl;
 extern uint32_t nds_trTeFilteriMatchInst;
+extern uint32_t nds_trTeFilterMatchValueContext;
 extern uint64_t nds_trRamStart;
 extern uint64_t nds_trRamSize;
 extern uint64_t nds_trRamLimit;
@@ -1708,50 +1709,6 @@ COMMAND_HANDLER(ndsv5_get_smp_target_count)
 	return ERROR_OK;
 }
 
-/* Copy from target.c */
-static const struct jim_nvp nvp_target_endian[] = {
-	{ .name = "big",    .value = TARGET_BIG_ENDIAN },
-	{ .name = "little", .value = TARGET_LITTLE_ENDIAN },
-	{ .name = "be",     .value = TARGET_BIG_ENDIAN },
-	{ .name = "le",     .value = TARGET_LITTLE_ENDIAN },
-	{ .name = NULL,     .value = -1 },
-};
-COMMAND_HANDLER(handle_ndsv5_targets_command)
-{
-	int retval = ERROR_OK;
-	struct target *target = all_targets;
-	command_print(CMD, "    TargetName         Type       Endian TapName            State         Coreid  ");
-	command_print(CMD, "--  ------------------ ---------- ------ ------------------ ------------- --------");
-	while (target) {
-		const char *state;
-		char marker = ' ';
-
-		if (target->tap->enabled)
-			state = target_state_name(target);
-		else
-			state = "tap-disabled";
-
-		if (CMD_CTX->current_target == target)
-			marker = '*';
-
-		/* keep columns lined up to match the headers above */
-		command_print(CMD,
-				"%2d%c %-18s %-10s %-6s %-18s %-13s %4d",
-				target->target_number,
-				marker,
-				target_name(target),
-				target_type_name(target),
-				jim_nvp_value2name_simple(nvp_target_endian,
-					target->endianness)->name,
-				target->tap->dotted_name,
-				state,
-				target->coreid);
-		target = target->next;
-	}
-
-	return retval;
-}
-
 extern const struct command_registration riscv_exec_command_handlers[];
 extern const struct command_registration nds32_exec_command_handlers[];
 extern const struct command_registration semihosting_common_handlers[];
@@ -1905,13 +1862,6 @@ static const struct command_registration ndsv5_exec_command_handlers[] = {
 		.mode = COMMAND_EXEC,
 		.usage = " ",
 		.help = "tlb control",
-	},
-	{
-		.name = "targets",
-		.handler = handle_ndsv5_targets_command,
-		.mode = COMMAND_EXEC,
-		.usage = " ",
-		.help = "[targets]",
 	},
 	{
 		.chain = riscv_exec_command_handlers,
@@ -2392,6 +2342,8 @@ static int ndsv5_init_option_reg(struct target *target)
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MMSC_CFG2].exist = false;
 
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MSECCFGH].exist = false;
+
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MCACHE_CTL2].exist = false;
 	}
 
 	reg_name = ndsv5_get_CSR_name(target, CSR_MISA);
@@ -2545,13 +2497,6 @@ static int ndsv5_init_option_reg(struct target *target)
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG].exist = false;
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG2].exist = false;
 
-
-			/* mmsc_cfg2.XCSR == 1 */
-			NDS_INFO("disable CSR_MNDSX_RDATA / CSR_MNDSX_WDATA");
-			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNDSX_RDATA].exist = false;
-			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNDSX_WDATA].exist = false;
-
-
 			/* if RV32 mmsc_cfg2.ALT_FP_FMT == 1 */
 			NDS_INFO("disable CSR_UMISC_CTL");
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_UMISC_CTL].exist = false;
@@ -2612,13 +2557,6 @@ static int ndsv5_init_option_reg(struct target *target)
 				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG2].exist = false;
 			}
 
-			/* if RV32 mmsc_cfg2.XCSR[24] == 1 */
-			if ((reg_mmsc_cfg2_value & 0x1000000) == 0) {
-				NDS_INFO("disable CSR_MNDSX_RDATA / CSR_MNDSX_WDATA");
-				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNDSX_RDATA].exist = false;
-				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNDSX_WDATA].exist = false;
-			}
-
 			/* if RV32 mmsc_cfg2.ALT_FP_FMT[25] == 1 */
 			if ((reg_mmsc_cfg2_value & 0x2000000) == 0) {
 				NDS_INFO("disable CSR_UMISC_CTL");
@@ -2626,7 +2564,7 @@ static int ndsv5_init_option_reg(struct target *target)
 			}
 
 			/* if RV32 mmsc_cfg2.MSC_EXT3[31] */
-			if ((reg_mmsc_cfg_value & 0x80000000) == 0) {
+			if ((reg_mmsc_cfg2_value & 0x80000000) == 0) {
 				NDS_INFO("disable CSR_MMSC_CFG3");
 				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MMSC_CFG3].exist = false;
 			}
@@ -2676,13 +2614,6 @@ static int ndsv5_init_option_reg(struct target *target)
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG].exist = false;
 		}
 
-		/* if RV64 mmsc_cfg.XCSR[56] == 1 */
-		if ((reg_mmsc_cfg_value & 0x100000000000000) == 0) {
-			NDS_INFO("disable CSR_MNDSX_RDATA / CSR_MNDSX_WDATA");
-			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNDSX_RDATA].exist = false;
-			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNDSX_WDATA].exist = false;
-		}
-
 		/* if RV64 mmsc_cfg.MSC_EXT3[63] == 1 */
 		if ((reg_mmsc_cfg_value & 0x8000000000000000) == 0) {
 			NDS_INFO("disable CSR_MMSC_CFG3");
@@ -2709,7 +2640,7 @@ static int ndsv5_init_option_reg(struct target *target)
 		}
 
 		/*  mmsc_cfg3.CST_CTL == 1 */
-		if ((reg_mmsc_cfg3_value & 0x80)) {
+		if ((reg_mmsc_cfg3_value & 0x80) == 1) {
 			NDS_INFO("Enable CSR_UMISC_CTL");
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_UMISC_CTL].exist = true;
 		}
@@ -2782,6 +2713,8 @@ static int ndsv5_init_option_reg(struct target *target)
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SSTATEEN1].exist = false;
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SSTATEEN2].exist = false;
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SSTATEEN3].exist = false;
+
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG3].exist = false;
 	} else {
 		reg_name = ndsv5_get_CSR_name(target, CSR_MRVARCH_CFG);
 		p_cur_reg = register_get_by_name(target->reg_cache, reg_name, 1);
@@ -2808,6 +2741,81 @@ static int ndsv5_init_option_reg(struct target *target)
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SSTATEEN1].exist = false;
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SSTATEEN2].exist = false;
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SSTATEEN3].exist = false;
+		}
+
+		/* mrvarch_cfg.MRVARCH_EXT3[63] == 1 */
+		if ((riscv_xlen(target) == 64) && ((reg_mrvarch_value & 0x8000000000000000) == 0)) {
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG3].exist = false;
+			NDS_INFO("disable CSR_MRVARCH_CFG3 register");
+		}
+	}
+
+
+	if (riscv_xlen(target) ==32) {
+		/* MRVARCH_CFG2 check */
+		if (!target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG2].exist) {
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG3].exist = false;
+		} else {
+			reg_name = ndsv5_get_CSR_name(target, CSR_MRVARCH_CFG2);
+			p_cur_reg = register_get_by_name(target->reg_cache, reg_name, 1);
+			p_cur_reg->type->get(p_cur_reg);
+			uint64_t reg_mrvarch2_value = buf_get_u64(p_cur_reg->value, 0, p_cur_reg->size);
+
+			/* RV32, mrvarch_cfg2.MRVARCH_EXT3[31] == 1 */
+			if ((reg_mrvarch2_value & 0x80000000) == 0) {
+				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG3].exist = false;
+				NDS_INFO("disable CSR_MRVARCH_CFG3 register");
+			}
+		}
+
+		if (!target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MCACHE_CTL].exist) {
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MCACHE_CTL2].exist = false;
+		} else {
+			reg_name = ndsv5_get_CSR_name(target, CSR_MCACHE_CTL);
+			p_cur_reg = register_get_by_name(target->reg_cache, reg_name, 1);
+			p_cur_reg->type->get(p_cur_reg);
+			uint64_t reg_mcache_ctl_value = buf_get_u64(p_cur_reg->value, 0, p_cur_reg->size);
+
+			/* mcache_ctl.CHE_EXT[31] == 1 */
+			if ((reg_mcache_ctl_value & 0x80000000) == 0)
+				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MCACHE_CTL2].exist = false;
+		}
+	}
+
+
+	/* MRVARCH_CFG3 check */
+	if (!target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG3].exist) {
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRNXVEC].exist = false;
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNSCRATCH].exist = false;
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNEPC].exist = false;
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNCAUSE].exist = false;
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNSTATUS].exist = false;
+
+		/* SPMP Register */
+		LOG_INFO("Disable all SPMP registers");
+		for (i = GDB_REGNO_COUNT; i < GDB_REGNO_COUNT+GDB_INDIRECT_REGNO_COUNT; i++)
+			target->reg_cache->reg_list[i].exist = false;
+	} else {
+		reg_name = ndsv5_get_CSR_name(target, CSR_MRVARCH_CFG3);
+		p_cur_reg = register_get_by_name(target->reg_cache, reg_name, 1);
+		p_cur_reg->type->get(p_cur_reg);
+		uint64_t reg_mrvarch3_value = buf_get_u64(p_cur_reg->value, 0, p_cur_reg->size);
+
+		/* mrvarch_cfg3.Smrnmi[5:4] == 1 */
+		if ((reg_mrvarch3_value & 0x30) == 0) {
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRNXVEC].exist = false;
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNSCRATCH].exist = false;
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNEPC].exist = false;
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNCAUSE].exist = false;
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNSTATUS].exist = false;
+		}
+
+		/* mrvarch_cfg3.Spmp[3:2] == 1 */
+		if ((reg_mrvarch3_value & 0xc) == 0) {
+			/* SPMP Register */
+			LOG_INFO("Disable all SPMP registers");
+			for (i = GDB_REGNO_COUNT; i < GDB_REGNO_COUNT+GDB_INDIRECT_REGNO_COUNT; i++)
+				target->reg_cache->reg_list[i].exist = false;
 		}
 	}
 
@@ -3379,16 +3387,9 @@ int ndsv5_get_gdb_fileio_info(struct target *target, struct gdb_fileio_info *fil
 
 	NDS_INFO("hit syscall ID: 0x%x\n", (uint32_t)nds32->active_syscall_id);
 
-	/* free previous identifier storage */
-	if (NULL != fileio_info->identifier) {
-		free(fileio_info->identifier);
-		fileio_info->identifier = NULL;
-	}
-
 	switch (nds32->active_syscall_id) {
 		case NDS_EBREAK_EXIT:
-			fileio_info->identifier = (char *)malloc(5);
-			sprintf(fileio_info->identifier, "exit");
+			fileio_info->identifier = "exit";
 			fileio_info->param_1 = buf_get_u64(reg_r0->value, 0, reg_r0->size);
 			/*
 			target->is_program_exit = true;
@@ -3397,8 +3398,7 @@ int ndsv5_get_gdb_fileio_info(struct target *target, struct gdb_fileio_info *fil
 		case NDS_EBREAK_OPEN:
 			{
 				uint8_t filename[256];
-				fileio_info->identifier = (char *)malloc(5);
-				sprintf(fileio_info->identifier, "open");
+				fileio_info->identifier = "open";
 				fileio_info->param_1 = buf_get_u64(reg_r0->value, 0, reg_r0->size);
 				/* reserve fileio_info->param_2 for length of path */
 				fileio_info->param_3 = buf_get_u64(reg_r1->value, 0, reg_r1->size);
@@ -3410,27 +3410,23 @@ int ndsv5_get_gdb_fileio_info(struct target *target, struct gdb_fileio_info *fil
 			}
 			break;
 		case NDS_EBREAK_CLOSE:
-			fileio_info->identifier = (char *)malloc(6);
-			sprintf(fileio_info->identifier, "close");
+			fileio_info->identifier = "close";
 			fileio_info->param_1 = buf_get_u64(reg_r0->value, 0, reg_r0->size);
 			break;
 		case NDS_EBREAK_READ:
-			fileio_info->identifier = (char *)malloc(5);
-			sprintf(fileio_info->identifier, "read");
+			fileio_info->identifier = "read";
 			fileio_info->param_1 = buf_get_u64(reg_r0->value, 0, reg_r0->size);
 			fileio_info->param_2 = buf_get_u64(reg_r1->value, 0, reg_r1->size);
 			fileio_info->param_3 = buf_get_u64(reg_r2->value, 0, reg_r2->size);
 			break;
 		case NDS_EBREAK_WRITE:
-			fileio_info->identifier = (char *)malloc(6);
-			sprintf(fileio_info->identifier, "write");
+			fileio_info->identifier = "write";
 			fileio_info->param_1 = buf_get_u64(reg_r0->value, 0, reg_r0->size);
 			fileio_info->param_2 = buf_get_u64(reg_r1->value, 0, reg_r1->size);
 			fileio_info->param_3 = buf_get_u64(reg_r2->value, 0, reg_r2->size);
 			break;
 		case NDS_EBREAK_LSEEK:
-			fileio_info->identifier = (char *)malloc(6);
-			sprintf(fileio_info->identifier, "lseek");
+			fileio_info->identifier = "lseek";
 			fileio_info->param_1 = buf_get_u64(reg_r0->value, 0, reg_r0->size);
 			fileio_info->param_2 = buf_get_u64(reg_r1->value, 0, reg_r1->size);
 			fileio_info->param_3 = buf_get_u64(reg_r2->value, 0, reg_r2->size);
@@ -3438,8 +3434,7 @@ int ndsv5_get_gdb_fileio_info(struct target *target, struct gdb_fileio_info *fil
 		case NDS_EBREAK_UNLINK:
 			{
 				uint8_t filename[256];
-				fileio_info->identifier = (char *)malloc(7);
-				sprintf(fileio_info->identifier, "unlink");
+				fileio_info->identifier = "unlink";
 				fileio_info->param_1 = buf_get_u64(reg_r0->value, 0, reg_r0->size);
 				/* reserve fileio_info->param_2 for length of path */
 
@@ -3451,8 +3446,7 @@ int ndsv5_get_gdb_fileio_info(struct target *target, struct gdb_fileio_info *fil
 		case NDS_EBREAK_RENAME:
 			{
 				uint8_t filename[256];
-				fileio_info->identifier = (char *)malloc(7);
-				sprintf(fileio_info->identifier, "rename");
+				fileio_info->identifier = "rename";
 				fileio_info->param_1 = buf_get_u64(reg_r0->value, 0, reg_r0->size);
 				/* reserve fileio_info->param_2 for length of old path */
 				fileio_info->param_3 = buf_get_u64(reg_r1->value, 0, reg_r1->size);
@@ -3468,16 +3462,14 @@ int ndsv5_get_gdb_fileio_info(struct target *target, struct gdb_fileio_info *fil
 			}
 			break;
 		case NDS_EBREAK_FSTAT:
-			fileio_info->identifier = (char *)malloc(6);
-			sprintf(fileio_info->identifier, "fstat");
+			fileio_info->identifier = "fstat";
 			fileio_info->param_1 = buf_get_u64(reg_r0->value, 0, reg_r0->size);
 			fileio_info->param_2 = buf_get_u64(reg_r1->value, 0, reg_r1->size);
 			break;
 		case NDS_EBREAK_STAT:
 			{
 				uint8_t filename[256];
-				fileio_info->identifier = (char *)malloc(5);
-				sprintf(fileio_info->identifier, "stat");
+				fileio_info->identifier = "stat";
 				fileio_info->param_1 = buf_get_u64(reg_r0->value, 0, reg_r0->size);
 				/* reserve fileio_info->param_2 for length of old path */
 				fileio_info->param_3 = buf_get_u64(reg_r1->value, 0, reg_r1->size);
@@ -3488,15 +3480,13 @@ int ndsv5_get_gdb_fileio_info(struct target *target, struct gdb_fileio_info *fil
 			}
 			break;
 		case NDS_EBREAK_GETTIMEOFDAY:
-			fileio_info->identifier = (char *)malloc(13);
-			sprintf(fileio_info->identifier, "gettimeofday");
+			fileio_info->identifier = "gettimeofday";
 			fileio_info->param_1 = buf_get_u64(reg_r0->value, 0, reg_r0->size);
 			fileio_info->param_2 = buf_get_u64(reg_r1->value, 0, reg_r1->size);
 			break;
 
 		default:
-			fileio_info->identifier = (char *)malloc(8);
-			sprintf(fileio_info->identifier, "unknown");
+			fileio_info->identifier = "unknown";
 			break;
 	}
 
@@ -5104,6 +5094,11 @@ __COMMAND_HANDLER(handle_ndsv5_tracer_command)
 		COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], matchinst);
 		LOG_DEBUG("match-inst 0x%x", matchinst);
 		nds_trTeFilteriMatchInst = matchinst;
+	} else if ((strcmp(CMD_ARGV[0], "match-context") == 0) && (CMD_ARGC > 1)) {
+		unsigned int matchcontext = 0;
+		COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], matchcontext);
+		LOG_DEBUG("match-context 0x%x", matchcontext);
+		nds_trTeFilterMatchValueContext = matchcontext;
 	} else if (strcmp(CMD_ARGV[0], "timestamp") == 0) {
 		unsigned int timestamp_on = 0;
 		if (CMD_ARGC > 1) {
