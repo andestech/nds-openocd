@@ -4930,9 +4930,11 @@ int riscv_init_registers(struct target *target)
 	/* These types are built into gdb. */
 	static struct reg_data_type type_ieee_single = { .type = REG_TYPE_IEEE_SINGLE, .id = "ieee_single" };
 	static struct reg_data_type type_ieee_double = { .type = REG_TYPE_IEEE_DOUBLE, .id = "ieee_double" };
+	static struct reg_data_type type_bloat16 = { .type = REG_TYPE_FLOAT, .id = "bfloat16" };
 	static struct reg_data_type_union_field single_double_fields[] = {
 		{"float", &type_ieee_single, single_double_fields + 1},
-		{"double", &type_ieee_double, NULL},
+		{"double", &type_ieee_double, single_double_fields + 2},
+		{"bfloat16", &type_bloat16, NULL},
 	};
 	static struct reg_data_type_union single_double_union = {
 		.fields = single_double_fields
