@@ -74,6 +74,7 @@ uint32_t nds_teInstNoAddrDiff;
 uint32_t nds_timestamp_on, nds_trTsControl;
 uint32_t nds_tracer_multiplexer, nds_tracer_capability;
 uint32_t nds_trTeFilteriMatchInst;
+uint32_t nds_trTeFilterMatchValueContext;
 uint64_t nds_trRamStart;
 uint64_t nds_trRamSize;
 uint64_t nds_trRamLimit;
@@ -7820,25 +7821,46 @@ static uint32_t tracer_set_sync_mode(struct target *target,
 }
 
 static uint32_t tracer_set_filter(struct target *target,
-		uint32_t filtermatchinst)
+		uint32_t filtermatchinst, uint32_t filtermatchcontext)
 {
 	LOG_DEBUG("Setting filter");
 
 	/* Enable filter control */
 	uint32_t trTeFilterControl_0;
 	dmi_read(target, &trTeFilterControl_0, selected_encoder(DMI_TEFILTER));
-	trTeFilterControl_0 |= 0x3; /* trTeFilterEnable = 1, trTeFilterMatchPrivilege = 1 */
+	if (filtermatchinst)
+		trTeFilterControl_0 |= 0x3; /* trTeFilterEnable = 1, trTeFilterMatchPrivilege = 1 */
+	if (filtermatchcontext)
+		trTeFilterControl_0 |= 0x10001; /* trTeFilterEnable = 1, nds_trTeFilterMatchContext = 1 */
 	dmi_write(target, selected_encoder(DMI_TEFILTER), trTeFilterControl_0);
 	dmi_read(target, &trTeFilterControl_0, selected_encoder(DMI_TEFILTER));
 	LOG_DEBUG("trTeFilterControl_0: 0x%x", trTeFilterControl_0);
 
 	/* Set trTeFilteriMatchInst */
-	uint32_t trTeFilterMatchInst_0;
-	dmi_read(target, &trTeFilterMatchInst_0, selected_encoder(DMI_TEFILTERMATCH0));
-	trTeFilterMatchInst_0 = filtermatchinst;
-	dmi_write(target, selected_encoder(DMI_TEFILTERMATCH0), trTeFilterMatchInst_0);
-	dmi_read(target, &trTeFilterMatchInst_0, selected_encoder(DMI_TEFILTERMATCH0));
-	LOG_DEBUG("trTeFilterMatchInst_0: 0x%x", trTeFilterMatchInst_0);
+	if (filtermatchinst) {
+		uint32_t trTeFilterMatchInst_0;
+		dmi_read(target, &trTeFilterMatchInst_0, selected_encoder(DMI_TEFILTERMATCH0));
+		trTeFilterMatchInst_0 = filtermatchinst;
+		dmi_write(target, selected_encoder(DMI_TEFILTERMATCH0), trTeFilterMatchInst_0);
+		dmi_read(target, &trTeFilterMatchInst_0, selected_encoder(DMI_TEFILTERMATCH0));
+		LOG_DEBUG("trTeFilterMatchInst_0: 0x%x", trTeFilterMatchInst_0);
+	}
+
+	/* Set trTeFilterMatchValueContext & trTeFilterMatchMaskContext */
+	if (filtermatchcontext) {
+		uint32_t trTeFilterMatchValueContext;
+		dmi_read(target, &trTeFilterMatchValueContext, selected_encoder(DMI_TEFILTERMATCH1));
+		trTeFilterMatchValueContext = filtermatchcontext;
+		dmi_write(target, selected_encoder(DMI_TEFILTERMATCH1), trTeFilterMatchValueContext);
+		dmi_read(target, &trTeFilterMatchValueContext, selected_encoder(DMI_TEFILTERMATCH1));
+		LOG_DEBUG("trTeFilterMatchValueContext: 0x%x", trTeFilterMatchValueContext);
+
+		uint32_t trTeFilterMatchMaskContext = 0x3;
+		dmi_write(target, selected_encoder(DMI_TEFILTERMATCH2), trTeFilterMatchMaskContext);
+		dmi_read(target, &trTeFilterMatchMaskContext, selected_encoder(DMI_TEFILTERMATCH2));
+		LOG_DEBUG("trTeFilterMatchMaskContext: 0x%x", trTeFilterMatchMaskContext);
+	}
+
 
 	return 0;
 }
@@ -8254,8 +8276,8 @@ uint32_t ndsv5_tracer_setting(struct target *target)
 	/* Set teSyncMode to 1, teSyncMax to 4 */
 	tracer_set_sync_mode(target, 0x1, nds_trTeSyncMax);
 
-	if (nds_trTeFilteriMatchInst)
-		tracer_set_filter(target, nds_trTeFilteriMatchInst);
+	if (nds_trTeFilteriMatchInst || nds_trTeFilterMatchValueContext)
+		tracer_set_filter(target, nds_trTeFilteriMatchInst, nds_trTeFilterMatchValueContext);
 
 	tracer_reset_timestamp(target);
 

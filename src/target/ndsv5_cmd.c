@@ -59,6 +59,7 @@ extern uint32_t nds_teInhibitSrc;
 extern uint64_t nds_tracer_active_id;
 extern uint32_t nds_timestamp_on, nds_trTsControl;
 extern uint32_t nds_trTeFilteriMatchInst;
+extern uint32_t nds_trTeFilterMatchValueContext;
 extern uint64_t nds_trRamStart;
 extern uint64_t nds_trRamSize;
 extern uint64_t nds_trRamLimit;
@@ -5059,6 +5060,11 @@ __COMMAND_HANDLER(handle_ndsv5_tracer_command)
 		COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], matchinst);
 		LOG_DEBUG("match-inst 0x%x", matchinst);
 		nds_trTeFilteriMatchInst = matchinst;
+	} else if ((strcmp(CMD_ARGV[0], "match-context") == 0) && (CMD_ARGC > 1)) {
+		unsigned int matchcontext = 0;
+		COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], matchcontext);
+		LOG_DEBUG("match-context 0x%x", matchcontext);
+		nds_trTeFilterMatchValueContext = matchcontext;
 	} else if (strcmp(CMD_ARGV[0], "timestamp") == 0) {
 		unsigned int timestamp_on = 0;
 		if (CMD_ARGC > 1) {
