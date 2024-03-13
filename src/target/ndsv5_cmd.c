@@ -2373,6 +2373,8 @@ static int ndsv5_init_option_reg(struct target *target)
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MMSC_CFG2].exist = false;
 
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MSECCFGH].exist = false;
+
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MCACHE_CTL2].exist = false;
 	}
 
 	reg_name = ndsv5_get_CSR_name(target, CSR_MISA);
@@ -2526,13 +2528,6 @@ static int ndsv5_init_option_reg(struct target *target)
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG].exist = false;
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG2].exist = false;
 
-
-			/* mmsc_cfg2.XCSR == 1 */
-			NDS_INFO("disable CSR_MNDSX_RDATA / CSR_MNDSX_WDATA");
-			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNDSX_RDATA].exist = false;
-			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNDSX_WDATA].exist = false;
-
-
 			/* if RV32 mmsc_cfg2.ALT_FP_FMT == 1 */
 			NDS_INFO("disable CSR_UMISC_CTL");
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_UMISC_CTL].exist = false;
@@ -2593,13 +2588,6 @@ static int ndsv5_init_option_reg(struct target *target)
 				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG2].exist = false;
 			}
 
-			/* if RV32 mmsc_cfg2.XCSR[24] == 1 */
-			if ((reg_mmsc_cfg2_value & 0x1000000) == 0) {
-				NDS_INFO("disable CSR_MNDSX_RDATA / CSR_MNDSX_WDATA");
-				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNDSX_RDATA].exist = false;
-				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNDSX_WDATA].exist = false;
-			}
-
 			/* if RV32 mmsc_cfg2.ALT_FP_FMT[25] == 1 */
 			if ((reg_mmsc_cfg2_value & 0x2000000) == 0) {
 				NDS_INFO("disable CSR_UMISC_CTL");
@@ -2655,13 +2643,6 @@ static int ndsv5_init_option_reg(struct target *target)
 		if ((reg_mmsc_cfg_value & 0x10000000000000) == 0) {
 			NDS_INFO("disable CSR_MRVARCH_CFG register");
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG].exist = false;
-		}
-
-		/* if RV64 mmsc_cfg.XCSR[56] == 1 */
-		if ((reg_mmsc_cfg_value & 0x100000000000000) == 0) {
-			NDS_INFO("disable CSR_MNDSX_RDATA / CSR_MNDSX_WDATA");
-			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNDSX_RDATA].exist = false;
-			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNDSX_WDATA].exist = false;
 		}
 
 		/* if RV64 mmsc_cfg.MSC_EXT3[63] == 1 */
@@ -2757,6 +2738,8 @@ static int ndsv5_init_option_reg(struct target *target)
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SSTATEEN1].exist = false;
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SSTATEEN2].exist = false;
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SSTATEEN3].exist = false;
+
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG3].exist = false;
 	} else {
 		reg_name = ndsv5_get_CSR_name(target, CSR_MRVARCH_CFG);
 		p_cur_reg = register_get_by_name(target->reg_cache, reg_name, 1);
@@ -2783,6 +2766,64 @@ static int ndsv5_init_option_reg(struct target *target)
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SSTATEEN1].exist = false;
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SSTATEEN2].exist = false;
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SSTATEEN3].exist = false;
+		}
+
+		/* mrvarch_cfg.MRVARCH_EXT3[63] == 1 */
+		if ((reg_mrvarch_value & 0x8000000000000000) == 0)
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG3].exist = false;
+	}
+
+
+	if (riscv_xlen(target) == 32) {
+		/* MRVARCH_CFG2 check */
+		if (!target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG2].exist) {
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG3].exist = false;
+		} else {
+			reg_name = ndsv5_get_CSR_name(target, CSR_MRVARCH_CFG2);
+			p_cur_reg = register_get_by_name(target->reg_cache, reg_name, 1);
+			p_cur_reg->type->get(p_cur_reg);
+			uint64_t reg_mrvarch2_value = buf_get_u64(p_cur_reg->value, 0, p_cur_reg->size);
+
+			/* RV32, mrvarch_cfg2.MRVARCH_EXT3[31] == 1 */
+			if ((reg_mrvarch2_value & 0x80000000) == 0)
+				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG3].exist = false;
+		}
+
+		if (!target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MCACHE_CTL].exist) {
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MCACHE_CTL2].exist = false;
+		} else {
+			reg_name = ndsv5_get_CSR_name(target, CSR_MCACHE_CTL);
+			p_cur_reg = register_get_by_name(target->reg_cache, reg_name, 1);
+			p_cur_reg->type->get(p_cur_reg);
+			uint64_t reg_mcache_ctl_value = buf_get_u64(p_cur_reg->value, 0, p_cur_reg->size);
+
+			/* mcache_ctl.CHE_EXT[31] == 1 */
+			if ((reg_mcache_ctl_value & 0x80000000) == 0)
+				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MCACHE_CTL2].exist = false;
+		}
+	}
+
+
+	/* MRVARCH_CFG3 check */
+	if (!target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG3].exist) {
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRNXVEC].exist = false;
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNSCRATCH].exist = false;
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNEPC].exist = false;
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNCAUSE].exist = false;
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNSTATUS].exist = false;
+	} else {
+		reg_name = ndsv5_get_CSR_name(target, CSR_MRVARCH_CFG3);
+		p_cur_reg = register_get_by_name(target->reg_cache, reg_name, 1);
+		p_cur_reg->type->get(p_cur_reg);
+		uint64_t reg_mrvarch3_value = buf_get_u64(p_cur_reg->value, 0, p_cur_reg->size);
+
+		/* mrvarch_cfg3.Smrnmi[5:4] == 1 */
+		if ((reg_mrvarch3_value & 0x30) == 0) {
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRNXVEC].exist = false;
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNSCRATCH].exist = false;
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNEPC].exist = false;
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNCAUSE].exist = false;
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNSTATUS].exist = false;
 		}
 	}
 
