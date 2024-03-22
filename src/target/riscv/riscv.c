@@ -30,6 +30,7 @@
 #include "ndsv5-013.h"
 #include "target/nds32_new/nds32_log.h"
 #include "target/ndsv5_ace.h"
+extern struct ndsv5_indirect_csr_info ndsv5_indirect_csrs[];
 #endif
 
 #define get_field(reg, mask) (((reg) & (mask)) / ((mask) & ~((mask) << 1)))
@@ -5567,8 +5568,17 @@ int riscv_init_registers(struct target *target)
 #endif /* _NDS_V5_ONLY_ */
 
 #if _NDS_V5_ONLY_
-		/* To support ACR, make the following code out */
-		} /* Don't delete this braces, it will causing compile error */
+		} else if (number >= GDB_REGNO_COUNT && number < (GDB_REGNO_COUNT+GDB_INDIRECT_REGNO_COUNT)) {
+			r->group = "csr";
+			r->feature = &feature_csr;
+			r->type = &nds_indirect_reg_access_type;
+
+			unsigned csr_number = number - GDB_REGNO_COUNT;
+
+			LOG_DEBUG("Indirect %u(#%u) name: %s", csr_number, number, ndsv5_indirect_csrs[csr_number].name);
+			r->name = ndsv5_indirect_csrs[csr_number].name;
+			r->exist = true; /* Assume all exist */
+		}
 #else
 		} else if (number >= GDB_REGNO_COUNT) {
 			/* Custom registers. */
@@ -5622,7 +5632,7 @@ int riscv_init_registers(struct target *target)
 	 * };
 	 */
 	LOG_DEBUG("ACR ID starts from %d", GDB_REGNO_COUNT);
-	unsigned int reg_list_idx = GDB_REGNO_COUNT;
+	unsigned int reg_list_idx = GDB_REGNO_COUNT + GDB_INDIRECT_REGNO_COUNT;
 	for (unsigned int i = 0; i < acr_type_count_v5; i++) {
 		unsigned int acr_number = acr_info_list_v5->num;
 		unsigned int acr_width = acr_info_list_v5->width;
@@ -5644,10 +5654,10 @@ int riscv_init_registers(struct target *target)
 			unsigned int ByteSize = (!r->size%8) ? r->size/8 : (r->size/8) + 1;
 			r->value = (uint8_t *)calloc(ByteSize, sizeof(char));
 
-			r->feature = calloc(sizeof(struct reg_feature), 1);
+			r->feature = calloc(1, sizeof(struct reg_feature));
 			r->feature->name = "org.gnu.gdb.riscv.ace";
 
-			r->reg_data_type = calloc(sizeof(struct reg_data_type), 1);
+			r->reg_data_type = calloc(1, sizeof(struct reg_data_type));
 			r->reg_data_type->type = REG_TYPE_UINT8;
 			r->reg_data_type->id = acr_name;
 

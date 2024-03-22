@@ -658,7 +658,7 @@ static struct reg_cache *nds32_build_reg_cache(struct target *target,
 
 	uint32_t total_cop_reg_nums = nds32_reg_total_cop_reg_nums();
 	LOG_DEBUG("COP: total_cop_reg_nums: %d", total_cop_reg_nums);
-	struct reg_cache *cache = calloc(sizeof(struct reg_cache), 1);
+	struct reg_cache *cache = calloc(1, sizeof(struct reg_cache));
 	struct reg *reg_list =
 		calloc(TOTAL_REG_NUM + total_ace_reg_nums + total_cop_reg_nums, sizeof(struct reg));
 	struct nds32_reg *reg_arch_info =
@@ -690,7 +690,7 @@ static struct reg_cache *nds32_build_reg_cache(struct target *target,
 		reg_list[i].size = nds32_reg_size(i);
 		reg_list[i].arch_info = &reg_arch_info[i];
 
-		reg_list[i].reg_data_type = calloc(sizeof(struct reg_data_type), 1);
+		reg_list[i].reg_data_type = calloc(1, sizeof(struct reg_data_type));
 		type = nds32_reg_type(i);
 
 		if (type == NDS32_REG_TYPE_ACE) {

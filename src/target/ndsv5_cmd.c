@@ -51,6 +51,7 @@ extern int ndsv5_tracer_dumpfile(struct target *target, char *pFileName);
 extern int ndsv5_tracer_decode_pktfile(char *pFileName);
 extern int ndsv5_tracer_polling(struct target *target);
 extern int ndsv5_tracer_capability_check(struct target *target);
+extern int ndsv5_tracer_smem_capability_check(struct target *target);
 extern uint32_t nds_tracer_action;
 extern uint32_t nds_tracer_stop_on_wrap;
 extern uint32_t nds_trTeSyncMax, nds_trTeInstMode;
@@ -58,6 +59,10 @@ extern uint32_t nds_teInhibitSrc;
 extern uint64_t nds_tracer_active_id;
 extern uint32_t nds_timestamp_on, nds_trTsControl;
 extern uint32_t nds_trTeFilteriMatchInst;
+extern uint64_t nds_trRamStart;
+extern uint64_t nds_trRamSize;
+extern uint64_t nds_trRamLimit;
+
 
 /* global command context from openocd.c */
 extern struct command_context *global_cmd_ctx;
@@ -252,6 +257,7 @@ __COMMAND_HANDLER(handle_ndsv5_query_capability_command)
 	/* AndeSight query disbus value to decide bus mode icon exist or
 	 * not(default value 0 mean bus mode icon exist) */
 	uint32_t if_tracer = 0, if_profiling = 1, disable_busmode = 0;
+	uint32_t if_tracer_smem = 0;
 	uint32_t hit_exception = 1, if_targetburn = 1;
 	uint32_t if_pwr_sample = 0;
 	uint32_t q_access_mode = 0;
@@ -288,11 +294,20 @@ __COMMAND_HANDLER(handle_ndsv5_query_capability_command)
 	/* Bug-26232, set disbus to 1 when HW system bus access is not supported */
 	disable_busmode = (system_bus_access)? 0 : 1;
 
+
 	/* tracer capability checking */
 	if (ndsv5_tracer_capability_check(target) == ERROR_OK)
 		if_tracer = 1;
 	else
 		if_tracer = 0;
+
+
+	if (if_tracer == 0) {
+		if_tracer_smem = 0;
+	} else {
+		if (ndsv5_tracer_smem_capability_check(target) == ERROR_OK)
+			if_tracer_smem = 1;
+	}
 
 	/* check IX CCTL command support */
 	if (ndsv5_mml_capability_check(target) != ERROR_OK)
@@ -306,6 +321,7 @@ __COMMAND_HANDLER(handle_ndsv5_query_capability_command)
 		tlb_dump = 0;
 
 	command_print(CMD, "tracer:%d;"
+			   "tracer_smem:%d;"
 			   "profiling:%d;"
 			   "disbus:%d;"
 			   "exception:%d;"
@@ -320,6 +336,7 @@ __COMMAND_HANDLER(handle_ndsv5_query_capability_command)
 			   "tlb_dump:%d;"
 			   "btb_dump:%d;",
 				if_tracer,
+				if_tracer_smem,
 				if_profiling,
 				disable_busmode,
 				hit_exception,
@@ -513,7 +530,9 @@ __COMMAND_HANDLER(handle_ndsv5_configure_command)
 		remove(nds_remotetargetburn_fpath);
 		nds_remotetargetburn_buffer = calloc(nds_remotetargetburn_fsize, 1);
 		collect_remotetargetburn_file = true;
-		command_print(CMD, "configure: %lu %s", strlen(nds_remotetargetburn_fpath), nds_remotetargetburn_fpath);
+		command_print(CMD, "configure: %zu %s",
+				strlen(nds_remotetargetburn_fpath),
+				nds_remotetargetburn_fpath);
 	} else if (strcmp(CMD_ARGV[0], "algorithm_bin") == 0) {
 		if (user_algorithm_path)
 			free(user_algorithm_path);
@@ -687,8 +706,8 @@ __COMMAND_HANDLER(handle_ndsv5_configure_command)
 		p_nds_bak_debug_buffer_end = p_nds_bak_debug_buffer_start + nds_bak_debug_buf_size;
 		p_nds_bak_debug_buffer_cur = p_nds_bak_debug_buffer_start;
 		command_print(CMD, "configure: %s = 0x%08x", CMD_ARGV[0], nds_bak_debug_buf_size);
-		NDS_INFO("p_nds_bak_debug_buffer_start = 0x%lx, p_nds_bak_debug_buffer_end = 0x%lx",
-			(long unsigned int)p_nds_bak_debug_buffer_start, (long unsigned int)p_nds_bak_debug_buffer_end);
+		NDS_INFO("p_nds_bak_debug_buffer_start = 0x%p, p_nds_bak_debug_buffer_end = 0x%p",
+			(void *)p_nds_bak_debug_buffer_start, (void *)p_nds_bak_debug_buffer_end);
 	} else if (strcmp(CMD_ARGV[0], "dump_detail_debug_info") == 0) {
 		nds_dump_detail_debug_info();
 	} else if (strcmp(CMD_ARGV[0], "vector_length") == 0) {
@@ -2688,6 +2707,12 @@ static int ndsv5_init_option_reg(struct target *target)
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MHVM_CFG].exist = false;
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MHVMB].exist = false;
 		}
+
+		/*  mmsc_cfg3.CST_CTL == 1 */
+		if ((reg_mmsc_cfg3_value & 0x80)) {
+			NDS_INFO("Enable CSR_UMISC_CTL");
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_UMISC_CTL].exist = true;
+		}
 	} else {
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MHVM_CFG].exist = false;
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MHVMB].exist = false;
@@ -3671,7 +3696,7 @@ int ndsv5_virtual_hosting_check(struct target *target)
 
 					uint32_t len = strlen(p_nds_cmdline) + 1;
 					if (len > size) {
-						LOG_ERROR("Unable to copy buffer, len(%d) > buffer size(%ld)", len, size);
+						LOG_ERROR("Unable to copy buffer, len(%" PRIu32 ") > buffer size(%" PRIu64 ")", len, size);
 						return ERROR_FAIL;
 					}
 
@@ -3759,6 +3784,7 @@ funct3   imm   rs2  op
 */
 
 #define MASK_C_LOAD_STORE   0xE003
+#define MASK_ZCB_LOAD_STORE 0xFC00
 
 #define MATCH_LBGP    0x000B
 #define MATCH_LBUGP   0x200B
@@ -3828,7 +3854,12 @@ imm[11:5] rs2 rs1 010 imm[4:0] 0100011 SW
 #define MATCH_ID_C_LDSP     (MATCH_ID_C_LOADSP + 2)
 #define MATCH_ID_C_FLWSP    (MATCH_ID_C_LOADSP + 3)
 #define MATCH_ID_C_FLDSP    (MATCH_ID_C_LOADSP + 4)
-#define MATCH_ID_LOAD_NUMS  (MATCH_ID_C_LOADSP + 5)
+#define MATCH_ID_C_ZCB_LOAD (MATCH_ID_C_LOADSP + 5)
+#define MATCH_ID_C_LBU	    (MATCH_ID_C_ZCB_LOAD + 0)
+#define MATCH_ID_C_LHU	    (MATCH_ID_C_ZCB_LOAD + 1)
+#define MATCH_ID_C_LH	    (MATCH_ID_C_ZCB_LOAD + 2)
+
+#define MATCH_ID_LOAD_NUMS  (MATCH_ID_C_ZCB_LOAD + 3)
 
 #define MATCH_ID_STORE      0
 #define MATCH_NUMS_STORE_32 (7 + 4 + 2)
@@ -3854,7 +3885,11 @@ imm[11:5] rs2 rs1 010 imm[4:0] 0100011 SW
 #define MATCH_ID_C_SDSP     (MATCH_ID_C_STORESP + 2)
 #define MATCH_ID_C_FSWSP    (MATCH_ID_C_STORESP + 3)
 #define MATCH_ID_C_FSDSP    (MATCH_ID_C_STORESP + 4)
-#define MATCH_ID_STORE_NUMS (MATCH_ID_C_STORESP + 5)
+#define MATCH_ID_C_ZCB_STORE (MATCH_ID_C_STORESP + 5)
+#define MATCH_ID_C_SB       (MATCH_ID_ZCB_STORE + 0)
+#define MATCH_ID_C_SH       (MATCH_ID_ZCB_STORE + 1)
+
+#define MATCH_ID_STORE_NUMS (MATCH_ID_C_ZCB_STORE + 2)
 
 unsigned int g_insn_load_match[] = {
 	MATCH_LB,
@@ -3878,6 +3913,7 @@ unsigned int g_insn_load_match[] = {
 	/* Atomic Memory Operations */
 	(MATCH_LR_D & MASK_LW),
 	(MATCH_LR_W & MASK_LW),
+
 	/* Compressed Instruction Formats */
 	MATCH_C_FLD, /* MATCH_C_LQ, */
 	MATCH_C_LW,
@@ -3889,6 +3925,9 @@ unsigned int g_insn_load_match[] = {
 	MATCH_C_LDSP,
 	MATCH_C_FLWSP,
 	MATCH_C_FLDSP,
+	MATCH_C_LBU,
+	MATCH_C_LHU,	/* Zcb */
+	MATCH_C_LH,
 };
 
 unsigned int g_insn_store_match[] = {
@@ -3918,6 +3957,8 @@ unsigned int g_insn_store_match[] = {
 	MATCH_C_SDSP,
 	MATCH_C_FSWSP,
 	MATCH_C_FSDSP,
+	MATCH_C_SB, /* Zcb */
+	MATCH_C_SH,
 };
 
 struct nds_insn_loadstore {
@@ -3956,6 +3997,10 @@ static struct nds_insn_loadstore nds_insn_load[] = {
 	{ "c.ldsp", 8 },
 	{ "c.flwsp", 4 },
 	{ "c.fldsp", 8 },
+	{ "c.lbu", 1 },
+	{ "c.lhu", 2 },
+	{ "c.lh", 2 },
+
 	{ "unknown", 0 },
 };
 
@@ -3984,6 +4029,9 @@ static struct nds_insn_loadstore nds_insn_store[] = {
 	{ "c.sdsp", 8 },
 	{ "c.fswsp", 4 },
 	{ "c.fsdsp", 8 },
+	{ "c.sb", 1 },
+	{ "c.sh", 2 },
+
 	{ "unknown", 0 },
 };
 
@@ -4071,6 +4119,9 @@ int ndsv5_disassemble_c_load(unsigned int opcode, unsigned int *p_insn,
 	int get_imm = 0;
 
 	for (i = MATCH_ID_C_LOAD; i < MATCH_ID_LOAD_NUMS; i++) {
+		/* For Zcb check [15-10][1-0] */
+		if (i >= MATCH_ID_C_ZCB_LOAD)
+			chk_opcode = (opcode & MASK_ZCB_LOAD_STORE);
 		if (chk_opcode == g_insn_load_match[i])
 			break;
 	}
@@ -4095,7 +4146,7 @@ int ndsv5_disassemble_c_load(unsigned int opcode, unsigned int *p_insn,
 	}
 
 	/* Stack-Pointer-Based Loads and Stores */
-	if (i >= MATCH_ID_C_LOADSP) {
+	if (i >= MATCH_ID_C_LOADSP && i < MATCH_ID_C_ZCB_LOAD) {
 		*p_rd = ((opcode >> 7) & 0x1f);
 		*p_rs1 = 2; /* sp; */
 		if ((i == MATCH_ID_C_LWSP) || (i == MATCH_ID_C_FLWSP)) {
@@ -4111,6 +4162,10 @@ int ndsv5_disassemble_c_load(unsigned int opcode, unsigned int *p_insn,
 			get_imm |= (int)(((opcode >> 12) & 0x01) << 5);
 			get_imm |= (int)(((opcode >> 2) & 0x0f) << 6);
 		}
+	} else if (i >= MATCH_ID_C_ZCB_LOAD) {
+		*p_rd = ((opcode >> 7) & 0x7) + 0x8;  /* x8-15 */
+		*p_rs1 = ((opcode >> 2) & 0x7) + 0x8; /* x8-15 */
+		get_imm = ((opcode >> 5) & 0x3);
 	} else {
 		*p_rd = ((opcode >> 2) & 0x07);
 		*p_rs1 = ((opcode >> 7) & 0x07);
@@ -4223,6 +4278,8 @@ int ndsv5_disassemble_c_store(unsigned int opcode, unsigned int *p_insn,
 	int get_imm = 0;
 
 	for (i = MATCH_ID_C_STORE; i < MATCH_ID_STORE_NUMS; i++) {
+		if (i >= MATCH_ID_C_ZCB_STORE)
+			chk_opcode = (opcode & MASK_ZCB_LOAD_STORE);
 		if (chk_opcode == g_insn_store_match[i])
 			break;
 	}
@@ -4247,7 +4304,7 @@ int ndsv5_disassemble_c_store(unsigned int opcode, unsigned int *p_insn,
 	}
 
 	/* Stack-Pointer-Based Loads and Stores */
-	if (i >= MATCH_ID_C_STORESP) {
+	if (i >= MATCH_ID_C_STORESP && i < MATCH_ID_C_ZCB_STORE) {
 		*p_rs2 = ((opcode >> 2) & 0x1f);
 		*p_rs1 = 2; /* sp */
 		if ((i == MATCH_ID_C_SWSP) || (i == MATCH_ID_C_FSWSP)) {
@@ -4260,7 +4317,10 @@ int ndsv5_disassemble_c_store(unsigned int opcode, unsigned int *p_insn,
 			get_imm = (int)(((opcode >> 11) & 0x03) << 4);
 			get_imm |= (int)(((opcode >> 7) & 0x0f) << 6);
 		}
-
+	} else if (i >= MATCH_ID_C_ZCB_STORE) {
+		*p_rs1 = ((opcode >> 7) & 0x7) + 0x8; /* x8-15 */
+		*p_rs2 = ((opcode >> 2) & 0x7) + 0x8; /* x8-15 */
+		get_imm = ((opcode >> 5) & 0x3);
 	} else {
 		*p_rs2 = ((opcode >> 2) & 0x07);
 		*p_rs1 = ((opcode >> 7) & 0x07);
@@ -4441,12 +4501,12 @@ nds_disassemble_16_insn:
 	cur_instr &= 0x0000FFFF;
 	NDS_INFO("CUR_INSTR: 0x%x", cur_instr);
 	ret_value = ndsv5_disassemble_c_load(cur_instr, &insn_idx, &insn_rd, &insn_rs1, &insn_imm);
-	NDS_INFO("insn_rs1: %d", insn_rs1);
-	NDS_INFO("insn_rd: %d", insn_rd);
+	NDS_INFO("(load)insn_rs1: %d", insn_rs1);
+	NDS_INFO("(load)insn_rd: %d", insn_rd);
 	if (ret_value != ERROR_OK) {
 		ret_value = ndsv5_disassemble_c_store(cur_instr, &insn_idx, &insn_rs1, &insn_rs2, &insn_imm);
-		NDS_INFO("insn_rs1: %d", insn_rs1);
-		NDS_INFO("insn_rs2: %d", insn_rs2);
+		NDS_INFO("(store)insn_rs1: %d", insn_rs1);
+		NDS_INFO("(store)insn_rs2: %d", insn_rs2);
 		if (ret_value == ERROR_OK) {
 			/* short_insn_reg1 = (insn_idx >= MATCH_ID_C_STORESP ?
 			 * gpr_and_fpu_name[insn_rs1] : gp_rvc_reg_name[insn_rs1]);
@@ -4531,9 +4591,10 @@ int ndsv5_watchpoint_count(struct target *target)
 	struct watchpoint *wp;
 	int watch_count = 0;
 
-	LOG_DEBUG("watched_addr = 0x%lx, watched_length = %d", watched_addr, watched_length);
+	LOG_DEBUG("watched_addr = 0x%" TARGET_PRIxADDR ", watched_length = %" PRIu32,
+			watched_addr, watched_length);
 	for (wp = target->watchpoints; wp; wp = wp->next) {
-		LOG_DEBUG("wp->addr: 0x%lx, wp->length: %d", wp->address, wp->length);
+		LOG_DEBUG("wp->addr: 0x%" TARGET_PRIxADDR ", wp->length: %d", wp->address, wp->length);
 		if (((wp->address >= (watched_addr + watched_length)) ||
 		    ((wp->address + wp->length) <= watched_addr)) == false)
 			watch_count++;
@@ -4586,7 +4647,8 @@ int ndsv5_hit_watchpoint(struct target *target,
 	for (wp = target->watchpoints; wp; wp = wp->next) {
 		watchpoint_start = wp->address;
 		watchpoint_end = watchpoint_start + wp->length;
-		LOG_DEBUG("start: 0x%lx, end: 0x%lx", watchpoint_start, watchpoint_end);
+		LOG_DEBUG("start: 0x%" TARGET_PRIxADDR ", end: 0x%" TARGET_PRIxADDR,
+				watchpoint_start, watchpoint_end);
 		if (((watchpoint_start >= (watched_addr + watched_length)) || (watchpoint_end <= watched_addr)) == false) {
 			*hit_watchpoint = wp;
 			NDS_INFO("hit watchpoints=0x%" TARGET_PRIxADDR, watched_addr);
@@ -4981,6 +5043,14 @@ __COMMAND_HANDLER(handle_ndsv5_tracer_command)
 		return ERROR_FAIL;
 	}
 
+	static int if_tracer_smem = -1;
+	if (if_tracer_smem == -1) {
+		if (ndsv5_tracer_smem_capability_check(target) == ERROR_OK)
+			if_tracer_smem = 1;
+		else
+			if_tracer_smem = 0;
+	}
+
 	if (strcmp(CMD_ARGV[0], "on") == 0) {
 		LOG_DEBUG("trace on");
 		nds_tracer_action = CSR_MCONTROL_ACTION_TRACE_OFF;
@@ -5012,17 +5082,17 @@ __COMMAND_HANDLER(handle_ndsv5_tracer_command)
 		LOG_DEBUG("sync-period 0x%x", sync_period);
 		nds_trTeSyncMax = sync_period;
 	} else if ((strcmp(CMD_ARGV[0], "src-field") == 0) && (CMD_ARGC > 1)) {
-		unsigned int IfSrcBit = 0;
+		uint32_t IfSrcBit = 0;
 		COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], IfSrcBit);
-		LOG_DEBUG("src-field 0x%x", IfSrcBit);
+		LOG_DEBUG("src-field 0x%" PRIx32, IfSrcBit);
 		if (IfSrcBit)
 			nds_teInhibitSrc = 0;
 		else
 			nds_teInhibitSrc = 1;
 	} else if ((strcmp(CMD_ARGV[0], "trace-hart") == 0) && (CMD_ARGC > 1)) {
-		unsigned long active_src = 0;
+		uint64_t active_src = 0;
 		COMMAND_PARSE_NUMBER(u64, CMD_ARGV[1], active_src);
-		LOG_DEBUG("trace-hart 0x%lx", active_src);
+		LOG_DEBUG("trace-hart 0x%" PRIx64, active_src);
 		nds_tracer_active_id = active_src;
 	} else if ((strcmp(CMD_ARGV[0], "inst-mode") == 0) && (CMD_ARGC > 1)) {
 		unsigned int InstMode = 0;
@@ -5049,6 +5119,34 @@ __COMMAND_HANDLER(handle_ndsv5_tracer_command)
 		LOG_DEBUG("timestamp 0x%x", trTsControl);
 		nds_trTsControl = trTsControl;
 		nds_timestamp_on = timestamp_on;
+	} else if ((strcmp(CMD_ARGV[0], "smem-base") == 0) && (CMD_ARGC > 1)) {
+		if (if_tracer_smem == 0) {
+			LOG_ERROR("NCETBUF RAM Sink not supports SMEM mode");
+			return ERROR_FAIL;
+		}
+
+		COMMAND_PARSE_NUMBER(u64, CMD_ARGV[1], nds_trRamStart);
+		nds_trRamStart &= ~(0xf); /* For 16-bytes align */
+		LOG_DEBUG("trRamStart 0x%" PRIx64, nds_trRamStart);
+	} else if ((strcmp(CMD_ARGV[0], "smem-size") == 0) && (CMD_ARGC > 1)) {
+		if (if_tracer_smem == 0) {
+			LOG_ERROR("NCETBUF RAM Sink not supports SMEM mode");
+			return ERROR_FAIL;
+		}
+
+		COMMAND_PARSE_NUMBER(u64, CMD_ARGV[1], nds_trRamSize);
+		if (nds_trRamSize == 0x0) {
+			LOG_DEBUG("smem-size 0, reset nds_trRamLimit!");
+			nds_trRamSize = 0;
+			nds_trRamLimit = 0;
+		} else {
+			nds_trRamLimit = nds_trRamStart + nds_trRamSize;
+			nds_trRamLimit &= ~(0xf); /* For 16-bytes align */
+			nds_trRamSize = nds_trRamLimit - nds_trRamStart;
+			nds_trRamLimit -= 1;
+		}
+		LOG_DEBUG("trRamLimit 0x%" PRIx64 " (Size: 0x%" PRIx64 ")",
+				nds_trRamLimit, nds_trRamSize);
 	} else {
 		command_print(CMD, "NDS tracer command ERROR");
 	}

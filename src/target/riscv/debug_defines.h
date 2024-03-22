@@ -3305,6 +3305,7 @@ When 0, the Trace Funnel may have clocks gated off or be powered down */
 /* #define	DMI_TFCONTROL_tfEnable         (0x01 << 1) */
 /* #define	DMI_TFCONTROL_atbActive        (0x01 << 0) */
 #define	DMI_TFCONTROL_tfStopOnWrap     DMI_TFCONTROL_trRamStopOnWrap
+#define	DMI_TFCONTROL_trRamModeSMEM    DMI_TFCONTROL_trRamModeSBA
 #define	DMI_TFCONTROL_tfEmpty          DMI_TFCONTROL_trRamEmpty
 #define	DMI_TFCONTROL_tfEnable         DMI_TFCONTROL_trRamEnable
 #define	DMI_TFCONTROL_atbActive        DMI_TFCONTROL_trRamActive

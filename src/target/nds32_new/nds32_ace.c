@@ -22,8 +22,12 @@
 #endif
 
 #include <helper/log.h>
+
+#ifndef __MINGW32__
 #include <dlfcn.h>
 #include <sys/utsname.h>
+#endif
+
 #include <libgen.h>
 #include "nds32_reg.h"
 #include "nds32.h"
@@ -90,6 +94,7 @@ void *handle_v3;
 /* dlsym certain global variables */
 static int loadSharedLib(const char *so_name)
 {
+#ifndef __MINGW32__
 	char *err_str = NULL;
 
 	LOG_DEBUG("loadSharedLib");
@@ -120,6 +125,7 @@ static int loadSharedLib(const char *so_name)
 		acr_info_list = (ACR_INFO_T *)dlsym(handle_v3, "acr_list");
 
 	LOG_DEBUG("end of loadSharedLib");
+#endif
 	return 0;
 }
 
@@ -262,36 +268,47 @@ int32_t get_ace_file_name_for_gdb(const char *aceconf, const char *platform, cha
 {
 	int32_t ret = 0;
 	if (ace_lib_for_gdb) {
+
+#ifndef __MINGW32__
 		struct utsname os;
-		if (uname(&os) == 0) {
-			char *soname;
-			const char *str;
-			if (strcmp(platform, os.sysname) == 0) {
-				/* Return binary share library.  */
-				str = ace_lib_for_gdb;
+		if (uname(&os) != 0)
+			return 0;
+#endif /* __MINGW32__ */
+
+		char *soname;
+		const char *str;
+
+#ifndef __MINGW32__
+		if (strcmp(platform, os.sysname) == 0) {
+			/* Return binary share library.  */
+			str = ace_lib_for_gdb;
+		} else {
+			/* Return XML text.  */
+			str = ace_xml_for_gdb;
+		}
+#else
+		/* Directly use in MINGW32 */
+		str = ace_lib_for_gdb;
+#endif /* __MINGW32__ */
+
+		soname = strchr(str, ',');
+		if (soname == NULL) {
+			ret = -1; /* corrupted data */
+		} else {
+			unsigned len = soname - str;
+			soname = (char *) malloc(len + 1);
+			strncpy(soname, str, len);
+			soname[len] = '\0';
+			sscanf(&soname[1], "%u", &len);
+			FILE *fd = fopen(soname, "w");
+			if (fd == NULL) {
+				ret = -1;
 			} else {
-				/* Return XML text.  */
-				str = ace_xml_for_gdb;
-			}
-			soname = strchr(str, ',');
-			if (soname == NULL) {
-				ret = -1; /* corrupted data */
-			} else {
-				unsigned len = soname - str;
-				soname = (char *) malloc(len + 1);
-				strncpy(soname, str, len);
-				soname[len] = '\0';
-				sscanf(&soname[1], "%u", &len);
-				FILE *fd = fopen(soname, "w");
-				if (fd == NULL) {
+				if (fwrite(str, len + strlen(soname) + 1, 1, fd) != 1)
 					ret = -1;
-				} else {
-					if (fwrite(str, len + strlen(soname) + 1, 1, fd) != 1)
-						ret = -1;
-					else
-						*name = soname;
-					fclose(fd);
-				}
+				else
+					*name = soname;
+				fclose(fd);
 			}
 		}
 	} else {

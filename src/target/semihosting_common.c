@@ -1633,8 +1633,8 @@ int semihosting_common(struct target *target)
 				uint64_t addr = semihosting_get_field(target, 1, fields);
 				struct timeval arg;
 				if (gettimeofday(&arg, NULL) == 0) {
-					LOG_DEBUG("addr = 0x%lx, tv_sec = 0x%lx, tv_usec = 0x%lx",
-							addr, arg.tv_sec, arg.tv_usec);
+					LOG_DEBUG("addr = 0x%llx, tv_sec = 0x%lx, tv_usec = 0x%lx",
+							(long long unsigned int)addr, arg.tv_sec, arg.tv_usec);
 					target_write_u64(target, addr, (uint64_t)arg.tv_sec);
 					target_write_u32(target, addr+8, (uint32_t)arg.tv_usec);
 				}

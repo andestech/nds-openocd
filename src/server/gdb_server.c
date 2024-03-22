@@ -3587,11 +3587,14 @@ static int gdb_query_packet(struct connection *connection,
 	return ERROR_OK;
 }
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
 static bool gdb_handle_vcont_packet(struct connection *connection, const char *packet, int packet_size)
 {
 	struct gdb_connection *gdb_connection = connection->priv;
 	struct target *target = get_target_from_connection(connection);
-	const char *parse = packet;
+	const char *parse;
+	parse = packet;
 	int retval;
 
 	/* query for vCont supported */
@@ -3609,8 +3612,8 @@ static bool gdb_handle_vcont_packet(struct connection *connection, const char *p
 		--packet_size;
 	}
 
-	char packet_buf[GDB_BUFFER_SIZE] = {0};
 	if ((parse[0] == 'C') || (parse[0] == 'S')) {
+		char packet_buf[GDB_BUFFER_SIZE] = {0};
 		strncpy(packet_buf, parse, packet_size);
 		/* C sig[;addr] Continue with signal, vCont;C1e:0;c , Step with signal , vCont;S1e:0;c */
 		if (packet_buf[0] == 'C')
@@ -3797,6 +3800,7 @@ static bool gdb_handle_vcont_packet(struct connection *connection, const char *p
 
 	return false;
 }
+#pragma GCC diagnostic pop
 
 static char *next_hex_encoded_field(const char **str, char sep)
 {

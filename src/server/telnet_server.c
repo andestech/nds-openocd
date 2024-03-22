@@ -796,6 +796,7 @@ static int telnet_input(struct connection *connection)
 		buf_p = (unsigned char *)nds_remotetargetburn_buffer;
 		while (remain > 0) {
 			bytes_read = connection_read(connection, buf_p, remain);
+
 			if (bytes_read == 0) {
 				free(nds_remotetargetburn_fpath);
 				free(nds_remotetargetburn_buffer);
@@ -837,7 +838,7 @@ static int telnet_input(struct connection *connection)
 		int bin_file_size = 0;
 		char *bin_file_start = ndsv5_base64_decode(nds_remotetargetburn_buffer,
 				nds_remotetargetburn_fsize, &bin_file_size);
-		FILE *O_FILE = fopen(nds_remotetargetburn_fpath, "w");
+		FILE *O_FILE = fopen(nds_remotetargetburn_fpath, "wb");
 		if (O_FILE == NULL) {
 			free(bin_file_start);
 			free(nds_remotetargetburn_fpath);

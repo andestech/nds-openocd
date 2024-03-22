@@ -22,7 +22,9 @@
 #endif
 
 #include <helper/log.h>
+#ifndef __MINGW32__
 #include <dlfcn.h>
+#endif
 #include "nds32_reg.h"
 #include "nds32_ace.h"
 #include "nds32.h"
@@ -433,6 +435,7 @@ void nds32_reg_init(struct nds32 *nds32_p)
 
 static void nds32_reg_init_ace_regs(void)
 {
+#ifndef __MINGW32__
 	extern void *handle_v3;
 	extern ACR_INFO_T *acr_info_list;
 	uint32_t reg_num;
@@ -473,6 +476,7 @@ static void nds32_reg_init_ace_regs(void)
 		}
 		acr_info_list++;
 	}
+#endif
 }
 
 

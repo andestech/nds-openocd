@@ -19,6 +19,12 @@
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
+
+#ifdef __MINGW32__
+#include <winsock2.h>
+#endif
+
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

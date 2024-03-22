@@ -10,8 +10,12 @@
 
 #include <string.h>
 #include <helper/log.h>
+
+#ifndef __MINGW32__
 #include <dlfcn.h>
 #include <sys/utsname.h>
+#endif
+
 #include <libgen.h>
 #include "ndsv5_ace.h"
 
@@ -65,6 +69,7 @@ static void *handle_v5;
  * dlsym certain global variables */
 static int32_t loadSharedLib(const char *so_name)
 {
+#ifndef __MINGW32__
 	char *err_str = NULL;
 
 	LOG_DEBUG("loadSharedLib from %s", so_name);
@@ -100,6 +105,7 @@ static int32_t loadSharedLib(const char *so_name)
 	LE("unable to load symbol ace_lib_for_gdb");
 
 	LOG_DEBUG("end of loadSharedLib");
+#endif
 	return 0;
 }
 
@@ -223,36 +229,45 @@ int32_t get_ace_file_name_for_gdb_v5(const char *aceconf,
 	int32_t ret = 0;
 
 	if (ace_lib_for_gdb_v5) {
+
+#ifndef __MINGW32__
 		struct utsname os;
-		if (uname(&os) == 0) {
-			char *soname;
-			soname = (char *) malloc(16); /* must be malloc because there was a free() afterwards */
-			const char *str;
+		if (uname(&os) != 0)
+			return 0;
+#endif /* __MINGW32__ */
 
-			LOG_DEBUG("platform: %s", platform);
-			LOG_DEBUG("os.sysname: %s", platform);
+		char *soname;
+		soname = (char *) malloc(16); /* must be malloc because there was a free() afterwards */
+		const char *str;
 
-			if (strncmp(platform, os.sysname, 5) == 0) {
-				/* Return binary share library.  */
-				str = ace_lib_for_gdb_v5;
-			} else
-				return -1;
+		LOG_DEBUG("platform: %s", platform);
+		LOG_DEBUG("os.sysname: %s", platform);
 
-			/* Follow V3 to use byte size of "ace_lib_fog_gdb".
-			   But the way to get the information is different. */
-			sprintf(soname, "%u", *ace_lib_for_gdb_len_v5);	/* use size as filename to do fopen */
+#ifndef __MINGW32__
+		if (strncmp(platform, os.sysname, 5) == 0) {
+			/* Return binary share library.  */
+			str = ace_lib_for_gdb_v5;
+		} else
+			return -1;
+#else
+		/* Directly use in MINGW32 */
+		str = ace_lib_for_gdb_v5;
+#endif
 
-			FILE *fd = fopen(soname, "w");
-			if (fd == NULL) {
-				ret = -2;
-			} else {
-				if (fwrite(str, sizeof(char), *ace_lib_for_gdb_len_v5, fd) != *ace_lib_for_gdb_len_v5)
-					ret = -3;
-				else
-					*name = soname;
+		/* Follow V3 to use byte size of "ace_lib_fog_gdb".
+		   But the way to get the information is different. */
+		sprintf(soname, "%u", *ace_lib_for_gdb_len_v5);	/* use size as filename to do fopen */
 
-				fclose(fd);
-			}
+		FILE *fd = fopen(soname, "w");
+		if (fd == NULL) {
+			ret = -2;
+		} else {
+			if (fwrite(str, sizeof(char), *ace_lib_for_gdb_len_v5, fd) != *ace_lib_for_gdb_len_v5)
+				ret = -3;
+			else
+				*name = soname;
+
+			fclose(fd);
 		}
 	} else {
 		*name = NULL;

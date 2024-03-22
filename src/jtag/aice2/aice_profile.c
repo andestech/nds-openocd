@@ -491,6 +491,7 @@ static int aice_usb_state_profile(struct target *target, enum aice_target_state_
 	return ERROR_OK;
 }
 
+#if 0
 #ifdef __MINGW32__
 	static LARGE_INTEGER
 getFILETIMEoffset(void)
@@ -554,6 +555,7 @@ static int clock_gettime(int X, struct timeval *tv)
 	return 0;
 }
 #endif
+#endif
 
 
 #ifdef __MINGW32__
@@ -561,7 +563,7 @@ static int clock_gettime(int X, struct timeval *tv)
 #define BILLION 1000000L;
 #define CLOCK_ID 0
 
-#define TIME_DEFINE() struct timeval time_start, time_stop;
+#define TIME_DEFINE() struct timespec time_start, time_stop;
 
 #define TIME_START() do { \
 	if (clock_gettime(CLOCK_ID, &time_start) == -1) { \
@@ -578,8 +580,7 @@ static int clock_gettime(int X, struct timeval *tv)
 } while (0)
 
 #define TIME_ACC() do { \
-	time_total += (time_stop.tv_sec - time_start.tv_sec) \
-	+ (double)(time_stop.tv_usec - time_start.tv_usec) / BILLION; \
+	time_total += (time_stop.tv_sec - time_start.tv_sec); \
 } while (0)
 
 #else
@@ -1258,6 +1259,7 @@ static int aice_profile_probe_entry(struct target *target, struct aice_profiling
 }
 
 #if IS_CYGWIN == 1
+/* #include <winsock2.h> */
 #include <windows.h>
 
 static LARGE_INTEGER

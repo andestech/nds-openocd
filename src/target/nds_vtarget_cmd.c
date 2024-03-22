@@ -813,8 +813,8 @@ COMMAND_HANDLER(handle_vtarget_configure_command)
 		p_nds_bak_debug_buffer_end = p_nds_bak_debug_buffer_start + vtarget_bak_debug_buf_size;
 		p_nds_bak_debug_buffer_cur = p_nds_bak_debug_buffer_start;
 		command_print(CMD, "configure: %s = 0x%08x", CMD_ARGV[0], vtarget_bak_debug_buf_size);
-		NDS_INFO("p_nds_bak_debug_buffer_start = 0x%lx, p_nds_bak_debug_buffer_end = 0x%lx",
-			(long unsigned int)p_nds_bak_debug_buffer_start, (long unsigned int)p_nds_bak_debug_buffer_end);
+		NDS_INFO("p_nds_bak_debug_buffer_start = 0x%p, p_nds_bak_debug_buffer_end = 0x%p",
+			(void *)p_nds_bak_debug_buffer_start, (void *)p_nds_bak_debug_buffer_end);
 	} else if (strcmp(CMD_ARGV[0], "scan_retry_times") == 0) {
 		if (CMD_ARGC > 1)
 			COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], nds_scan_retry_times);

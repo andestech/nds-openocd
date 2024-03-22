@@ -1602,7 +1602,9 @@ int ndsv5_dump_cache_va(struct target *target, unsigned int cache_type, uint64_t
 #define L2C_M0_CCTL_CMD (L2C_BASE + 0x40)
 #define L2C_M0_CCTL_ACC (L2C_BASE + 0x48)
 #define L2C_STATUS      (L2C_BASE + 0x80)
-#define L2C_TGT_DATA_0  (L2C_BASE + 0x90)
+target_addr_t L2C_TGT_DATA_0;
+#define L2C_TGT_DATA_0_ORI (L2C_BASE + 0x90)
+#define L2C_TGT_DATA_0_25  (L2C_BASE + 0xB0)
 
 
 
@@ -1830,6 +1832,15 @@ int ndsv5_check_l2cache_exist(struct target *target, uint64_t *config)
 	LOG_DEBUG("L2C size: %d KB", size*128);
 	ndsv5_l2c_support = 1;
 	*config = l2c_config;
+
+	RISCV_INFO(r);
+	uint64_t marchid = r->marchid;
+	if ((marchid & 0xff) == 0x25) {
+		LOG_DEBUG("25-series L2C");
+		L2C_TGT_DATA_0 = L2C_TGT_DATA_0_25;
+	} else {
+		L2C_TGT_DATA_0 = L2C_TGT_DATA_0_ORI;
+	}
 
 	return ERROR_OK;
 }
@@ -3297,4 +3308,105 @@ int ndsv5_dump_tlb_va(struct target *target, target_addr_t va, uint32_t type, ui
 
 	return ERROR_OK;
 }
+
+struct ndsv5_indirect_csr_info ndsv5_indirect_csrs[] = {
+	{CSR_PRIV_S, 1, 1, "spmpcfg0"},
+	{CSR_PRIV_S, 1, 2, "spmpcfg1"},
+	{CSR_PRIV_S, 1, 3, "spmpcfg2"},
+	{CSR_PRIV_S, 1, 4, "spmpcfg3"},
+	{CSR_PRIV_S, 1, 5, "spmpcfg4"},
+	{CSR_PRIV_S, 1, 6, "spmpcfg5"},
+
+	{CSR_PRIV_S, 2, 1, "spmpcfg6"},
+	{CSR_PRIV_S, 2, 2, "spmpcfg7"},
+	{CSR_PRIV_S, 2, 3, "spmpcfg8"},
+	{CSR_PRIV_S, 2, 4, "spmpcfg9"},
+	{CSR_PRIV_S, 2, 5, "spmpcfg10"},
+	{CSR_PRIV_S, 2, 6, "spmpcfg11"},
+
+	{CSR_PRIV_S, 3, 1, "spmpcfg12"},
+	{CSR_PRIV_S, 3, 2, "spmpcfg13"},
+	{CSR_PRIV_S, 3, 3, "spmpcfg14"},
+	{CSR_PRIV_S, 3, 4, "spmpcfg15"},
+
+	{CSR_PRIV_S, 4, 1, "spmpaddr0"},
+	{CSR_PRIV_S, 4, 2, "spmpaddr1"},
+	{CSR_PRIV_S, 4, 3, "spmpaddr2"},
+	{CSR_PRIV_S, 4, 4, "spmpaddr3"},
+	{CSR_PRIV_S, 4, 5, "spmpaddr4"},
+	{CSR_PRIV_S, 4, 6, "spmpaddr5"},
+
+	{CSR_PRIV_S, 5, 1, "spmpaddr6"},
+	{CSR_PRIV_S, 5, 2, "spmpaddr7"},
+	{CSR_PRIV_S, 5, 3, "spmpaddr8"},
+	{CSR_PRIV_S, 5, 4, "spmpaddr9"},
+	{CSR_PRIV_S, 5, 5, "spmpaddr10"},
+	{CSR_PRIV_S, 5, 6, "spmpaddr11"},
+
+	{CSR_PRIV_S, 6, 1, "spmpaddr12"},
+	{CSR_PRIV_S, 6, 2, "spmpaddr13"},
+	{CSR_PRIV_S, 6, 3, "spmpaddr14"},
+	{CSR_PRIV_S, 6, 4, "spmpaddr15"},
+	{CSR_PRIV_S, 6, 5, "spmpaddr16"},
+	{CSR_PRIV_S, 6, 6, "spmpaddr17"},
+
+	{CSR_PRIV_S, 7, 1, "spmpaddr18"},
+	{CSR_PRIV_S, 7, 2, "spmpaddr19"},
+	{CSR_PRIV_S, 7, 3, "spmpaddr20"},
+	{CSR_PRIV_S, 7, 4, "spmpaddr21"},
+	{CSR_PRIV_S, 7, 5, "spmpaddr22"},
+	{CSR_PRIV_S, 7, 6, "spmpaddr23"},
+
+	{CSR_PRIV_S, 8, 1, "spmpaddr24"},
+	{CSR_PRIV_S, 8, 2, "spmpaddr25"},
+	{CSR_PRIV_S, 8, 3, "spmpaddr26"},
+	{CSR_PRIV_S, 8, 4, "spmpaddr27"},
+	{CSR_PRIV_S, 8, 5, "spmpaddr28"},
+	{CSR_PRIV_S, 8, 6, "spmpaddr29"},
+
+	{CSR_PRIV_S, 9, 1, "spmpaddr30"},
+	{CSR_PRIV_S, 9, 2, "spmpaddr31"},
+	{CSR_PRIV_S, 9, 3, "spmpaddr32"},
+	{CSR_PRIV_S, 9, 4, "spmpaddr33"},
+	{CSR_PRIV_S, 9, 5, "spmpaddr34"},
+	{CSR_PRIV_S, 9, 6, "spmpaddr35"},
+
+	{CSR_PRIV_S, 10, 1, "spmpaddr36"},
+	{CSR_PRIV_S, 10, 2, "spmpaddr37"},
+	{CSR_PRIV_S, 10, 3, "spmpaddr38"},
+	{CSR_PRIV_S, 10, 4, "spmpaddr39"},
+	{CSR_PRIV_S, 10, 5, "spmpaddr40"},
+	{CSR_PRIV_S, 10, 6, "spmpaddr41"},
+
+	{CSR_PRIV_S, 11, 1, "spmpaddr42"},
+	{CSR_PRIV_S, 11, 2, "spmpaddr43"},
+	{CSR_PRIV_S, 11, 3, "spmpaddr44"},
+	{CSR_PRIV_S, 11, 4, "spmpaddr45"},
+	{CSR_PRIV_S, 11, 5, "spmpaddr46"},
+	{CSR_PRIV_S, 11, 6, "spmpaddr47"},
+
+	{CSR_PRIV_S, 12, 1, "spmpaddr48"},
+	{CSR_PRIV_S, 12, 2, "spmpaddr49"},
+	{CSR_PRIV_S, 12, 3, "spmpaddr50"},
+	{CSR_PRIV_S, 12, 4, "spmpaddr51"},
+	{CSR_PRIV_S, 12, 5, "spmpaddr52"},
+	{CSR_PRIV_S, 12, 6, "spmpaddr53"},
+
+	{CSR_PRIV_S, 13, 1, "spmpaddr54"},
+	{CSR_PRIV_S, 13, 2, "spmpaddr55"},
+	{CSR_PRIV_S, 13, 3, "spmpaddr56"},
+	{CSR_PRIV_S, 13, 4, "spmpaddr57"},
+	{CSR_PRIV_S, 13, 5, "spmpaddr58"},
+	{CSR_PRIV_S, 13, 6, "spmpaddr59"},
+
+	{CSR_PRIV_S, 14, 1, "spmpaddr60"},
+	{CSR_PRIV_S, 14, 2, "spmpaddr61"},
+	{CSR_PRIV_S, 14, 3, "spmpaddr62"},
+	{CSR_PRIV_S, 14, 4, "spmpaddr63"},
+
+	{CSR_PRIV_S, 15, 1, "spmpswitch0"},
+	{CSR_PRIV_S, 15, 2, "spmpswitch1"},
+
+	{0, 0, 0, NULL}
+};
 

@@ -21,12 +21,6 @@
 #include "config.h"
 #endif
 
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <signal.h>
-#endif
-
 #include <helper/log.h>
 #include <helper/time_support.h>
 #include "aice_port.h"
@@ -34,6 +28,15 @@
 #include "aice_usb.h"
 #include "aice_apis.h"
 #include <target/nds32_new/nds32_log.h>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#include <windows.h>
+#else
+#include <signal.h>
+#endif
+
+
 
 #define AICE_PIPE_MAXLINE 4096
 
@@ -252,9 +255,9 @@ static int aice_pipe_parent_init(struct aice_port_param_s *param)
 {
 	char line[AICE_PIPE_MAXLINE] = {0};
 	char command[AICE_PIPE_MAXLINE];
-	int get_value = 0;
 
 #ifndef _WIN32
+	int get_value = 0;
 	close(aice_pipe_output[0]);
 	close(aice_pipe_input[1]);
 
