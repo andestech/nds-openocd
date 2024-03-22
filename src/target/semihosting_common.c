@@ -1823,7 +1823,7 @@ static int semihosting_common_fileio_end(struct target *target, int result,
 			target_read_memory(target, reg_sp_value - 64 + 28, 4, 2, buf);
 			st_size = be_to_h_u64(buf);
 			semihosting->result = st_size;
-			LOG_DEBUG("fstat(flen) result: %ld", st_size);
+			LOG_DEBUG("fstat(flen) result: %llu", (long long unsigned int)st_size);
 			break;
 #endif /* _NDS_V5_ONLY_ */
 	}

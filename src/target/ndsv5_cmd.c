@@ -2640,7 +2640,7 @@ static int ndsv5_init_option_reg(struct target *target)
 		}
 
 		/*  mmsc_cfg3.CST_CTL == 1 */
-		if ((reg_mmsc_cfg3_value & 0x80) == 1) {
+		if ((reg_mmsc_cfg3_value & 0x80)) {
 			NDS_INFO("Enable CSR_UMISC_CTL");
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_UMISC_CTL].exist = true;
 		}
