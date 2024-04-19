@@ -2120,7 +2120,12 @@ static int examine(struct target *target)
 		* program buffer. */
 	r->debug_buffer_size = info->progbufsize;
 
+#if _NDS_V5_ONLY_
+	/* For Zilsd */
+	int result = register_read_abstract(target, NULL, GDB_REGNO_S1, 64);
+#else
 	int result = register_read_abstract(target, NULL, GDB_REGNO_S0, 64);
+#endif
 	if (result == ERROR_OK)
 		r->xlen = 64;
 	else {
