@@ -1,4 +1,4 @@
-/*
+			/*
  * SPDX-License-Identifier: GPL-2.0+
  * Copyright (c) 2019 Andes Technology, Ya-Ting Lin <yating@andestech.com>
  * Copyright (C) 2019 Hellosun Wu <wujiheng.tw@gmail.com>
@@ -2668,6 +2668,12 @@ static int ndsv5_init_option_reg(struct target *target)
 		if ((reg_mmsc_cfg3_value & 0x10) == 0) {
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MHVM_CFG].exist = false;
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MHVMB].exist = false;
+		}
+
+		/*  mmsc_cfg3.CST_CTL == 1 */
+		if ((reg_mmsc_cfg3_value & 0x80) == 0) {
+			NDS_INFO("Enable CSR_UMISC_CTL");
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_UMISC_CTL].exist = false;
 		}
 	} else {
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MHVM_CFG].exist = false;
