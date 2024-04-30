@@ -64,7 +64,19 @@ enum nds_memory_access {
 
 extern char **gpr_and_fpu_name;
 
+enum ndsv5_csr_privilege {
+	CSR_PRIV_U,
+	CSR_PRIV_S,
+	CSR_PRIV_VS,
+	CSR_PRIV_M,
+};
 
+struct ndsv5_indirect_csr_info {
+	uint32_t priv;
+	uint32_t groupid;
+	uint32_t ireg;
+	const char *name;
+};
 
 
 /********************************************************************/
@@ -112,6 +124,7 @@ extern unsigned *global_acr_reg_count_v5;
 extern unsigned *global_acr_type_count_v5;
 extern ACR_INFO_T_V5 *acr_info_list_v5;
 extern struct reg_arch_type nds_ace_reg_access_type;
+extern struct reg_arch_type nds_indirect_reg_access_type;
 extern int nds_targetburn_corenum;
 extern unsigned int nds_mixed_mode_checking;
 

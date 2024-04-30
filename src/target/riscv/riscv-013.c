@@ -75,6 +75,8 @@ uint32_t nds_timestamp_on, nds_trTsControl;
 uint32_t nds_tracer_multiplexer, nds_tracer_capability;
 uint32_t nds_trTeFilteriMatchInst;
 int ndsv5_tracer_capability_check(struct target *target);
+static int ndsv5_tracer_buffer_init(void);
+extern struct ndsv5_indirect_csr_info ndsv5_indirect_csrs[];
 
 uint32_t TB_RAM_SIZE = 0x2000;
 #define TRACER_TMP_BUFSIZE   0x100000  /* 1MB */
@@ -7419,6 +7421,117 @@ error:
 struct reg_arch_type nds_ace_reg_access_type = {
 	.get = nds_ace_get_reg,
 	.set = nds_ace_set_reg
+};
+
+int nds_indirect_get_reg(struct reg *reg)
+{
+	riscv_reg_info_t *reg_info = reg->arch_info;
+	struct target *target = reg_info->target;
+	unsigned csr_number = reg->number - GDB_REGNO_COUNT;
+	uint64_t ireg_value;
+	uint64_t iselect_value;
+	uint32_t csr_iselect;
+	uint32_t csr_ireg;
+
+	LOG_DEBUG("[indirect] priv = %d, group = %d, ireg = %d, reg_idx = %d, indirect_idx = %d, name = %s",
+		 ndsv5_indirect_csrs[csr_number].priv,
+		 ndsv5_indirect_csrs[csr_number].groupid,
+		 ndsv5_indirect_csrs[csr_number].ireg,
+		 reg->number, csr_number,
+		 ndsv5_indirect_csrs[csr_number].name);
+
+	switch (ndsv5_indirect_csrs[csr_number].priv) {
+		case CSR_PRIV_S:
+			csr_iselect = GDB_REGNO_CSR0 + CSR_SISELECT;
+			csr_ireg    = GDB_REGNO_CSR0 + CSR_SIREG + ndsv5_indirect_csrs[csr_number].ireg - 1;
+			break;
+		default:
+			LOG_ERROR("Indirect csr privilege not support");
+			return ERROR_FAIL;
+	};
+
+	/* Check $siselect exist */
+	if (!target->reg_cache->reg_list[csr_iselect].exist) {
+		LOG_ERROR("Reg iselect not exist!!");
+		return ERROR_FAIL;
+	}
+
+	/* Write group id to $siselect */
+	if (register_write_direct(target, csr_iselect, ndsv5_indirect_csrs[csr_number].groupid) !=
+			ERROR_OK) {
+		LOG_ERROR("Failed write iselect");
+		return ERROR_FAIL;
+	}
+
+	/* Read-back to check */
+	register_read_direct(target, &iselect_value, csr_iselect);
+	if (iselect_value != ndsv5_indirect_csrs[csr_number].groupid) {
+		LOG_ERROR("iselect inconsistent");
+		return ERROR_FAIL;
+	}
+
+	/* Read ireg */
+	register_read_direct(target, &ireg_value, csr_ireg);
+	buf_set_u64(reg->value, 0, reg->size, ireg_value);
+
+	return ERROR_OK;
+}
+
+int nds_indirect_set_reg(struct reg *reg, unsigned char *val)
+{
+	riscv_reg_info_t *reg_info = reg->arch_info;
+	struct target *target = reg_info->target;
+	unsigned csr_number = reg->number - GDB_REGNO_COUNT;
+	uint64_t iselect_value;
+	uint32_t csr_iselect;
+	uint32_t csr_ireg;
+
+	LOG_DEBUG("[indirect] priv = %d, group = %d, ireg = %d, reg_idx = %d, indirect_idx = %d, name = %s",
+		 ndsv5_indirect_csrs[csr_number].priv,
+		 ndsv5_indirect_csrs[csr_number].groupid,
+		 ndsv5_indirect_csrs[csr_number].ireg,
+		 reg->number, csr_number,
+		 ndsv5_indirect_csrs[csr_number].name);
+
+	switch (ndsv5_indirect_csrs[csr_number].priv) {
+		case CSR_PRIV_S:
+			csr_iselect = GDB_REGNO_CSR0 + CSR_SISELECT;
+			csr_ireg    = GDB_REGNO_CSR0 + CSR_SIREG + ndsv5_indirect_csrs[csr_number].ireg - 1;
+			break;
+		default:
+			LOG_ERROR("Indirect csr privilege not support");
+			return ERROR_FAIL;
+	};
+
+	/* Check $siselect exist */
+	if (!target->reg_cache->reg_list[csr_iselect].exist) {
+		LOG_ERROR("Reg iselect not exist!!");
+		return ERROR_FAIL;
+	}
+
+	/* Write group id to $siselect */
+	if (register_write_direct(target, csr_iselect, ndsv5_indirect_csrs[csr_number].groupid) !=
+			ERROR_OK) {
+		LOG_ERROR("Failed write iselect");
+		return ERROR_FAIL;
+	}
+
+	/* Read-back to check */
+	register_read_direct(target, &iselect_value, csr_iselect);
+	if (iselect_value != ndsv5_indirect_csrs[csr_number].groupid) {
+		LOG_ERROR("iselect inconsistent");
+		return ERROR_FAIL;
+	}
+
+	/* Write ireg */
+	uint64_t value = buf_get_u64(val, 0, reg->size);
+	register_write_direct(target, csr_ireg, value);
+	return ERROR_OK;
+}
+
+struct reg_arch_type nds_indirect_reg_access_type = {
+	.get = nds_indirect_get_reg,
+	.set = nds_indirect_set_reg
 };
 
 static void write_to_buf(uint8_t *buffer, uint64_t value, unsigned size)

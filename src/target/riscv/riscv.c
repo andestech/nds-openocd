@@ -30,6 +30,7 @@
 #include "ndsv5-013.h"
 #include "target/nds32_new/nds32_log.h"
 #include "target/ndsv5_ace.h"
+extern struct ndsv5_indirect_csr_info ndsv5_indirect_csrs[];
 #endif
 
 #define get_field(reg, mask) (((reg) & (mask)) / ((mask) & ~((mask) << 1)))
@@ -5569,8 +5570,17 @@ int riscv_init_registers(struct target *target)
 #endif /* _NDS_V5_ONLY_ */
 
 #if _NDS_V5_ONLY_
-		/* To support ACR, make the following code out */
-		} /* Don't delete this braces, it will causing compile error */
+		} else if (number >= GDB_REGNO_COUNT && number < (GDB_REGNO_COUNT+GDB_INDIRECT_REGNO_COUNT)) {
+			r->group = "csr";
+			r->feature = &feature_csr;
+			r->type = &nds_indirect_reg_access_type;
+
+			unsigned csr_number = number - GDB_REGNO_COUNT;
+
+			LOG_DEBUG("Indirect %u(#%u) name: %s", csr_number, number, ndsv5_indirect_csrs[csr_number].name);
+			r->name = ndsv5_indirect_csrs[csr_number].name;
+			r->exist = true; /* Assume all exist */
+		}
 #else
 		} else if (number >= GDB_REGNO_COUNT) {
 			/* Custom registers. */
