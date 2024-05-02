@@ -2724,8 +2724,10 @@ static int ndsv5_init_option_reg(struct target *target)
 		}
 
 		/* mrvarch_cfg.MRVARCH_EXT3[63] == 1 */
-		if ((reg_mrvarch_value & 0x8000000000000000) == 0)
+		if ((riscv_xlen(target) == 64) && ((reg_mrvarch_value & 0x8000000000000000) == 0)) {
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG3].exist = false;
+			NDS_INFO("disable CSR_MRVARCH_CFG3 register");
+		}
 	}
 
 
@@ -2740,8 +2742,10 @@ static int ndsv5_init_option_reg(struct target *target)
 			uint64_t reg_mrvarch2_value = buf_get_u64(p_cur_reg->value, 0, p_cur_reg->size);
 
 			/* RV32, mrvarch_cfg2.MRVARCH_EXT3[31] == 1 */
-			if ((reg_mrvarch2_value & 0x80000000) == 0)
+			if ((reg_mrvarch2_value & 0x80000000) == 0) {
 				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG3].exist = false;
+				NDS_INFO("disable CSR_MRVARCH_CFG3 register");
+			}
 		}
 
 		if (!target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MCACHE_CTL].exist) {
