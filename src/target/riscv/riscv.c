@@ -4878,7 +4878,7 @@ int riscv_init_registers(struct target *target)
 		return ERROR_FAIL;
 	target->reg_cache->name = "RISC-V Registers";
 #if _NDS_V5_ONLY_
-	target->reg_cache->num_regs = GDB_REGNO_COUNT + acr_reg_count_v5;
+	target->reg_cache->num_regs = GDB_REGNO_COUNT + GDB_INDIRECT_REGNO_COUNT + acr_reg_count_v5;
 #else /* _NDS_V5_ONLY_ */
 	target->reg_cache->num_regs = GDB_REGNO_COUNT;
 #endif /* _NDS_V5_ONLY_ */
