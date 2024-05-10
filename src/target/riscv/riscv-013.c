@@ -8594,7 +8594,8 @@ int ndsv5_tracer_dumpfile(struct target *target, char *pFileName)
 
 	if (p_etb_wptr != p_etb_buf_start) {
 		total_pkt_bytes = (p_etb_wptr - p_etb_buf_start);
-		total_pkt_bytes <<= 2;
+		if (!nds_trRamSMEM)
+			total_pkt_bytes <<= 2;
 	}
 	LOG_DEBUG("p_etb_wptr = 0x%lx, total_pkt_bytes = 0x%x",
 		(unsigned long)p_etb_wptr, total_pkt_bytes);
