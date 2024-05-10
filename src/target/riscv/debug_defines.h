@@ -3077,8 +3077,6 @@
 
 /* Timestamp Register */
 #define DMI_TSCONTROL        0x0010 /* Timestamp Control Register */
-#define DMI_TSLOWER          0x0011 /* Lower 32 Bits of Timestamp Counter */
-#define DMI_TSUPPER          0x0012 /* Upper Bits of Timestamp Counter */
 
 /* External Trigger Register Interface */
 #define DMI_XTRIGINCONTROL   0x015 /* External Trigger Input Control Register */
@@ -3092,6 +3090,10 @@
 
 /* Miscellaneous Registers */
 #define DMI_ATBCONTROL       0x400 /* Control Registers for ATB Trace Sink */
+
+#define DMI_DEVARCH          0x7EF  /* Device Architecture Register */
+#define DMI_DEVARCH_NEW      0x3EF  /* Device Architecture Register */
+
 
 /* Trace Buffer Base Address */
 #define DMI_TBADDRESSBASE    0x800
@@ -3117,50 +3119,14 @@
 #define DMI_TERAMRP     DMI_TRRAMRPLOW
 #define DMI_TERAMDATA   DMI_TRRAMDATA
 
-/* older version ncetrace200 */
-/* #define DMI_TFCONTROL   (DMI_TBADDRESSBASE + 0x000) // Trace Buffer Control Register */
-/* #define DMI_TFIMPL      (DMI_TBADDRESSBASE + 0x001) // Trace Buffer Implementation Information Register */
-/* #define DMI_TFRAMBASE   (DMI_TBADDRESSBASE + 0x004) // Trace Buffer RAM Base Register */
-/* #define DMI_TFRAMLIMIT  (DMI_TBADDRESSBASE + 0x006) // Trace Buffer RAM Limit Register */
-/* #define DMI_TERAMWP     (DMI_TBADDRESSBASE + 0x007) // Trace Buffer Write Pointer Register */
-/* #define DMI_TERAMRP     (DMI_TBADDRESSBASE + 0x008) // Trace Buffer Read Pointer Register */
-/* #define DMI_TERAMDATA   (DMI_TBADDRESSBASE + 0x009) // Trace Buffer Data Register */
-
-
-/* CoreSight Integration Registers */
-#define ITATBDATA0      (DMI_TBADDRESSBASE + 0x7BB) /* Integration Test ATB Data Register 0 */
-#define ITATBCTR2       (DMI_TBADDRESSBASE + 0x7BC) /* Integration Test ATB Control Register 2 */
-#define ITATBCTR1       (DMI_TBADDRESSBASE + 0x7BD) /* Integration Test ATB Control Register 1 */
-#define ITATBCTR0       (DMI_TBADDRESSBASE + 0x7BE) /* Integration Test ATB Control Register 0 */
-
-/* CoreSight Registers */
-#define ITCTRL          (DMI_TBADDRESSBASE + 0x7C0)
-#define CLAIMSET        (DMI_TBADDRESSBASE + 0x7E8)
-#define CLAIMCLR        (DMI_TBADDRESSBASE + 0x7E9)
-#define AUTHSTATUS      (DMI_TBADDRESSBASE + 0x7EE)
-#define TB_DEVARCH      (DMI_TBADDRESSBASE + 0x7EF)
-#define DEVID           (DMI_TBADDRESSBASE + 0x7F2)
-#define DEVTYPE         (DMI_TBADDRESSBASE + 0x7F3)
-#define PIDR4           (DMI_TBADDRESSBASE + 0x7F4)
-#define PIDR5           (DMI_TBADDRESSBASE + 0x7F5)
-#define PIDR6           (DMI_TBADDRESSBASE + 0x7F6)
-#define PIDR7           (DMI_TBADDRESSBASE + 0x7F7)
-#define PIDR0           (DMI_TBADDRESSBASE + 0x7F8)
-#define PIDR1           (DMI_TBADDRESSBASE + 0x7F9)
-#define PIDR2           (DMI_TBADDRESSBASE + 0x7FA)
-#define PIDR3           (DMI_TBADDRESSBASE + 0x7FB)
-#define CIDR0           (DMI_TBADDRESSBASE + 0x7FC)
-#define CIDR1           (DMI_TBADDRESSBASE + 0x7FD)
-#define CIDR2           (DMI_TBADDRESSBASE + 0x7FE)
-#define CIDR3           (DMI_TBADDRESSBASE + 0x7FF)
-
-
 /* Trace Multiplexer Base Address */
 #define DMI_TMUXADDRESSBASE     0x1000
 #define TMUX_trFunnelControl   (DMI_TMUXADDRESSBASE + 0x0)   /* trFunnelControl, Control Register */
 #define TMUX_trFunnelImpl      (DMI_TMUXADDRESSBASE + 0x1)   /* trFunnelImpl, Implementation register */
 #define TMUX_ITTMUXCTRL        (DMI_TMUXADDRESSBASE + 0x7BF) /* Integration Test Control Register */
+#define TMUX_ITTMUXCTRL_NEW    (DMI_TMUXADDRESSBASE + 0x3BF) /* Integration Test Control Register */
 #define TMUX_DEVARCH           (DMI_TMUXADDRESSBASE + 0x7EF) /* 0x1FBC DEVARCH, Device Architecture Register */
+#define TMUX_DEVARCH_NEW       (DMI_TMUXADDRESSBASE + 0x3EF) /* 0xFBC DEVARCH, Device Architecture Register */
 
 /* trFunnelActive Primary enable for trace funnel
 When 0, the Trace Funnel may have clocks gated off or be powered down */

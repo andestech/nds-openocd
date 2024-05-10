@@ -79,6 +79,7 @@ uint64_t nds_trRamStart;
 uint64_t nds_trRamSize;
 uint64_t nds_trRamLimit;
 static bool nds_trRamSMEM;
+static bool nds_trace_new_bitmap;
 int ndsv5_tracer_capability_check(struct target *target);
 static int ndsv5_tracer_buffer_init(void);
 extern struct ndsv5_indirect_csr_info ndsv5_indirect_csrs[];
@@ -7606,10 +7607,17 @@ static uint32_t tracer_activate_encoder(struct target *target)
 		return 0;
 	}
 	LOG_DEBUG("DBG_API:activate TMUX_ITTMUXCTRL %d", trace_sel);
-	dmi_read(target, &tmux_ctrl_reg, TMUX_ITTMUXCTRL);
-	tmux_ctrl_reg |= (0x01 << trace_sel);
-	dmi_write(target, TMUX_ITTMUXCTRL, tmux_ctrl_reg);
-	dmi_read(target, &tmux_ctrl_reg, TMUX_ITTMUXCTRL);
+	if (nds_trace_new_bitmap) {
+		dmi_read(target, &tmux_ctrl_reg, TMUX_ITTMUXCTRL_NEW);
+		tmux_ctrl_reg |= (0x01 << trace_sel);
+		dmi_write(target, TMUX_ITTMUXCTRL_NEW, tmux_ctrl_reg);
+		dmi_read(target, &tmux_ctrl_reg, TMUX_ITTMUXCTRL_NEW);
+	} else {
+		dmi_read(target, &tmux_ctrl_reg, TMUX_ITTMUXCTRL);
+		tmux_ctrl_reg |= (0x01 << trace_sel);
+		dmi_write(target, TMUX_ITTMUXCTRL, tmux_ctrl_reg);
+		dmi_read(target, &tmux_ctrl_reg, TMUX_ITTMUXCTRL);
+	}
 	LOG_DEBUG("DBG_API: tmux_ctrl_reg 0x%x", tmux_ctrl_reg);
 
 	LOG_DEBUG("DBG_API:activate encoder%d", trace_sel);
@@ -7936,28 +7944,7 @@ static uint32_t tracer_reset_timestamp(struct target *target)
 	dmi_write(target, selected_encoder(DMI_TSCONTROL), ts_ctrl_reg);
 	return 0;
 }
-/*
-static uint64_t tracer_get_timestamp(struct target *target)
-{
-	uint64_t	timestamp;
-	uint32_t	tsUpper;
-	uint32_t	tsUpper2;
-	uint32_t	tsLower;
 
-	while (1) {
-		dmi_read(target, &tsUpper, selected_encoder(DMI_TSUPPER));
-		dmi_read(target, &tsLower, selected_encoder(DMI_TSLOWER));
-		dmi_read(target, &tsUpper2, selected_encoder(DMI_TSUPPER));
-		if (tsUpper2 == tsUpper)
-			break;
-	}
-	timestamp = tsUpper;
-	timestamp <<= 32;
-	timestamp |= tsLower;
-	LOG_DEBUG("DBG_API:encoder%d: timestamp=0x%lx", trace_sel, timestamp);
-	return timestamp;
-}
-*/
 static int tracer_set_atbid(struct target *target, uint32_t atbid)
 {
 	uint32_t    atb_ctrl_reg;
@@ -8670,19 +8657,59 @@ int ndsv5_tracer_polling(struct target *target)
 
 int ndsv5_tracer_capability_check(struct target *target)
 {
+	/*
+	 * After April 24, 2024, the RTL design underwent changes,
+	 * relocating the address space of CoreSight registers from 0x1E00-0x1FFF to 0xE00 - 0xFFF
+	 * for three IPs (NCETENC200, NCETBUF200, and NCETMUX200).
+	 * Consequently, the codes for checking registers CIDR0-3 (0x1FF0-0x1FFC -> 0x0FF0-0x0FFC) and
+	 * DEVARCH (0x1FBC-> 0x0FBC) need to be modified accordingly.
+	 *
+	 * The checking procedure needs to be altered as follows:
+	 * If the expected data for CIDR0-3 or DEVARCH of encoder0 is obtained in the old address space
+	 *     Return OLD_Bitmap
+	 * Else
+	 *     If all zeros are obtained for CIDR0-3 or DEVARCH of encoder0 in the old address space,
+	 *         If the expected data for the CSRs of encoder0 is obtained in the new address space
+	 *             Return NEW_bitmap,
+	 *         Else
+	 *             return ERROR
+	 *     Else
+	 *         return ERROR
+	 *
+	 * */
+
+	uint32_t trace_sel_bak = trace_sel;
+	trace_sel = 0;
+
 	uint32_t  devarch_reg;
-	dmi_read(target, &devarch_reg, TB_DEVARCH);
-	LOG_DEBUG("TB_DEVARCH = 0x%x", devarch_reg);
-	/* TB_DEVARCH, 15:0 ARCHID Architecture ID RO 0x4200 */
-	if ((devarch_reg & 0xFFFF) == 0x4200) {
-		dmi_read(target, &devarch_reg, TMUX_DEVARCH);
+	dmi_read(target, &devarch_reg, selected_encoder(DMI_DEVARCH));
+	LOG_DEBUG("DMI_DEVARCH = 0x%x", devarch_reg);
+
+	nds_trace_new_bitmap = false;
+	if (devarch_reg == 0x0) {
+		dmi_read(target, &devarch_reg, selected_encoder(DMI_DEVARCH_NEW));
+		nds_trace_new_bitmap = true;
+		LOG_DEBUG("Maybe new bitmap");
+	}
+
+	if ((devarch_reg & 0xFFFF) == 0x4500) {
+		if (nds_trace_new_bitmap)
+			dmi_read(target, &devarch_reg, TMUX_DEVARCH_NEW);
+		else
+			dmi_read(target, &devarch_reg, TMUX_DEVARCH);
+
 		LOG_DEBUG("TMUX_DEVARCH = 0x%x", devarch_reg);
 		if ((devarch_reg & 0xFFFF) == 0x4D00)
 			nds_tracer_multiplexer = 1;
+
+		trace_sel = trace_sel_bak;
 		nds_tracer_capability = 1;
 		return ERROR_OK;
 	}
+
+	nds_trace_new_bitmap = false;
 	nds_tracer_capability = 0xFF;
+	trace_sel = trace_sel_bak;
 	return ERROR_FAIL;
 }
 
@@ -8690,6 +8717,7 @@ int ndsv5_tracer_smem_capability_check(struct target *target)
 {
 	uint32_t  tf_info_reg;
 	dmi_read(target, &tf_info_reg, DMI_TFIMPL);
+	LOG_DEBUG("DMI_TFIMPL: 0x%x", tf_info_reg);
 
 	/* Check trRamHasSMEM */
 	if ((tf_info_reg >> 13) & 0x1)
