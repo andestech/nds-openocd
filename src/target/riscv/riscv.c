@@ -5573,6 +5573,9 @@ int riscv_init_registers(struct target *target)
 		} else if (number >= GDB_REGNO_COUNT && number < (GDB_REGNO_COUNT+GDB_INDIRECT_REGNO_COUNT)) {
 			r->group = "csr";
 			r->feature = &feature_csr;
+			r->arch_info = calloc(1, sizeof(riscv_reg_info_t));
+			if (!r->arch_info)
+				return ERROR_FAIL;
 			r->type = &nds_indirect_reg_access_type;
 
 			unsigned csr_number = number - GDB_REGNO_COUNT;
