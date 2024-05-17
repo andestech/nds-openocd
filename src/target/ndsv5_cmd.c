@@ -2788,6 +2788,11 @@ static int ndsv5_init_option_reg(struct target *target)
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNEPC].exist = false;
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNCAUSE].exist = false;
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNSTATUS].exist = false;
+
+		/* SPMP Register */
+		LOG_INFO("Disable all SPMP registers");
+		for (i = GDB_REGNO_COUNT; i < GDB_REGNO_COUNT+GDB_INDIRECT_REGNO_COUNT; i++)
+			target->reg_cache->reg_list[i].exist = false;
 	} else {
 		reg_name = ndsv5_get_CSR_name(target, CSR_MRVARCH_CFG3);
 		p_cur_reg = register_get_by_name(target->reg_cache, reg_name, 1);
@@ -2801,6 +2806,14 @@ static int ndsv5_init_option_reg(struct target *target)
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNEPC].exist = false;
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNCAUSE].exist = false;
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNSTATUS].exist = false;
+		}
+
+		/* mrvarch_cfg3.Spmp[3:2] == 1 */
+		if ((reg_mrvarch3_value & 0xc) == 0) {
+			/* SPMP Register */
+			LOG_INFO("Disable all SPMP registers");
+			for (i = GDB_REGNO_COUNT; i < GDB_REGNO_COUNT+GDB_INDIRECT_REGNO_COUNT; i++)
+				target->reg_cache->reg_list[i].exist = false;
 		}
 	}
 

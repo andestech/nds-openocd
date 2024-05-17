@@ -5404,7 +5404,12 @@ int riscv_init_registers(struct target *target)
 					r->exist = riscv_supports_extension(target, 'S') ||
 						riscv_supports_extension(target, 'N');
 					break;
-
+#if _NDS_V5_ONLY_
+				case CSR_SISELECT:
+				case CSR_SIREG:
+					r->exist = riscv_supports_extension(target, 'S');
+					break;
+#endif
 				case CSR_PMPCFG1:
 				case CSR_PMPCFG3:
 				case CSR_CYCLEH:
@@ -5576,6 +5581,7 @@ int riscv_init_registers(struct target *target)
 			r->arch_info = calloc(1, sizeof(riscv_reg_info_t));
 			if (!r->arch_info)
 				return ERROR_FAIL;
+			((riscv_reg_info_t *) r->arch_info)->target = target;
 			r->type = &nds_indirect_reg_access_type;
 
 			unsigned csr_number = number - GDB_REGNO_COUNT;
