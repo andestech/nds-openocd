@@ -3385,16 +3385,9 @@ int ndsv5_get_gdb_fileio_info(struct target *target, struct gdb_fileio_info *fil
 
 	NDS_INFO("hit syscall ID: 0x%x\n", (uint32_t)nds32->active_syscall_id);
 
-	/* free previous identifier storage */
-	if (NULL != fileio_info->identifier) {
-		free(fileio_info->identifier);
-		fileio_info->identifier = NULL;
-	}
-
 	switch (nds32->active_syscall_id) {
 		case NDS_EBREAK_EXIT:
-			fileio_info->identifier = (char *)malloc(5);
-			sprintf(fileio_info->identifier, "exit");
+			fileio_info->identifier = "exit";
 			fileio_info->param_1 = buf_get_u64(reg_r0->value, 0, reg_r0->size);
 			/*
 			target->is_program_exit = true;
@@ -3403,8 +3396,7 @@ int ndsv5_get_gdb_fileio_info(struct target *target, struct gdb_fileio_info *fil
 		case NDS_EBREAK_OPEN:
 			{
 				uint8_t filename[256];
-				fileio_info->identifier = (char *)malloc(5);
-				sprintf(fileio_info->identifier, "open");
+				fileio_info->identifier = "open";
 				fileio_info->param_1 = buf_get_u64(reg_r0->value, 0, reg_r0->size);
 				/* reserve fileio_info->param_2 for length of path */
 				fileio_info->param_3 = buf_get_u64(reg_r1->value, 0, reg_r1->size);
@@ -3416,27 +3408,23 @@ int ndsv5_get_gdb_fileio_info(struct target *target, struct gdb_fileio_info *fil
 			}
 			break;
 		case NDS_EBREAK_CLOSE:
-			fileio_info->identifier = (char *)malloc(6);
-			sprintf(fileio_info->identifier, "close");
+			fileio_info->identifier = "close";
 			fileio_info->param_1 = buf_get_u64(reg_r0->value, 0, reg_r0->size);
 			break;
 		case NDS_EBREAK_READ:
-			fileio_info->identifier = (char *)malloc(5);
-			sprintf(fileio_info->identifier, "read");
+			fileio_info->identifier = "read";
 			fileio_info->param_1 = buf_get_u64(reg_r0->value, 0, reg_r0->size);
 			fileio_info->param_2 = buf_get_u64(reg_r1->value, 0, reg_r1->size);
 			fileio_info->param_3 = buf_get_u64(reg_r2->value, 0, reg_r2->size);
 			break;
 		case NDS_EBREAK_WRITE:
-			fileio_info->identifier = (char *)malloc(6);
-			sprintf(fileio_info->identifier, "write");
+			fileio_info->identifier = "write";
 			fileio_info->param_1 = buf_get_u64(reg_r0->value, 0, reg_r0->size);
 			fileio_info->param_2 = buf_get_u64(reg_r1->value, 0, reg_r1->size);
 			fileio_info->param_3 = buf_get_u64(reg_r2->value, 0, reg_r2->size);
 			break;
 		case NDS_EBREAK_LSEEK:
-			fileio_info->identifier = (char *)malloc(6);
-			sprintf(fileio_info->identifier, "lseek");
+			fileio_info->identifier = "lseek";
 			fileio_info->param_1 = buf_get_u64(reg_r0->value, 0, reg_r0->size);
 			fileio_info->param_2 = buf_get_u64(reg_r1->value, 0, reg_r1->size);
 			fileio_info->param_3 = buf_get_u64(reg_r2->value, 0, reg_r2->size);
@@ -3444,8 +3432,7 @@ int ndsv5_get_gdb_fileio_info(struct target *target, struct gdb_fileio_info *fil
 		case NDS_EBREAK_UNLINK:
 			{
 				uint8_t filename[256];
-				fileio_info->identifier = (char *)malloc(7);
-				sprintf(fileio_info->identifier, "unlink");
+				fileio_info->identifier = "unlink";
 				fileio_info->param_1 = buf_get_u64(reg_r0->value, 0, reg_r0->size);
 				/* reserve fileio_info->param_2 for length of path */
 
@@ -3457,8 +3444,7 @@ int ndsv5_get_gdb_fileio_info(struct target *target, struct gdb_fileio_info *fil
 		case NDS_EBREAK_RENAME:
 			{
 				uint8_t filename[256];
-				fileio_info->identifier = (char *)malloc(7);
-				sprintf(fileio_info->identifier, "rename");
+				fileio_info->identifier = "rename";
 				fileio_info->param_1 = buf_get_u64(reg_r0->value, 0, reg_r0->size);
 				/* reserve fileio_info->param_2 for length of old path */
 				fileio_info->param_3 = buf_get_u64(reg_r1->value, 0, reg_r1->size);
@@ -3474,16 +3460,14 @@ int ndsv5_get_gdb_fileio_info(struct target *target, struct gdb_fileio_info *fil
 			}
 			break;
 		case NDS_EBREAK_FSTAT:
-			fileio_info->identifier = (char *)malloc(6);
-			sprintf(fileio_info->identifier, "fstat");
+			fileio_info->identifier = "fstat";
 			fileio_info->param_1 = buf_get_u64(reg_r0->value, 0, reg_r0->size);
 			fileio_info->param_2 = buf_get_u64(reg_r1->value, 0, reg_r1->size);
 			break;
 		case NDS_EBREAK_STAT:
 			{
 				uint8_t filename[256];
-				fileio_info->identifier = (char *)malloc(5);
-				sprintf(fileio_info->identifier, "stat");
+				fileio_info->identifier = "stat";
 				fileio_info->param_1 = buf_get_u64(reg_r0->value, 0, reg_r0->size);
 				/* reserve fileio_info->param_2 for length of old path */
 				fileio_info->param_3 = buf_get_u64(reg_r1->value, 0, reg_r1->size);
@@ -3494,15 +3478,13 @@ int ndsv5_get_gdb_fileio_info(struct target *target, struct gdb_fileio_info *fil
 			}
 			break;
 		case NDS_EBREAK_GETTIMEOFDAY:
-			fileio_info->identifier = (char *)malloc(13);
-			sprintf(fileio_info->identifier, "gettimeofday");
+			fileio_info->identifier = "gettimeofday";
 			fileio_info->param_1 = buf_get_u64(reg_r0->value, 0, reg_r0->size);
 			fileio_info->param_2 = buf_get_u64(reg_r1->value, 0, reg_r1->size);
 			break;
 
 		default:
-			fileio_info->identifier = (char *)malloc(8);
-			sprintf(fileio_info->identifier, "unknown");
+			fileio_info->identifier = "unknown";
 			break;
 	}
 
