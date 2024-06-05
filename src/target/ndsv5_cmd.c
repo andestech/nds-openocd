@@ -2562,7 +2562,7 @@ static int ndsv5_init_option_reg(struct target *target)
 			}
 
 			/* if RV32 mmsc_cfg2.MSC_EXT3[31] */
-			if ((reg_mmsc_cfg_value & 0x80000000) == 0) {
+			if ((reg_mmsc_cfg2_value & 0x80000000) == 0) {
 				NDS_INFO("disable CSR_MMSC_CFG3");
 				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MMSC_CFG3].exist = false;
 			}
