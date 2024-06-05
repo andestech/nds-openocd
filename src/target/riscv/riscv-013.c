@@ -8274,7 +8274,7 @@ uint32_t ndsv5_tracer_setting(struct target *target)
 			/* Activate timestamp and enable internal timestamp counter, set tsDebug to 0,
 				tsType to 1(externel), tsPrescale to 0, ndsTimestampSelect to 1(trTsEnable) */
 			tsDebug = 0;
-			tsType = 3;
+			tsType = 1;  /* External */
 			tsPrescale = 0;
 			tsSelect = 1;
 		} else {
@@ -8517,8 +8517,15 @@ static int ndsv5_tracer_read_etb(struct target *target)
 			(unsigned long)p_etb_wptr, (unsigned long)p_etb_buf_end, fifo_words);
 
 	if (nds_trRamSMEM) {
+		struct nds32_v5 *nds32 = target_to_nds32_v5(target);
+		uint32_t bak_nds_va_to_pa_off = nds32->nds_va_to_pa_off;
+		enum nds_memory_access orig_channel = nds32->memory.access_channel;
+		nds32->nds_va_to_pa_off = 1;
+		nds32->memory.access_channel = NDS_MEMORY_ACC_BUS;
 		target_read_buffer(target, etb_rptr, fifo_words * 4, (uint8_t *)p_etb_buf_start);
 		p_etb_wptr += fifo_words * 4;
+		nds32->nds_va_to_pa_off = bak_nds_va_to_pa_off;
+		nds32->memory.access_channel = orig_channel;
 	} else {
 		for (i = 0; i < fifo_words; i++) {
 			dmi_read(target, &etb_data, DMI_TERAMDATA);
