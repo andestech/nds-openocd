@@ -7716,6 +7716,11 @@ static uint32_t tracer_enable_encoder(struct target *target)
 
 static uint32_t tracer_disable_encoder(struct target *target)
 {
+	if (!target->trace_on) {
+		LOG_DEBUG("Target has been trun-off tracing, skip!");
+		return 0;
+	}
+
 	uint32_t  te_ctrl_reg;
 	uint32_t  timeout_limit;
 	uint32_t  timeout_counter;
@@ -7742,6 +7747,7 @@ static uint32_t tracer_disable_encoder(struct target *target)
 	if (timeout_counter >= timeout_limit)
 		LOG_DEBUG("DBG_API:ERROR:timeout waiting teEnable to be cleared for encoder");
 
+	target->trace_on = false;
 	return 0;
 }
 
@@ -8247,6 +8253,11 @@ static int ndsv5_tracer_buffer_free(void)
 
 uint32_t ndsv5_tracer_setting(struct target *target)
 {
+	if (target->trace_on) {
+		LOG_DEBUG("Target has been trun-on tracing, skip!");
+		return 0;
+	}
+
 	RISCV_INFO(r);
 	tracer_select_hart(r->current_hartid);
 
@@ -8306,6 +8317,7 @@ uint32_t ndsv5_tracer_setting(struct target *target)
 	/* Enable trace encoder and wait for trace-on event */
 	tracer_enable_encoder(target);
 
+	target->trace_on = true;
 	return 0;
 }
 
@@ -8325,6 +8337,11 @@ uint32_t ndsv5_tracer_all_cores_setting(void)
 	}
 
 	for (target = all_targets; target; target = target->next) {
+		if (target->trace_on) {
+			LOG_DEBUG("Target has been trun-on tracing, skip!");
+			return 0;
+		}
+
 		if (target->smp) {
 			struct target_list *tlist;
 			foreach_smp_target(tlist, target->smp_targets) {

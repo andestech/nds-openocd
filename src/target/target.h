@@ -237,6 +237,7 @@ struct target {
 	/* if executed reset run command, cannot change r->rtos_hartid and target->rtos->current_threadid/thread */
 	bool after_reset_run;
 	uint32_t hart_unavailable;
+	bool trace_on;
 #endif
 };
 
