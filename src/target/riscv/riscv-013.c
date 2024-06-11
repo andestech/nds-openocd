@@ -8339,7 +8339,7 @@ uint32_t ndsv5_tracer_all_cores_setting(void)
 	for (target = all_targets; target; target = target->next) {
 		if (target->trace_on) {
 			LOG_DEBUG("Target has been trun-on tracing, skip!");
-			return 0;
+			continue;
 		}
 
 		if (target->smp) {
