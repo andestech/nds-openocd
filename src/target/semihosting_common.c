@@ -1784,7 +1784,8 @@ static int semihosting_common_fileio_end(struct target *target, int result,
 
 
 #if _NDS_V5_ONLY_
-	uint8_t buf[1];
+	uint8_t buf[8];
+	uint64_t st_size;
 	struct reg *reg_sp;
 	uint64_t reg_sp_value;
 #endif /* _NDS_V5_ONLY_ */
@@ -1819,9 +1820,10 @@ static int semihosting_common_fileio_end(struct target *target, int result,
 			reg_sp = register_get_by_name(target->reg_cache, "sp", 1);
 			reg_sp->type->get(reg_sp);
 			reg_sp_value = buf_get_u64(reg_sp->value, 0, reg_sp->size);
-			target_read_memory(target, reg_sp_value - 64 + 35, 1, 1, buf);
-			semihosting->result = buf[0];
-			LOG_DEBUG("fstat result: %d", buf[0]);
+			target_read_memory(target, reg_sp_value - 64 + 28, 4, 2, buf);
+			st_size = be_to_h_u64(buf);
+			semihosting->result = st_size;
+			LOG_DEBUG("fstat(flen) result: %llu", (long long unsigned int)st_size);
 			break;
 #endif /* _NDS_V5_ONLY_ */
 	}

@@ -485,6 +485,8 @@ char *alloc_printf(const char *format, ...)
 #define KEEP_ALIVE_KICK_TIME_MS  500
 #define KEEP_ALIVE_TIMEOUT_MS   1000
 
+#if _NDS_V5_ONLY_
+#else
 static void gdb_timeout_warning(int64_t delta_time)
 {
 	extern int gdb_actual_connections;
@@ -503,17 +505,21 @@ static void gdb_timeout_warning(int64_t delta_time)
 			KEEP_ALIVE_TIMEOUT_MS,
 			delta_time);
 }
+#endif
 
 void keep_alive(void)
 {
 	int64_t current_time = timeval_ms();
 	int64_t delta_time = current_time - last_time;
 
+#if _NDS_V5_ONLY_
+#else
 	if (delta_time > KEEP_ALIVE_TIMEOUT_MS) {
 		last_time = current_time;
 
 		gdb_timeout_warning(delta_time);
 	}
+#endif
 
 	if (delta_time > KEEP_ALIVE_KICK_TIME_MS) {
 		last_time = current_time;
@@ -536,12 +542,18 @@ void kept_alive(void)
 {
 	int64_t current_time = timeval_ms();
 
+#if _NDS_V5_ONLY_
+#else
 	int64_t delta_time = current_time - last_time;
+#endif
 
 	last_time = current_time;
 
+#if _NDS_V5_ONLY_
+#else
 	if (delta_time > KEEP_ALIVE_TIMEOUT_MS)
 		gdb_timeout_warning(delta_time);
+#endif
 }
 
 /* if we sleep for extended periods of time, we must invoke keep_alive() intermittently */

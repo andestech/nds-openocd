@@ -15,6 +15,7 @@
 #include "ndsv5.h"
 #include "ndsv5-013.h"
 #include <helper/log.h>
+#include <helper/command.h>
 #include "target/nds32_new/nds32_log.h"
 #include <target/semihosting_common.h>
 
@@ -75,32 +76,46 @@ uint64_t ndsv5_backup_mstatus;
 char *ndsv5_script_custom_reset;
 char *ndsv5_script_custom_reset_halt;
 char *ndsv5_script_custom_initial;
+
+#define DMI_TEADDRESSBASE   (0x8000) /* Trace Encoder Base Address */
+#define DMI_TMUXADDRESSBASE (0x4000) /* Trace Multiplexer Base Address */
+#define DMI_TBADDRESSBASE   (0x2000) /* Trace Buffer Base Address */
+struct ndsv5_component ndsv5_comps[] = {
+	NDSV5_COMPONENT("ncetenc", NDSV5_COMP_ADDR_DMI, DMI_TEADDRESSBASE),
+	NDSV5_COMPONENT("ncetmux", NDSV5_COMP_ADDR_DMI, DMI_TMUXADDRESSBASE),
+	NDSV5_COMPONENT("ncetbuf", NDSV5_COMP_ADDR_DMI, DMI_TBADDRESSBASE),
+
+	NDSV5_COMPONENT(NULL, 0, 0),
+};
 /********************************************************************/
+
 
 
 /********************************************************************/
 /* ndsv5.c static function */
 /********************************************************************/
-static inline void ndsv5_print_console_and_server(char *str)
+static inline void ndsv5_print_console_and_server(char *str, struct command_invocation *cmd)
 {
 	/*** Print on Console ***/
 	NDS32_LOG_LF("%s", str);
 
 	/*** Print to Server ***/
-	LOG_INFO("%s", str);
+	command_print(cmd, "%s", str);
 }
 
-#define NDSV5_PRINT(pFile, fmt, ...) do { \
+#define NDSV5_PRINT(pFile, cmd, fmt, ...) do { \
 	char buffer[256]; \
 	snprintf(buffer, sizeof(buffer), fmt, __VA_ARGS__); \
 	if (pFile == stdout) \
-		ndsv5_print_console_and_server(buffer); \
+		ndsv5_print_console_and_server(buffer, cmd); \
 	else \
 		fprintf(pFile, "%s", buffer); \
 } while (0)
 
 
 /********************************************************************/
+
+
 
 #ifndef min
 #define min(a,b) \
@@ -147,7 +162,7 @@ int strict_step(struct target *target, bool announce)
 	struct reg *reg_pc = register_get_by_name(target->reg_cache, "pc", 1);
 	reg_pc->type->get(reg_pc);
 	uint64_t reg_pc_value = buf_get_u64(reg_pc->value, 0, reg_pc->size);
-	LOG_DEBUG("strict_step (before): 0x%lx", (long unsigned int)reg_pc_value);
+	LOG_DEBUG("strict_step (before): 0x%" PRIx64, reg_pc_value);
 
 	struct breakpoint *breakpoint = target->breakpoints;
 	while (breakpoint) {
@@ -186,7 +201,7 @@ int strict_step(struct target *target, bool announce)
 
 	reg_pc->type->get(reg_pc);
 	reg_pc_value = buf_get_u64(reg_pc->value, 0, reg_pc->size);
-	LOG_DEBUG("strict_step (after): 0x%lx", (long unsigned int)reg_pc_value);
+	LOG_DEBUG("strict_step (after): 0x%" PRIx64, reg_pc_value);
 	return ERROR_OK;
 }
 
@@ -201,7 +216,7 @@ int ndsv5_handle_triggered(struct target *target)
 	struct reg *reg_pc = register_get_by_name(target->reg_cache, "pc", 1);
 	reg_pc->type->get(reg_pc);
 	uint64_t reg_pc_value = buf_get_u64(reg_pc->value, 0, reg_pc->size);
-	LOG_DEBUG("halt at 0x%lx", (long unsigned int)reg_pc_value);
+	LOG_DEBUG("halt at 0x%" PRIx64, reg_pc_value);
 
 	/* step and watchpoint, record */
 	if (target->debug_reason == DBG_REASON_SINGLESTEP)
@@ -210,7 +225,7 @@ int ndsv5_handle_triggered(struct target *target)
 	switch (cause) {
 		case DCSR_CAUSE_SWBP:
 			if (ndsv5_virtual_hosting_check(target) == ERROR_OK) {
-				LOG_DEBUG("virtual hosting");
+				LOG_DEBUG("Hit virtual hosting");
 				return ERROR_OK;
 			} else {
 				if (single_step_cmd == 1) {
@@ -258,10 +273,8 @@ int ndsv5_poll(struct target *target)
 	if (nds_skip_dmi == 1)
 		return ERROR_OK;
 
-	if (old_or_new_riscv_poll(target) != ERROR_OK) {
+	if (old_or_new_riscv_poll(target) != ERROR_OK)
 		LOG_DEBUG("old_or_new_riscv_poll failed");
-		//return ERROR_FAIL;
-	}
 
 	return ndsv5_handle_poll(target);
 }
@@ -329,7 +342,7 @@ int ndsv5_examine(struct target *target)
 	uint32_t dtmcontrol = 0;
 	for (retry_cnt = 0; retry_cnt < 3; retry_cnt++) {
 		dtmcontrol = dtmcontrol_scan(target, 0);
-		LOG_DEBUG("dtmcontrol=0x%x", dtmcontrol);
+		LOG_DEBUG("dtmcontrol=0x%" PRIx32, dtmcontrol);
 		if ((dtmcontrol == 0x0) || (dtmcontrol == 0xFFFFFFFF)) {
 			/* do jtag_interface->init() again when JTAG examine chain failed (SW workaround) */
 			adapter_driver->quit();
@@ -372,7 +385,7 @@ int modify_trigger_address_mbit_match(struct target *target, struct trigger *tri
 		}
 #endif
 		if (i == 0) {
-			LOG_DEBUG("ERROR length, new_address:0x%" PRIx64 ", new_length:0x%x", new_address, new_length);
+			LOG_DEBUG("ERROR length, new_address:0x%" PRIx64 ", new_length:0x%" PRIx32, new_address, new_length);
 			return ERROR_OK;
 		}
 		mbit_mask = ~((0x01 << i) - 1);
@@ -380,13 +393,13 @@ int modify_trigger_address_mbit_match(struct target *target, struct trigger *tri
 		new_address &= mbit_mask;
 		new_address |= mbit_value;
 
-		LOG_DEBUG("new_address:0x%" PRIx64 ", new_length:0x%x", new_address, new_length);
+		LOG_DEBUG("new_address:0x%" PRIx64 ", new_length:0x%" PRIx32, new_address, new_length);
 		if (((new_address & mbit_mask) + new_length) < (trigger->address + trigger->length))
 			new_address = trigger->address;
 		else
 			break;
 	}
-	LOG_DEBUG("real new_address:0x%" PRIx64 ", new_length:0x%x", new_address, new_length);
+	LOG_DEBUG("real new_address:0x%" PRIx64 ", new_length:0x%" PRIx32, new_address, new_length);
 
 	/* redefine: trigger->address */
 	trigger->address = new_address;
@@ -422,6 +435,7 @@ int ndsv5_writebuffer(struct target *target, target_addr_t address,
 #define PGSHIFT             12
 
 extern uint64_t ndsv5_reg_misa_value;
+extern uint64_t ndsv5_reg_marchid_value;
 int ndsv5_get_physical_address(struct target *target, target_addr_t addr, target_addr_t *physical)
 {
 	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
@@ -491,7 +505,8 @@ int ndsv5_get_physical_address(struct target *target, target_addr_t addr, target
 #endif
 
 	uint32_t ptshift = (levels - 1) * ptidxbits;
-	LOG_DEBUG("ptshift: 0x%x, levels: 0x%x, ptesize: 0x%x", (int)ptshift, (int)levels, (int)ptesize);
+	LOG_DEBUG("ptshift: 0x%" PRIx32 ", levels: 0x%" PRIx32 ", ptesize: 0x%" PRIx32,
+			ptshift, levels, ptesize);
 	uint32_t i;
 	for (i = 0; i < levels; i++, ptshift -= ptidxbits) {
 		uint64_t idx = (addr >> (PGSHIFT + ptshift)) &
@@ -664,7 +679,8 @@ void bus_mode_on(struct target *target, uint64_t *reg_value_backup)
 	*reg_value_backup = old_mcache_ctl;
 	new_mcache_ctl = (old_mcache_ctl & ~(0x3));
 	ndsv5_set_register_value(reg_mcache_ctl, new_mcache_ctl);
-	LOG_DEBUG("old_mcache_ctl: 0x%x, new_mcache_ctl: 0x%x", (int)old_mcache_ctl, (int)new_mcache_ctl);
+	LOG_DEBUG("old_mcache_ctl: 0x%" PRIx64 ", new_mcache_ctl: 0x%" PRIx64,
+			old_mcache_ctl, new_mcache_ctl);
 }
 
 void bus_mode_off(struct target *target, uint64_t reg_value)
@@ -730,7 +746,8 @@ static int riscv_step_virtual_hosting_checking(struct target *target)
 		LOG_ERROR("can't read memory: 0x%" TARGET_PRIxADDR, reg_pc_value);
 		return ERROR_FAIL;
 	}
-	LOG_DEBUG("reg_pc_value = 0x%" TARGET_PRIxADDR ", cur_instr=0x%x", reg_pc_value, cur_instr);
+	LOG_DEBUG("reg_pc_value = 0x%" TARGET_PRIxADDR ", cur_instr=0x%" PRIx32, reg_pc_value, cur_instr);
+	//cur_instr &= MASK_C_EBREAK;
 	if (cur_instr == MATCH_EBREAK) {
 		if (target_read_memory(target, reg_pc_value+4, 4, 1, (uint8_t *)&post_instr) != ERROR_OK) {
 			LOG_ERROR("can't read memory: 0x%" TARGET_PRIxADDR, reg_pc_value+4);
@@ -892,7 +909,8 @@ extern uint32_t nds_force_aligned_access;
 int ndsv5_read_memory(struct target *target, target_addr_t address,
 		uint32_t size, uint32_t count, uint8_t *buffer)
 {
-	LOG_DEBUG("addr=0x%" TARGET_PRIxADDR ", size=0x%x, count=0x%x", address, size, count);
+	LOG_DEBUG("addr=0x%" TARGET_PRIxADDR ", size=0x%" PRIx32 ", count=0x%" PRIx32,
+			address, size, count);
 	RISCV_INFO(r);
 
 	/* check if 011, or  word_access/aligned_access disable */
@@ -910,7 +928,8 @@ int ndsv5_read_memory(struct target *target, target_addr_t address,
 			align_addr = (address & ~0x03);
 			r->read_memory(target, align_addr, 4, 1, (uint8_t *)&data_val1, 4);
 			r->read_memory(target, align_addr+4, 4, 1, (uint8_t *)&data_val2, 4);
-			LOG_DEBUG("addr=0x%" TARGET_PRIxADDR ", data_val1=0x%x, data_val2=0x%x", align_addr, data_val1, data_val2);
+			LOG_DEBUG("addr=0x%" TARGET_PRIxADDR ", data_val1=0x%" PRIx32 ", data_val2=0x%" PRIx32,
+					align_addr, data_val1, data_val2);
 			*buffer++ = (data_val1 >> 16) & 0xff;
 			*buffer++ = (data_val1 >> 24) & 0xff;
 			*buffer++ = (data_val2 & 0xff);
@@ -936,14 +955,16 @@ int ndsv5_read_memory(struct target *target, target_addr_t address,
 		((address % access_size) != 0)) {
 		access_size = size;
 		access_cnt = count;
-		LOG_DEBUG("path-I, access_size=0x%x, access_cnt=0x%x", access_size, access_cnt);
+		LOG_DEBUG("path-I, access_size=0x%" PRIx32 ", access_cnt=0x%" PRIx32,
+				access_size, access_cnt);
 		return r->read_memory(target, address, access_size, access_cnt, buffer, access_size);
 	}
 
 	while (total_size) {
 		nds32_get_buffer_access_size(start_addr, total_size, &readsize, &access_size);
 		access_cnt = readsize/access_size;
-		LOG_DEBUG("path-II, access_size=0x%x, access_cnt=0x%x", access_size, access_cnt);
+		LOG_DEBUG("path-II, access_size=0x%" PRIx32 ", access_cnt=0x%" PRIx32,
+				access_size, access_cnt);
 
 		int retval = r->read_memory(target, address, access_size, access_cnt, buffer, access_size);
 		if (retval != ERROR_OK)
@@ -958,7 +979,8 @@ int ndsv5_read_memory(struct target *target, target_addr_t address,
 int ndsv5_write_memory(struct target *target, target_addr_t address,
 		uint32_t size, uint32_t count, const uint8_t *buffer)
 {
-	LOG_DEBUG("addr=0x%" TARGET_PRIxADDR ", size=0x%x, count=0x%x", address, size, count);
+	LOG_DEBUG("addr=0x%" TARGET_PRIxADDR ", size=0x%" PRIx32 ", count=0x%" PRIx32,
+			address, size, count);
 	struct target_type *tt = get_target_type(target);
 	riscv_info_t *info = (riscv_info_t *)target->arch_info;
 
@@ -987,14 +1009,16 @@ int ndsv5_write_memory(struct target *target, target_addr_t address,
 		((address % access_size) != 0)) {
 		access_size = size;
 		access_cnt = count;
-		LOG_DEBUG("path-I, access_size=0x%x, access_cnt=0x%x", access_size, access_cnt);
+		LOG_DEBUG("path-I, access_size=0x%" PRIx32 ", access_cnt=0x%" PRIx32,
+				access_size, access_cnt);
 		return tt->write_memory(target, address, access_size, access_cnt, buffer);
 	}
 
 	while (total_size) {
 		nds32_get_buffer_access_size(start_addr, total_size, &writesize, &access_size);
 		access_cnt = writesize/access_size;
-		LOG_DEBUG("path-II, access_size=0x%x, access_cnt=0x%x", access_size, access_cnt);
+		LOG_DEBUG("path-II, access_size=0x%" PRIx32 ", access_cnt=0x%" PRIx32,
+				access_size, access_cnt);
 
 		int retval = tt->write_memory(target, address, access_size, access_cnt, buffer);
 		if (retval != ERROR_OK)
@@ -1040,7 +1064,7 @@ int ndsv5_write_buffer(struct target *target, target_addr_t address, uint32_t wr
 	if (nds32->hit_syscall) {
 		target = nds32->active_target;
 		ndsv5_gdb_fileio_write_memory(target, address, &total_size, &write_buffers);
-		LOG_DEBUG("gdb_fileio_write_memory, total_size=%d", total_size);
+		LOG_DEBUG("gdb_fileio_write_memory, total_size=%" PRIu32, total_size);
 	}
 
 
@@ -1158,8 +1182,7 @@ int ndsv5_init_cache(struct target *target)
 		icache->log2_line_size = 0;
 	}
 
-	LOG_DEBUG("\ticache set: %lu, way: %lu, line size: %lu, "
-			"log2(set): %lu, log2(line_size): %lu",
+	LOG_DEBUG("\ticache set: %" PRIu64 ", way: %" PRIu64 ", line size: %" PRIu64 ", log2(set): %" PRIu64 ", log2(line_size): %" PRIu64,
 			icache->set, icache->way, icache->line_size,
 			icache->log2_set, icache->log2_line_size);
 
@@ -1181,8 +1204,7 @@ int ndsv5_init_cache(struct target *target)
 		dcache->log2_line_size = 0;
 	}
 
-	LOG_DEBUG("\tdcache set: %lu, way: %lu, line size: %lu, "
-			"log2(set): %lu, log2(line_size): %lu",
+	LOG_DEBUG("\tdcache set: %" PRIu64 ", way: %" PRIu64 ", line size: %" PRIu64 ", log2(set): %" PRIu64 ", log2(line_size): %" PRIu64,
 			dcache->set, dcache->way, dcache->line_size,
 			dcache->log2_set, dcache->log2_line_size);
 
@@ -1274,8 +1296,7 @@ static void ndsv5_parse_tag_idx(struct target *target, uint64_t idx, uint64_t ta
 				shift_bit = line_bits + set_bits;
 				maskTAG = (0x1UL << (palen - 10)) - 1;
 
-				LOG_DEBUG("PALEN: %" PRIu64 ", icache_tag_width: %" PRIu64 ", maksTAG: 0x%" PRIx64,
-						palen, tag_bw, maskTAG);
+				LOG_DEBUG("PALEN: %" PRIu64 ", icache_tag_width: %" PRIu64 ", maksTAG: 0x%" PRIx64, palen, tag_bw, maskTAG);
 
 				ce[idx][way].valid = (uint8_t)(tag >> (xlen - 1)) & 0x1UL;
 				ce[idx][way].dirty = (uint8_t)(0);
@@ -1297,7 +1318,8 @@ static void ndsv5_parse_tag_idx(struct target *target, uint64_t idx, uint64_t ta
 	}
 }
 
-static void ndsv5_print_cache(struct target *target, FILE *pFile, unsigned int cache_type, uint64_t idx_in)
+static void ndsv5_print_cache(struct target *target, FILE *pFile, struct command_invocation *cmd,
+		unsigned int cache_type, uint64_t idx_in)
 {
 	uint64_t sets, ways, line_bits;
 	uint64_t idx, way, i;
@@ -1356,18 +1378,18 @@ static void ndsv5_print_cache(struct target *target, FILE *pFile, unsigned int c
 		}
 	}
 
-	NDSV5_PRINT(pFile, "dump %s\n", cache_type ? "DCACHE" : "ICACHE");
+	NDSV5_PRINT(pFile, cmd, "dump %s\n", cache_type ? "DCACHE" : "ICACHE");
 	if (tagformat != CACHE_TAG_FORMAT_25 && cache_type == DCACHE)
-		NDSV5_PRINT(pFile, fmt_str2, "ADDRESS", "SET", "WAY", "I", "S", "E", "M", "L");
+		NDSV5_PRINT(pFile, cmd, fmt_str2, "ADDRESS", "SET", "WAY", "I", "S", "E", "M", "L");
 	else
-		NDSV5_PRINT(pFile, fmt_str2, "ADDRESS", "SET", "WAY", "V", "D", "L");
+		NDSV5_PRINT(pFile, cmd, fmt_str2, "ADDRESS", "SET", "WAY", "V", "D", "L");
 	for (i = 0; i < word_num; i++)
-		NDSV5_PRINT(pFile, fmt_str, (i * word_size));
-	NDSV5_PRINT(pFile, "%s", "\n");
+		NDSV5_PRINT(pFile, cmd, fmt_str, (i * word_size));
+	NDSV5_PRINT(pFile, cmd, "%s", "\n");
 	for (idx = idx_begin; idx < sets; idx++) {
 		for (way = 0; way < ways; way++) {
 			if (tagformat != CACHE_TAG_FORMAT_25 && cache_type == DCACHE) {
-				NDSV5_PRINT(pFile, fmt_str3,
+				NDSV5_PRINT(pFile, cmd, fmt_str3,
 					ce[idx][way].pa,
 					idx,
 					way,
@@ -1377,7 +1399,7 @@ static void ndsv5_print_cache(struct target *target, FILE *pFile, unsigned int c
 					ce[idx][way].modified,
 					ce[idx][way].lock);
 			} else {
-				NDSV5_PRINT(pFile, fmt_str3,
+				NDSV5_PRINT(pFile, cmd, fmt_str3,
 					ce[idx][way].pa,
 					idx,
 					way,
@@ -1387,8 +1409,8 @@ static void ndsv5_print_cache(struct target *target, FILE *pFile, unsigned int c
 			}
 
 			for (i = 0; i < word_num; i++)
-				NDSV5_PRINT(pFile, fmt_str1, ce[idx][way].cacheline[i]);
-			NDSV5_PRINT(pFile, "%s", "\n");
+				NDSV5_PRINT(pFile, cmd, fmt_str1, ce[idx][way].cacheline[i]);
+			NDSV5_PRINT(pFile, cmd, "%s", "\n");
 		}
 
 		if (!dump_all)
@@ -1425,7 +1447,7 @@ static int ndsv5_get_cache_idx(struct target *target, unsigned int cache_type, u
 		read_tag_cmd = L1D_IX_RTAG;
 		read_data_cmd = L1D_IX_RDATA;
 	} else {
-		LOG_ERROR("%s not supported cache_type:%x", __func__, cache_type);
+		LOG_ERROR("%s not supported cache_type: %x", __func__, cache_type);
 		return ERROR_FAIL;
 	}
 
@@ -1453,7 +1475,8 @@ static int ndsv5_get_cache_idx(struct target *target, unsigned int cache_type, u
 	line_bits = cache->log2_line_size;
 	line_size = cache->line_size;
 	way_offset = set_bits + line_bits;
-	LOG_DEBUG("Way:%lu, Set:%lu, Line Size:%lu", ways, sets, line_size);
+	LOG_DEBUG("Way:%" PRIu64 ", Set:%" PRIu64 ", Line Size:%" PRIu64,
+			ways, sets, line_size);
 
 
 	/* Index Example Format for CCTL Index Type Operation for 64bit icache
@@ -1526,7 +1549,8 @@ static int ndsv5_get_cache_idx(struct target *target, unsigned int cache_type, u
 	return ERROR_OK;
 }
 
-int ndsv5_dump_cache(struct target *target, unsigned int cache_type, const char* filename)
+int ndsv5_dump_cache(struct target *target, struct command_invocation *cmd,
+		unsigned int cache_type, const char* filename)
 {
 	LOG_DEBUG("Dump Cache");
 
@@ -1543,14 +1567,15 @@ int ndsv5_dump_cache(struct target *target, unsigned int cache_type, const char*
 		return ERROR_FAIL;
 
 	ndsv5_get_cache_idx(target, cache_type, (uint64_t)-1);
-	ndsv5_print_cache(target, pFile, cache_type, (uint64_t)-1);
+	ndsv5_print_cache(target, pFile, cmd, cache_type, (uint64_t)-1);
 
-	NDSV5_PRINT(stdout, "%s", "\nDump Finish!!");
+	NDSV5_PRINT(stdout, NULL, "%s", "\nDump Finish!!");
 	fclose(pFile);
 	return ERROR_OK;
 }
 
-int ndsv5_dump_cache_va(struct target *target, unsigned int cache_type, uint64_t va)
+int ndsv5_dump_cache_va(struct target *target, struct command_invocation *cmd,
+		unsigned int cache_type, uint64_t va)
 {
 	LOG_DEBUG("Dump Cache");
 
@@ -1569,7 +1594,7 @@ int ndsv5_dump_cache_va(struct target *target, unsigned int cache_type, uint64_t
 	} else if (cache_type == DCACHE) {
 		cache = &nds32->memory.dcache;
 	} else {
-		LOG_ERROR("%s not supported cache_type:%x", __func__, cache_type);
+		LOG_ERROR("%s not supported cache_type: %x", __func__, cache_type);
 		return ERROR_FAIL;
 	}
 
@@ -1577,20 +1602,19 @@ int ndsv5_dump_cache_va(struct target *target, unsigned int cache_type, uint64_t
 	set_bits = cache->log2_set;
 
 	uint64_t pa = va;
-	ndsv5_get_physical_address(target, va, &pa);
+	if (!nds32->nds_va_to_pa_off)
+		ndsv5_get_physical_address(target, va, &pa);
 	LOG_DEBUG("physical address:0x%" TARGET_PRIxADDR, pa);
 
-	/* if dcache use pa to index; if icache use va to index */
+	///* if dcache use pa to index; if icache use va to index */
 	if (cache_type == DCACHE)
 		idx = (pa & (((1ULL << set_bits) - 1) << line_bits));
 	else
 		idx = (va & (((1ULL << set_bits) - 1) << line_bits));
 
-	/* LOG_DEBUG("Way:%lu, Set:%lu, Line Size:%lu", ways, sets, line_size); */
-
 	ndsv5_get_cache_idx(target, cache_type, idx);
 	FILE *pFile = stdout;
-	ndsv5_print_cache(target, pFile, cache_type, idx);
+	ndsv5_print_cache(target, pFile, cmd, cache_type, idx);
 
 	return ERROR_OK;
 }
@@ -1602,9 +1626,7 @@ int ndsv5_dump_cache_va(struct target *target, unsigned int cache_type, uint64_t
 #define L2C_M0_CCTL_CMD (L2C_BASE + 0x40)
 #define L2C_M0_CCTL_ACC (L2C_BASE + 0x48)
 #define L2C_STATUS      (L2C_BASE + 0x80)
-target_addr_t L2C_TGT_DATA_0;
-#define L2C_TGT_DATA_0_ORI (L2C_BASE + 0x90)
-#define L2C_TGT_DATA_0_25  (L2C_BASE + 0xB0)
+#define L2C_TGT_DATA_0  (L2C_BASE + 0x90)
 
 
 
@@ -1669,7 +1691,7 @@ static int ndsv5_l2c_status_idle(struct target *target)
 				return ERROR_OK;
 
 			case 0x1: /* still running */
-				LOG_INFO("L2C CCTL M0 still running!");
+				NDS_INFO("L2C CCTL M0 still running!");
 				continue;
 
 			case 0x2: /* illegal CCTL operation */
@@ -1698,14 +1720,13 @@ static int ndsv5_l2c_get_reg(struct target *target, uint64_t addr, uint64_t *dat
 	ndsv5_l2c_status_idle(target);
 
 	if (target_read_memory(target, addr, size, 1, (uint8_t *)data) != ERROR_OK) {
-		LOG_ERROR("Unable to read L2C reg 0x%lx", addr);
+		LOG_ERROR("Unable to read L2C reg 0x%" TARGET_PRIxADDR, addr);
 		return ERROR_FAIL;
 	}
-	LOG_DEBUG("L2C get reg 0x%lx data 0x%lx", addr, *data);
 
 	if (size == 4)
 		*data =  *data & 0xffffffff;
-	LOG_DEBUG("L2C get reg 0x%lx data 0x%lx", addr, *data);
+	LOG_DEBUG("L2C get reg 0x%" TARGET_PRIxADDR " data 0x%" PRIx64, addr, *data);
 
 	memory->access_channel = bak_access_channel;
 	nds32->nds_va_to_pa_off = bak_nds_va_to_pa_off;
@@ -1721,12 +1742,12 @@ static int ndsv5_l2c_set_reg(struct target *target, uint64_t addr, uint64_t data
 	uint32_t bak_nds_va_to_pa_off = nds32->nds_va_to_pa_off;
 	nds32->nds_va_to_pa_off = 1;
 
-	LOG_DEBUG("L2C set reg: 0x%lx, data: 0x%lx", addr, data);
+	LOG_DEBUG("L2C set reg: 0x%" TARGET_PRIxADDR ", data: 0x%" PRIx64, addr, data);
 
 	/* Get & Check version */
 	ndsv5_l2c_status_idle(target);
 	if (target_write_memory(target, addr, 8, 1, (uint8_t *)&data) != ERROR_OK) {
-		LOG_ERROR("Unable to write L2C reg 0x%lx", addr);
+		LOG_ERROR("Unable to write L2C reg 0x%" TARGET_PRIxADDR, addr);
 		return ERROR_FAIL;
 	}
 
@@ -1784,21 +1805,37 @@ int ndsv5_check_l2cache_exist(struct target *target, uint64_t *config)
 {
 	LOG_DEBUG("Check L2C exist");
 
-	/* After AndeStar V5 SPA v1.5.29 */
-	if (L2C_BASE != (uint64_t)-1) {
-		ndsv5_l2c_support = 1;
-	} else if (target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MCCACHE_CTL_BASE].exist) {
+	/* After AndeStar V5 SPA v1.5.29,
+	 * if not using --l2c, do not use l2c */
+	if (L2C_BASE == (uint64_t)-1) {
+		ndsv5_l2c_support = 0;
+		LOG_DEBUG("Unsupport L2C");
+		return ERROR_FAIL;
+	}
+
+	if (target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MCCACHE_CTL_BASE].exist) {
 		uint64_t mccache_ctl_base;
 		if (riscv_get_register(target, &mccache_ctl_base,
 					GDB_REGNO_CSR0 + CSR_MCCACHE_CTL_BASE) == ERROR_OK) {
 
-			if (L2C_BASE != (uint64_t)-1 && L2C_BASE != mccache_ctl_base)
-				LOG_INFO("L2C_BASE(0x%lx) mismatch with mccache_ctl_base(0x%lx)",
-						L2C_BASE, mccache_ctl_base);
+			LOG_DEBUG("L2C_BASE(0x%" TARGET_PRIxADDR ") and  mccache_ctl_base(0x%" TARGET_PRIxADDR ")",
+					L2C_BASE, mccache_ctl_base);
 
-			L2C_BASE = mccache_ctl_base;
-			ndsv5_l2c_support = 1;
+			/* Special case: if use --l2c but not specified addess,
+			 * use mccache_ctl_base first */
+			if (L2C_BASE == 0x1) {
+				L2C_BASE = mccache_ctl_base;
+				ndsv5_l2c_support = 1;
+			}
 		}
+	}
+
+
+	/* Special case: if use --l2c but not specified addess, and mccache_ctl_base not exist
+	 * use default address */
+	if (L2C_BASE == 0x1) {
+		L2C_BASE = 0xE0500000;
+		ndsv5_l2c_support = 1;
 	}
 
 	if (ndsv5_l2c_support == 0) {
@@ -1830,23 +1867,22 @@ int ndsv5_check_l2cache_exist(struct target *target, uint64_t *config)
 	}
 	LOG_DEBUG("L2C version: 0x%x", version);
 	LOG_DEBUG("L2C size: %d KB", size*128);
+
+	if (((ndsv5_reg_marchid_value & 0xff) == 0x45) &&
+	    (version == L2C_CONFIG_VER_DEFAULT)) {
+		LOG_DEBUG("Unsupport l2c dump on GEN1");
+		ndsv5_l2c_support = 0;
+		return ERROR_FAIL;
+	}
 	ndsv5_l2c_support = 1;
 	*config = l2c_config;
-
-	RISCV_INFO(r);
-	uint64_t marchid = r->marchid;
-	if ((marchid & 0xff) == 0x25) {
-		LOG_DEBUG("25-series L2C");
-		L2C_TGT_DATA_0 = L2C_TGT_DATA_0_25;
-	} else {
-		L2C_TGT_DATA_0 = L2C_TGT_DATA_0_ORI;
-	}
 
 	return ERROR_OK;
 }
 
 static int ndsv5_print_l2cache_va_way(
 		struct target *target,
+		struct command_invocation *cmd,
 		bool print_header,
 		struct cache_element *ces,
 		uint64_t way,
@@ -1913,18 +1949,18 @@ static int ndsv5_print_l2cache_va_way(
 
 	/*** Print to Server ***/
 	if (print_header) {
-		LOG_INFO("Dump L2\n");
+		command_print(cmd, "Dump L2\n");
 		if (new_tagformat)
-			LOG_INFO(fmt_str2, "ADDRESS", "SET", "WAY", "I", "S", "E", "M");
+			command_print(cmd, fmt_str2, "ADDRESS", "SET", "WAY", "I", "S", "E", "M");
 		else
-			LOG_INFO(fmt_str2, "ADDRESS", "SET", "WAY", "V", "D");
+			command_print(cmd, fmt_str2, "ADDRESS", "SET", "WAY", "V", "D");
 		for (i = 0; i < word_num; i++)
-			LOG_INFO(fmt_str, (i * word_size));
-		LOG_INFO("\n");
+			command_print(cmd, fmt_str, (i * word_size));
+		command_print(cmd, "\n");
 	}
 
 	if (new_tagformat) {
-		LOG_INFO(fmt_str3,
+		command_print(cmd, fmt_str3,
 				ces[way].pa,
 				idx,
 				way,
@@ -1933,11 +1969,11 @@ static int ndsv5_print_l2cache_va_way(
 				ces[way].exclusive,
 				ces[way].modified);
 	} else
-		LOG_INFO(fmt_str3, ces[way].pa, idx, way, ces[way].valid, ces[way].dirty);
+		command_print(cmd, fmt_str3, ces[way].pa, idx, way, ces[way].valid, ces[way].dirty);
 
 	for (i = 0; i < word_num; i++)
-		LOG_INFO(fmt_str1, ces[way].cacheline[i]);
-	LOG_INFO("\n");
+		command_print(cmd, fmt_str1, ces[way].cacheline[i]);
+	command_print(cmd, "\n");
 
 	return ERROR_OK;
 }
@@ -1989,7 +2025,7 @@ static int ndsv5_get_l2cache_va_way(
 		tmp_sets >>= 1;
 		set_bits++;
 	}
-	LOG_DEBUG("L2C sets: %lu", sets);
+	LOG_DEBUG("L2C sets: %" PRIu64, sets);
 
 	/* Get palen (Only get it once) */
 	if (palen == (uint64_t)-1) {
@@ -1998,17 +2034,19 @@ static int ndsv5_get_l2cache_va_way(
 			return ERROR_FAIL;
 		}
 	}
-	LOG_DEBUG("L2 Palen = %lu", palen);
+	LOG_DEBUG("L2 Palen = %" PRIu64, palen);
 	tag_dw = palen - set_bits - line_bits;
 	maskTAG = (1ULL << tag_dw) - 1;
 
 	uint64_t pa = va;
-	ndsv5_get_physical_address(target, va, &pa);
-	LOG_DEBUG("physical address:0x%lx", pa);
+	if (!nds32->nds_va_to_pa_off)
+		ndsv5_get_physical_address(target, va, &pa);
+	LOG_DEBUG("physical address:0x%" TARGET_PRIxADDR, pa);
 
 	/* dcache use pa to index */
 	*idx = (pa & (((1ULL << set_bits) - 1) << line_bits)) >> line_bits;
-	LOG_DEBUG("Way:%lu, Set:%lu, Line Size:%lu, idx:%lu", ways, sets, line_size, *idx);
+	LOG_DEBUG("Way:%" PRIu64 ", Set:%" PRIu64 ", Line Size:%" PRIu64 ", idx:%" PRIu64,
+			ways, sets, line_size, *idx);
 	LOG_DEBUG("set_bits: %" PRIu64 ", line_bits: %" PRIu64, set_bits, line_bits);
 	LOG_DEBUG("nhart: %d", nhart);
 	shift_bit = set_bits + line_bits;
@@ -2039,7 +2077,7 @@ static int ndsv5_get_l2cache_va_way(
 	/* Read TAG */
 	ndsv5_l2c_get_reg(target, L2C_TGT_DATA_0, &tag, 8);
 
-	LOG_DEBUG("\t[%ld] TGT_TAG: 0x%lx", way, tag);
+	LOG_DEBUG("\t[%" PRIu64 "] TGT_TAG: 0x%" PRIx64, way, tag);
 
 	if (*new_tagformat) {
 		int mesi = tag & 0x7;
@@ -2058,7 +2096,7 @@ static int ndsv5_get_l2cache_va_way(
 			case 3:
 				ces[way].exclusive = 1;
 				break;
-			case 6: /* no use*/
+			case 6: //?
 			case 7:
 				ces[way].modified = 1;
 				break;
@@ -2092,15 +2130,16 @@ static int ndsv5_get_l2cache_va_way(
 				(L2C_TGT_DATA_0 + i * word_size),
 				&ces[way].cacheline[i], word_size);
 
-		LOG_DEBUG("\t[%ld][%ld] TGT_DATA: 0x%lx", way, i, ces[way].cacheline[i]);
+		LOG_DEBUG("\t[%" PRIu64 "][%" PRIu64 "] TGT_DATA: 0x%" PRIx64,
+				way, i, ces[way].cacheline[i]);
 	}
 
 	return ERROR_OK;
 }
 
-int ndsv5_dump_l2cache_va(struct target *target, uint64_t va)
+int ndsv5_dump_l2cache_va(struct target *target, struct command_invocation *cmd, uint64_t va)
 {
-	LOG_DEBUG("Dump L2 Cache va=0x%lx", va);
+	LOG_DEBUG("Dump L2 Cache va=0x%" TARGET_PRIxADDR, va);
 
 	riscv_select_current_hart(target);
 
@@ -2113,7 +2152,7 @@ int ndsv5_dump_l2cache_va(struct target *target, uint64_t va)
 	bool first = true;
 	for (way = 0; way < ways; way++) {
 		ndsv5_get_l2cache_va_way(target, va, way, ces, &idx, &new_tagformat);
-		ndsv5_print_l2cache_va_way(target, first, ces, way, idx, new_tagformat);
+		ndsv5_print_l2cache_va_way(target, cmd, first, ces, way, idx, new_tagformat);
 		first = false;
 	}
 
@@ -2121,23 +2160,24 @@ int ndsv5_dump_l2cache_va(struct target *target, uint64_t va)
 }
 
 /* only for IDE: print one header + one way */
-int ndsv5_dump_l2cache_va_way(struct target *target, uint64_t va, uint64_t way)
+int ndsv5_dump_l2cache_va_way(struct target *target, struct command_invocation *cmd,
+		uint64_t va, uint64_t way)
 {
 	struct cache_element ces[L2C_WAYS];
 	uint64_t idx;
 	bool new_tagformat = false;
 
-	LOG_DEBUG("Dump L2 Cache va=0x%lx", va);
+	LOG_DEBUG("Dump L2 Cache va=0x%" TARGET_PRIxADDR, va);
 
 	riscv_select_current_hart(target);
 
 	ndsv5_get_l2cache_va_way(target, va, way, ces, &idx, &new_tagformat);
-	ndsv5_print_l2cache_va_way(target, true, ces, way, idx, new_tagformat);
+	ndsv5_print_l2cache_va_way(target, cmd, true, ces, way, idx, new_tagformat);
 
 	return ERROR_OK;
 }
 
-int ndsv5_query_l2cache_config(struct target *target)
+int ndsv5_query_l2cache_config(struct command_invocation *cmd, struct target *target)
 {
 	LOG_DEBUG("Query L2 Cache config");
 
@@ -2162,12 +2202,13 @@ int ndsv5_query_l2cache_config(struct target *target)
 
 	LOG_DEBUG("L2C set: %" PRIu64 ", way: %" PRIu64 ", line_size: %" PRIu64 ", size: %" PRIu64 " KB",
 			sets, ways, line_size, size);
-	LOG_INFO("%" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64, sets, ways, line_size, size);
+	command_print(cmd, "%" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64, sets, ways, line_size, size);
 
 	return ERROR_OK;
 }
 
-int ndsv5_query_l1cache_config(struct target *target, struct nds32_v5_cache *cache)
+int ndsv5_query_l1cache_config(struct command_invocation *cmd,
+		struct target *target, struct nds32_v5_cache *cache)
 {
 	uint64_t sets, ways, line_size, size;
 
@@ -2179,7 +2220,7 @@ int ndsv5_query_l1cache_config(struct target *target, struct nds32_v5_cache *cac
 	/* Format refer Bug-24447, (Set) (Way) (Line size Bytes) (Total Size KBytes) */
 	LOG_DEBUG("set: %" PRIu64 ", way: %" PRIu64 ", line_size: %" PRIu64 ", size: %" PRIu64 " KB",
 			sets, ways, line_size, size);
-	LOG_INFO("%" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64, sets, ways, line_size, size);
+	command_print(cmd, "%" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64, sets, ways, line_size, size);
 
 	return ERROR_OK;
 }
@@ -2210,7 +2251,8 @@ int ndsv5_l2cache_wb_invalidate(struct target *target)
 	line_size = cache->line_size;		/* L2 and L1 has the same cache line size */
 
 	sets = (size * 128 * 1024) / line_size / ways;
-	LOG_DEBUG("L2C sets: %lu, ways: %lu, line size: %lu", sets, ways, line_size);
+	LOG_DEBUG("L2C sets: %" PRIu64 ", ways: %" PRIu64 ", line size: %" PRIu64,
+			sets, ways, line_size);
 
 	/* backup register value */
 	if (nds_register_read_direct(target, &s0, GDB_REGNO_S0) != ERROR_OK)
@@ -2311,7 +2353,7 @@ int ndsv5_enableornot_cache(struct target *target, unsigned int cache_type, cons
 
 	/* check enable/disable icache/dcache PASS or FAIL */
 	new_value = ndsv5_get_register_value(reg_mcache_ctl);
-	LOG_DEBUG("reg_mcache_ctl : %lx", new_value);
+	LOG_DEBUG("reg_mcache_ctl : %" PRIx64, new_value);
 
 	/* for set icache/dcache->enable=true/false */
 	cache = cache_type ? &nds32->memory.dcache : &nds32->memory.icache;
@@ -2576,7 +2618,7 @@ int riscv_program_vsetvli(struct riscv_program *p, enum gdb_regno rd, uint32_t S
 		/* RVV 0.9 & above */
 		vtypei = ((vtypei_SEW << 3) << 20);
 	}
-	LOG_DEBUG("vtypei: 0x%x", vtypei);
+	LOG_DEBUG("vtypei: 0x%" PRIx32, vtypei);
 	opcode = 0x7057;
 	opcode |= ((rd << 7) | (rd << 15) | vtypei);
 	return riscv_program_insert(p, opcode);
@@ -2981,12 +3023,12 @@ int ndsv5_handle_n22_imprecise(struct target *target)
 		/* 16-bits instruction */
 		if (!ndsv5->no_n22_workaround_imprecise_ldst) {
 			switch (funct3) {
-				/* case 0b001:  FLD, FLDSP */
+				//case 0b001: /* FLD, FLDSP */
 				case 0b010: /* LW, LWSP */
-				/* case 0b011:  LD, LDSP */
-				/* case 0b101:  FSD, FSDSP */
+				//case 0b011: /* LD, LDSP */
+				//case 0b101: /* FSD, FSDSP */
 				case 0b110: /* SW, SWSP */
-				/* case 0b111:  FSW, FSWSP */
+				//case 0b111: /* FSW, FSWSP */
 					if ((op == 0b00) || (op == 0b10))
 						should_skip = true;
 				default:
@@ -3037,6 +3079,7 @@ uint32_t ndsv5_count_smp_target(struct target *target)
 	return count;
 }
 
+
 /*
  * return ERROR_OK ==> mml no lock or mseccfg no exist
  * return ERROR_FAIL ==> mml is locking
@@ -3054,7 +3097,7 @@ int ndsv5_mml_capability_check(struct target *target)
 
 	uint64_t new_value = ndsv5_get_register_value(reg_mseccfg);
 
-	/* Check MML */
+	// Check MML
 	if ((new_value & 0x1) == 0x1) {
 		LOG_DEBUG("mseccfg: 0x%" PRIx64, new_value);
 		return ERROR_FAIL;
@@ -3077,7 +3120,7 @@ int ndsv5_tlb_dump_capability_check(struct target *target)
 		}
 		value = ndsv5_get_register_value(regs);
 		LOG_DEBUG("mmsc_cfg2: 0x%" PRIx64, value);
-		return ((value & 0x200000)) ? ERROR_OK : ERROR_FAIL;
+		return ((value & 0x200000))? ERROR_OK : ERROR_FAIL;
 	} else {
 		regs = ndsv5_get_reg_by_CSR(target, CSR_MMSC_CFG);
 		if (!regs) {
@@ -3086,7 +3129,7 @@ int ndsv5_tlb_dump_capability_check(struct target *target)
 		}
 		value = ndsv5_get_register_value(regs);
 		LOG_DEBUG("mmsc_cfg: 0x%" PRIx64, value);
-		return ((value & 0x20000000000000)) ? ERROR_OK : ERROR_FAIL;
+		return ((value & 0x20000000000000))? ERROR_OK : ERROR_FAIL;
 	}
 
 	return ERROR_FAIL;
@@ -3118,7 +3161,7 @@ static struct tlb_element tlbe[TLB_MAX_WAY][TLB_MAX_IDX];
 #define GDB_REGNO_MCCTLCOMMAND   (CSR_MCCTLCOMMAND + GDB_REGNO_CSR0)
 #define GDB_REGNO_MCCTLDATA      (CSR_MCCTLDATA + GDB_REGNO_CSR0)
 
-/* Index Example Format for mcctlbeginaddr CSR for
+/* Index Example Format for mcctlbeginaddr CSR for 
  * CCTL Index Type of Cache Command */
 #define MCCTLBEGINADDR_TLB_INDEX_OFFSET     (0)
 #define MCCTLBEGINADDR_TLB_INDEX            (0xFFFFU << MCCTLBEGINADDR_TLB_INDEX_OFFSET)
@@ -3158,7 +3201,7 @@ static void ndsv5_parsing_tlb_data_idx_way(struct target *target, uint32_t idx, 
 		tlbe[way][idx].ppn = (tlbe[way][idx].raw_data >> 10) & 0xFFF;
 }
 
-static void ndsv5_print_tlb_idx_way(struct target *target, FILE *pFile,
+static void ndsv5_print_tlb_idx_way(struct target *target, FILE *pFile, struct command_invocation *cmd,
 		uint32_t type, bool header, uint32_t idx, uint32_t way)
 {
 	int xlen = riscv_xlen(target);
@@ -3167,23 +3210,23 @@ static void ndsv5_print_tlb_idx_way(struct target *target, FILE *pFile,
 		/* Print type */
 		switch (type) {
 			case NDSV5_TLB_TARGET_ITLB:
-				NDSV5_PRINT(pFile, "%s\n", "Dump ITLB");
+				NDSV5_PRINT(pFile, cmd, "%s\n", "Dump ITLB");
 				break;
 			case NDSV5_TLB_TARGET_DTLB:
-				NDSV5_PRINT(pFile, "%s\n", "Dump DTLB");
+				NDSV5_PRINT(pFile, cmd, "%s\n", "Dump DTLB");
 				break;
 			case NDSV5_TLB_TARGET_STLB:
 			default:
-				NDSV5_PRINT(pFile, "%s\n", "Dump STLB");
+				NDSV5_PRINT(pFile, cmd, "%s\n", "Dump STLB");
 				break;
 		}
 
 		/* Print header */
 		if (xlen == 64) {
-			NDSV5_PRINT(pFile, "%s",
+			NDSV5_PRINT(pFile, cmd, "%s",
 					"IDX  WAY  TLB tag            : TLB entry          ASID   V VA                 PA                 DAGUXWRV");
 		} else {
-			NDSV5_PRINT(pFile, "%s",
+			NDSV5_PRINT(pFile, cmd, "%s",
 					"IDX  WAY  TLB tag    : TLB entry  ASID  V VA         PA          DAGUXWRV");
 		}
 	}
@@ -3194,16 +3237,16 @@ static void ndsv5_print_tlb_idx_way(struct target *target, FILE *pFile,
 	else
 		fmt_str = "[%03d] [%1d] 0x%08llx : 0x%08llx 0x%03x %1d 0x%08llx 0x%09llx %c%c%c%c%c%c%c%c";
 
-	char D = (((tlbe[way][idx].tag >> 7) & 0x1) == 0x1) ? 'D' : '-';
-	char A = (((tlbe[way][idx].tag >> 6) & 0x1) == 0x1) ? 'A' : '-';
-	char G = (((tlbe[way][idx].tag >> 5) & 0x1) == 0x1) ? 'G' : '-';
-	char U = (((tlbe[way][idx].tag >> 4) & 0x1) == 0x1) ? 'U' : '-';
-	char X = (((tlbe[way][idx].tag >> 3) & 0x1) == 0x1) ? 'X' : '-';
-	char W = (((tlbe[way][idx].tag >> 2) & 0x1) == 0x1) ? 'W' : '-';
-	char R = (((tlbe[way][idx].tag >> 1) & 0x1) == 0x1) ? 'R' : '-';
-	char V = (((tlbe[way][idx].tag >> 0) & 0x1) == 0x1) ? 'V' : '-';
+	char D = (((tlbe[way][idx].tag >> 7) & 0x1) == 0x1)? 'D' : '-';
+	char A = (((tlbe[way][idx].tag >> 6) & 0x1) == 0x1)? 'A' : '-';
+	char G = (((tlbe[way][idx].tag >> 5) & 0x1) == 0x1)? 'G' : '-';
+	char U = (((tlbe[way][idx].tag >> 4) & 0x1) == 0x1)? 'U' : '-';
+	char X = (((tlbe[way][idx].tag >> 3) & 0x1) == 0x1)? 'X' : '-';
+	char W = (((tlbe[way][idx].tag >> 2) & 0x1) == 0x1)? 'W' : '-';
+	char R = (((tlbe[way][idx].tag >> 1) & 0x1) == 0x1)? 'R' : '-';
+	char V = (((tlbe[way][idx].tag >> 0) & 0x1) == 0x1)? 'V' : '-';
 
-	NDSV5_PRINT(pFile, fmt_str,
+	NDSV5_PRINT(pFile, cmd, fmt_str,
 			idx,
 			way,
 			tlbe[way][idx].raw_tag,
@@ -3216,8 +3259,10 @@ static void ndsv5_print_tlb_idx_way(struct target *target, FILE *pFile,
 }
 
 
-int ndsv5_dump_tlb_all(struct target *target, char *filename, uint32_t type)
+int ndsv5_dump_tlb_all(struct target *target, char *filename,
+		struct command_invocation *cmd, uint32_t type)
 {
+	//struct reg *reg_mcctlbeginaddr, *reg_mcctlcommand, *reg_mcctldata, *reg_mmsc_cfg, *reg_marchid;
 	uint32_t idx, way;
 	uint64_t ra;
 	bool header = true; /* Only prin header for first time */
@@ -3255,7 +3300,7 @@ int ndsv5_dump_tlb_all(struct target *target, char *filename, uint32_t type)
 
 			ndsv5_parsing_tlb_tag_idx_way(target, idx, way);
 			ndsv5_parsing_tlb_data_idx_way(target, idx, way);
-			ndsv5_print_tlb_idx_way(target, pFile, type, header, idx, way);
+			ndsv5_print_tlb_idx_way(target, pFile, cmd, type, header, idx, way);
 			header = false;
 		}
 	}
@@ -3263,14 +3308,15 @@ int ndsv5_dump_tlb_all(struct target *target, char *filename, uint32_t type)
 	return ERROR_OK;
 }
 
-int ndsv5_dump_tlb_va(struct target *target, target_addr_t va, uint32_t type, uint32_t asid)
+int ndsv5_dump_tlb_va(struct target *target, struct command_invocation *cmd,
+		target_addr_t va, uint32_t type, uint32_t asid)
 {
 	uint32_t idx, way;
 	uint64_t ra;
 	bool header = true; /* Only prin header for first time */
 	uint64_t vpn = (va >> 12);
 
-	NDSV5_PRINT(stdout, "%s%" TARGET_PRIxADDR "\n" , "Dump TLB va 0x", va);
+	NDSV5_PRINT(stdout, NULL, "%s%" TARGET_PRIxADDR "\n" , "Dump TLB va 0x", va);
 
 	ra = 0;
 	for (idx = 0; idx < TLB_MAX_IDX; idx++) {
@@ -3301,7 +3347,7 @@ int ndsv5_dump_tlb_va(struct target *target, target_addr_t va, uint32_t type, ui
 			ndsv5_parsing_tlb_data_idx_way(target, idx, way);
 
 			/* Print to console/server */
-			ndsv5_print_tlb_idx_way(target, stdout, type, header, idx, way);
+			ndsv5_print_tlb_idx_way(target, stdout, NULL, type, header, idx, way);
 			header = false;
 		}
 	}
@@ -3310,6 +3356,27 @@ int ndsv5_dump_tlb_va(struct target *target, target_addr_t va, uint32_t type, ui
 }
 
 struct ndsv5_indirect_csr_info ndsv5_indirect_csrs[] = {
+	/* Note: enum ndsv5_indirect_csr is defined in gdb_regs.h
+	 *
+	 * struct ndsv5_indirect_csr_info {
+	 *     uint32_t priv;
+	 *     uint32_t groupid;  --> miselect/siselect value
+	 *     uint32_t ireg;
+	 *     const char *name;
+	 * };
+	 *
+	 */
+	/* Implementation defined CSRs */
+	{CSR_PRIV_M, 0x2000, 2, "impd0"},
+	{CSR_PRIV_M, 0x2000, 3, "impd1"},
+	{CSR_PRIV_M, 0x2001, 2, "impd2"},
+	{CSR_PRIV_M, 0x2001, 3, "impd3"},
+
+	/* Shadow Register CSRs */
+	{CSR_PRIV_M, 0x1000, 1, "shadow_cfg"},
+	{CSR_PRIV_M, 0x1000, 2, "shadow_ctl"},
+	{CSR_PRIV_M, 0x1000, 3, "shadow_dbg"},
+
 	{CSR_PRIV_S, 1, 1, "spmpcfg0"},
 	{CSR_PRIV_S, 1, 2, "spmpcfg1"},
 	{CSR_PRIV_S, 1, 3, "spmpcfg2"},
@@ -3409,4 +3476,33 @@ struct ndsv5_indirect_csr_info ndsv5_indirect_csrs[] = {
 
 	{0, 0, 0, NULL}
 };
+
+void ndsv5_print_components(struct command_invocation *cmd)
+{
+	int i;
+
+	command_print(CMD, "NDS Components Table:");
+	for (i = 0; i < NDSV5_COMP_COUNT; i++) {
+		command_print(cmd, "%s %s 0x%" PRIx64,
+				ndsv5_comps[i].name,
+				ndsv5_comps[i].addr_type == NDSV5_COMP_ADDR_DMI ? "DMI" : "APB",
+				ndsv5_comps[i].addr);
+	}
+}
+
+int ndsv5_update_component(struct command_invocation *cmd, char *name, int addr_type, uint64_t addr)
+{
+	int i;
+	for (i = 0; i < NDSV5_COMP_COUNT; i++) {
+		if (strcmp(name, ndsv5_comps[i].name) == 0) {
+			ndsv5_comps[i].addr_type = addr_type;
+			ndsv5_comps[i].addr = addr;
+			ndsv5_print_components(cmd);
+			return ERROR_OK;
+		}
+	}
+
+	command_print(cmd, "Component '%s' not found", name);
+	return ERROR_FAIL;
+}
 

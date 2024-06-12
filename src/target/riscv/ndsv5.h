@@ -19,6 +19,7 @@
 #include "gdb_regs.h"
 #include "encoding.h"
 #include "riscv.h"
+#include <helper/command.h>
 
 
 /********************************************************************/
@@ -71,12 +72,47 @@ enum ndsv5_csr_privilege {
 	CSR_PRIV_M,
 };
 
+enum ndsv5_trace_mem_mode {
+	NDSV5_TRACE_MEM_SRAM,
+	NDSV5_TRACE_MEM_SMEM,
+	NDSV5_TRACE_MEM_PIB,
+};
+
 struct ndsv5_indirect_csr_info {
 	uint32_t priv;
 	uint32_t groupid;
 	uint32_t ireg;
 	const char *name;
 };
+
+enum ndsv5_component_id {
+	NDSV5_COMP_NCETENC,
+	NDSV5_COMP_NCETMUX,
+	NDSV5_COMP_NCETBUF,
+
+	NDSV5_COMP_COUNT,
+};
+
+struct ndsv5_component {
+	const char *name;
+
+	enum {
+		NDSV5_COMP_ADDR_DMI,
+		NDSV5_COMP_ADDR_APB,
+	} addr_type;
+
+	uint64_t addr;
+};
+extern struct ndsv5_component ndsv5_comps[];
+
+#define NDSV5_COMPONENT(n, ad_type, ad) \
+{                                       \
+	.name = n,                      \
+	.addr_type = ad_type,           \
+	.addr = ad,                     \
+}
+
+
 
 
 /********************************************************************/
@@ -91,7 +127,6 @@ extern int riscv_examine(struct target *target);
 
 
 
-
 /********************************************************************/
 /* NDSV5 flags */
 /********************************************************************/
@@ -101,6 +136,7 @@ extern uint32_t ndsv5_system_bus_access;
 extern uint32_t ndsv5_without_announce;
 extern uint32_t ndsv5_dmi_abstractcs;
 extern uint32_t ndsv5_byte_access_from_burn;
+extern uint32_t ndsv5_mpsse_t2;
 
 #if _NDS_MEM_Q_ACCESS_
 extern uint32_t nds_dmi_quick_access;
@@ -110,7 +146,6 @@ extern uint32_t nds_dmi_quick_access_ena;
 
 extern uint32_t ndsv5_l2c_support;
 /********************************************************************/
-
 
 
 
@@ -137,7 +172,9 @@ extern uint64_t ndsv5_backup_mstatus;
 extern uint64_t MSTATUS_VS;
 extern uint64_t L2C_BASE;
 
-extern char *ndsv5_dump_trace_folder;
+extern char* ndsv5_dump_trace_folder;
+extern enum ndsv5_trace_mem_mode ndsv5_trace_mem_mode;
+extern uint64_t ndsv5_trace_ram_size;
 /********************************************************************/
 
 
@@ -410,11 +447,16 @@ extern int ndsv5_readwrite_byte(struct target *target, target_addr_t address,
 extern int ndsv5_write_buffer(struct target *target, target_addr_t address, uint32_t writesize, const uint8_t *buffer);
 
 extern int ndsv5_init_cache(struct target *target);
-extern int ndsv5_dump_cache(struct target *target, unsigned int cache_type, const char* filename);
-extern int ndsv5_dump_cache_va(struct target *target, unsigned int cache_type, uint64_t va);
-extern int ndsv5_dump_l2cache_va(struct target *target, uint64_t va);
-extern int ndsv5_dump_l2cache_va_way(struct target *target, uint64_t va, uint64_t way);
-extern int ndsv5_query_l2cache_config(struct target *target);
+extern int ndsv5_dump_cache(struct target *target, struct command_invocation *cmd,
+		unsigned int cache_type, const char* filename);
+extern int ndsv5_dump_cache_va(struct target *target, struct command_invocation *cmd,
+		unsigned int cache_type, uint64_t va);
+extern int ndsv5_dump_l2cache_va(struct target *target, struct command_invocation *cmd,
+		uint64_t va);
+extern int ndsv5_dump_l2cache_va_way(struct target *target, struct command_invocation *cmd,
+		uint64_t va, uint64_t way);
+extern int ndsv5_query_l2cache_config(struct command_invocation *cmd,
+		struct target *target);
 extern int ndsv5_check_l2cache_exist(struct target *target, uint64_t *config);
 extern int ndsv5_l2cache_wb_invalidate(struct target *target);
 extern int ndsv5_enableornot_cache(struct target *target, unsigned int cache_type, const char* enableornot);
@@ -422,7 +464,8 @@ extern int ndsv5_dcache_wb(struct target *target);
 extern int ndsv5_dcache_invalidate(struct target *target);
 extern int ndsv5_dcache_wb_invalidate(struct target *target);
 extern int ndsv5_icache_invalidate(struct target *target);
-extern int ndsv5_query_l1cache_config(struct target *target, struct nds32_v5_cache *cache);
+extern int ndsv5_query_l1cache_config(struct command_invocation *cmd,
+		struct target *target, struct nds32_v5_cache *cache);
 
 #define NDSV5_COMMON_MAGIC (int)0xADE55555
 
@@ -463,9 +506,12 @@ extern int ndsv5_handle_n22_imprecise(struct target *target);
 uint32_t ndsv5_count_smp_target(struct target *target);
 int ndsv5_mml_capability_check(struct target *target);
 int ndsv5_tlb_dump_capability_check(struct target *target);
-int ndsv5_dump_tlb_all(struct target *target, char *filename, uint32_t type);
-int ndsv5_dump_tlb_va(struct target *target, target_addr_t va, uint32_t type, uint32_t asid);
-
+int ndsv5_dump_tlb_all(struct target *target, char *filename,
+		struct command_invocation *cmd, uint32_t type);
+int ndsv5_dump_tlb_va(struct target *target, struct command_invocation *cmd,
+		target_addr_t va, uint32_t type, uint32_t asid);
+void ndsv5_print_components(struct command_invocation *cmd);
+int ndsv5_update_component(struct command_invocation *cmd, char *name, int addr_type, uint64_t addr);
 
 
 

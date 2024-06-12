@@ -117,6 +117,15 @@ const char *gdb_regno_name(enum gdb_regno regno);
 #if _NDS_V5_ONLY_
 
 enum ndsv5_indirect_csr {
+	CSR_IMPD0,
+	CSR_IMPD1,
+	CSR_IMPD2,
+	CSR_IMPD3,
+
+	CSR_SHADOW_CFG,
+	CSR_SHADOW_CTL,
+	CSR_SHADOW_DBG,
+
 	CSR_SPMPCFG0,
 	CSR_SPMPCFG1,
 	CSR_SPMPCFG2,

@@ -36,7 +36,6 @@ uint32_t nds_is_rvv_0_8;
 #include "ndsv5.h"
 #include "ndsv5-013.h"
 #include "target/nds32_new/nds32_log.h"
-#include <target/smp.h>
 #define DIM(x)          (sizeof(x)/sizeof(*x))
 static void write_to_buf(uint8_t *buffer, uint64_t value, unsigned size);
 
@@ -60,33 +59,8 @@ static uint64_t backup_debug_buffer[RISCV_MAX_HARTS][16];
 static bool isAceCsrEnable;
 static struct riscv_batch *busmode_batch;
 uint32_t nds_sys_bus_supported;
-
-static uint32_t *p_etb_buf_start = NULL, *p_etb_buf_end;
-static uint32_t *p_etb_wptr;
-uint32_t nds_tracer_on;
-uint32_t nds_tracer_action = CSR_MCONTROL_ACTION_TRACE_OFF;
-uint32_t nds_tracer_stop_on_wrap;
-uint32_t nds_trTeSyncMax = 4;
-uint32_t nds_trTeInstMode = 6;
-uint32_t nds_teInhibitSrc = 1;
-uint64_t nds_tracer_active_id = 0x01;
-uint32_t nds_teInstNoAddrDiff;
-uint32_t nds_timestamp_on, nds_trTsControl;
-uint32_t nds_tracer_multiplexer, nds_tracer_capability;
-uint32_t nds_trTeFilteriMatchInst;
-uint64_t nds_trRamStart;
-uint64_t nds_trRamSize;
-uint64_t nds_trRamLimit;
-static bool nds_trRamSMEM;
-int ndsv5_tracer_capability_check(struct target *target);
-static int ndsv5_tracer_buffer_init(void);
 extern struct ndsv5_indirect_csr_info ndsv5_indirect_csrs[];
-int ndsv5_tracer_smem_capability_check(struct target *target);
-static uint32_t tracer_tbuf_set_ram_mode(struct target *target, uint32_t mode);
 
-uint32_t TB_RAM_SIZE = 0x2000;
-
-#define TRACER_VERSION       1         /* version number: 0~255 */
 #endif /* _NDS_V5_ONLY_ */
 
 static int riscv013_on_step_or_resume(struct target *target, bool step);
@@ -2127,7 +2101,12 @@ static int examine(struct target *target)
 		* program buffer. */
 	r->debug_buffer_size = info->progbufsize;
 
+#if _NDS_V5_ONLY_
+	/* For Zilsd */
+	int result = register_read_abstract(target, NULL, GDB_REGNO_S1, 64);
+#else
 	int result = register_read_abstract(target, NULL, GDB_REGNO_S0, 64);
+#endif
 	if (result == ERROR_OK)
 		r->xlen = 64;
 	else {
@@ -2208,7 +2187,7 @@ static int examine(struct target *target)
 		target->state = TARGET_RUNNING;
 	}
 
-	/* Bug-27408 */
+	/// Bug-27408
 	target_set_examined(target);
 #else /* _NDS_V5_ONLY_ */
 	if (!halted)
@@ -2981,9 +2960,9 @@ static int deassert_reset(struct target *target)
 					if (!target->reset_halt)
 						break;
 				}
-
-				if (!target->reset_halt && get_field(dmstatus, DM_DMSTATUS_ALLRUNNING))
+				if (!target->reset_halt && get_field(dmstatus, DM_DMSTATUS_ALLRUNNING)) {
 					break;
+				}
 			}
 #else
 			/* Certain debug modules, like the one in GD32VF103
@@ -3039,7 +3018,7 @@ static int deassert_reset(struct target *target)
 				LOG_ERROR("[%s] Fatal: Hart %d failed to halt during deassert_reset()",
 						target_name(target), r->current_hartid);
 
-				/* Reset target status */
+				/* Reset target status */	
 				target->state = TARGET_RUNNING;
 				target->debug_reason = DBG_REASON_UNDEFINED;
 			}
@@ -4243,7 +4222,7 @@ static int read_memory(struct target *target, target_addr_t address,
 			if (get_field(info->sbcs, DM_SBCS_SBVERSION) == 0)
 				ret = read_memory_bus_v0(target, address, size, count, buffer, increment);
 			else if (get_field(info->sbcs, DM_SBCS_SBVERSION) == 1)
-				ret = read_memory_bus_v1(target, address, size, count, buffer, increment);
+				ret = read_memory_bus_v1_opt(target, address, size, count, buffer);
 
 			if(ret == ERROR_OK)
 				goto read_memory_finish;
@@ -5078,9 +5057,19 @@ static int riscv013_halt_go(struct target *target)
 		dmcontrol |= DM_DMCONTROL_HASEL;
 	dmcontrol = set_hartsel(dmcontrol, r->current_hartid);
 	dmi_write(target, DM_DMCONTROL, dmcontrol);
+
+#if _NDS_V5_ONLY_
+	for (size_t i = 0; i < 10; ++i) {
+		if (riscv_is_halted(target))
+			break;
+
+		alive_sleep(500);
+	}
+#else
 	for (size_t i = 0; i < 256; ++i)
 		if (riscv_is_halted(target))
 			break;
+#endif
 
 	if (!riscv_is_halted(target)) {
 		uint32_t dmstatus;
@@ -5842,8 +5831,13 @@ static int riscv013_step_or_resume_current_hart(struct target *target,
 	dmcontrol = set_field(dmcontrol, DM_DMCONTROL_RESUMEREQ, 0);
 
 	uint32_t dmstatus;
+#if _NDS_V5_ONLY_
+	for (size_t i = 0; i < 10; ++i) {
+		usleep(500);
+#else
 	for (size_t i = 0; i < 256; ++i) {
 		usleep(10);
+#endif /* _NDS_V5_ONLY_ */
 		if (dmstatus_read(target, &dmstatus, true) != ERROR_OK)
 			return ERROR_FAIL;
 		if (get_field(dmstatus, DM_DMSTATUS_ALLRESUMEACK) == 0)
@@ -5965,7 +5959,7 @@ ndsv5_set_csr_reg_quick_access_retry:
 		}
 	}
 
-	LOG_DEBUG("reg_num: 0x%x, value: 0x%lx", reg_num, reg_value);
+	LOG_DEBUG("reg_num: 0x%x, value: 0x%" PRIx64, reg_num, reg_value);
 	return ERROR_OK;
 }
 
@@ -6018,7 +6012,7 @@ ndsv5_get_csr_reg_quick_access_retry:
 	uint64_t reg_value = value_h;
 	reg_value = (reg_value << 32) | value;
 	*preg_value = reg_value;
-	LOG_DEBUG("reg_num: 0x%x, value: 0x%lx", reg_num, *preg_value);
+	LOG_DEBUG("reg_num: 0x%x, value: 0x%" PRIx64, reg_num, *preg_value);
 	return ERROR_OK;
 }
 
@@ -6087,92 +6081,171 @@ int riscv013_poll_wo_announce(struct target *target)
 
 int ndsv5_reset_halt_as_examine(struct target *target)
 {
-	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
-	int user_def_hart_count = (int)target->corenums;
-	if (user_def_hart_count == 0)
-		user_def_hart_count = RISCV_MAX_HARTS;
-	LOG_DEBUG("user_def_hart_count = 0x%x", (int)user_def_hart_count);
-	uint32_t dmstatus;
 	int i;
+	struct jtag_tap *t;
 	uint32_t control = 0;
-
-	/* reset the Debug Module */
-	dmi_write(target, DM_DMCONTROL, 0);
-	dmi_write(target, DM_DMCONTROL, DM_DMCONTROL_DMACTIVE);
-	dmi_read(target, &control, DM_DMCONTROL);
-
-	/* check existence harts */
-	for (i = 0; i < user_def_hart_count; ++i) {
-		control = 0;
-		control = set_field(control, DM_DMCONTROL_HARTSELLO, i);
-		control = set_field(control, DM_DMCONTROL_DMACTIVE, 1);
-		dmi_write(target, DM_DMCONTROL, control);
-		dmi_read(target, &control, DM_DMCONTROL);
-
-		dmi_read(target, &dmstatus, DM_DMSTATUS);
-		if (get_field(dmstatus, DM_DMSTATUS_ANYNONEXISTENT)) {
-			user_def_hart_count = i;
-			LOG_DEBUG("user_def_hart_count = 0x%x", (int)user_def_hart_count);
-			break;
+	uint32_t dmstatus;
+	for (t = jtag_all_taps(); t; t = t->next_tap) {
+		/* Check tap enabled and only support NCEJDTM */
+		if (!t->enabled || t->idcode != 0x1000563d) {
+			LOG_DEBUG("Skip [%d] idcode 0x%08x", t->abs_chain_position, t->idcode);
+			continue;
 		}
+		LOG_DEBUG("[%d] idcode 0x%08x", t->abs_chain_position, t->idcode);
+
+		/* Find first target in tap */
+		struct target *curr_target;
+		for (curr_target = all_targets; curr_target; curr_target = curr_target->next) {
+			if (curr_target->tap == t) {
+				LOG_DEBUG("Select first target[%s] in taps", target_name(curr_target));
+				break;
+			}
+		}
+
+		/* Not found in this tap (very strange~) */
+		if (!curr_target) {
+			LOG_DEBUG("%d taps not found targets", t->abs_chain_position);
+			continue;
+		}
+
+
+		/* init dm if nessary */
+		uint32_t dtmcontrol = dtmcontrol_scan(curr_target, 0);
+		if (dtmcontrol == 0) {
+			LOG_ERROR("dtmcontrol is 0, skip");
+			continue;
+		}
+		LOG_DEBUG("dtmcontrol=0x%x", dtmcontrol);
+		riscv_info_t *info = (riscv_info_t *) curr_target->arch_info;
+		if (!info->version_specific) {
+			info->version_specific = calloc(1, sizeof(riscv013_info_t));
+			if (!info->version_specific) {
+				LOG_ERROR("Unable to allocate version_specific");
+				continue;
+			}
+
+			dtmcontrol = dtmcontrol_scan(curr_target, 0);
+			LOG_DEBUG("dtmcontrol=0x%x", dtmcontrol);
+
+			riscv013_info_t *info013 = get_info(curr_target);
+			info013->abits = get_field(dtmcontrol, DTM_DTMCS_ABITS);
+			info013->dtmcs_idle = get_field(dtmcontrol, DTM_DTMCS_IDLE);
+		}
+
+		struct nds32_v5 *nds32 = target_to_nds32_v5(curr_target);
+		int user_def_hart_count = (int)curr_target->corenums;
+		if (user_def_hart_count == 0)
+			user_def_hart_count = RISCV_MAX_HARTS;
+		LOG_DEBUG("user_def_hart_count = 0x%x", (int)user_def_hart_count);
+
+		/* reset the Debug Module */
+		dmi_write(curr_target, DM_DMCONTROL, 0);
+		dmi_write(curr_target, DM_DMCONTROL, DM_DMCONTROL_DMACTIVE);
+		dmi_read(curr_target, &control, DM_DMCONTROL);
+
+		/* check existence harts */
+		for (i = 0; i < user_def_hart_count; ++i) {
+			control = 0;
+			control = set_field(control, DM_DMCONTROL_HARTSELLO, i);
+			control = set_field(control, DM_DMCONTROL_DMACTIVE, 1);
+			dmi_write(curr_target, DM_DMCONTROL, control);
+			dmi_read(curr_target, &control, DM_DMCONTROL);
+
+			dmi_read(curr_target, &dmstatus, DM_DMSTATUS);
+			if (get_field(dmstatus, DM_DMSTATUS_ANYNONEXISTENT)) {
+				user_def_hart_count = i;
+				LOG_DEBUG("user_def_hart_count = 0x%x", (int)user_def_hart_count);
+				break;
+			}
+		}
+		curr_target->corenums = user_def_hart_count;
+
+		/* Assert reset */
+		for (i = 0; i < user_def_hart_count; ++i) {
+			LOG_DEBUG("Assert haltreq [%s]", target_name(curr_target));
+			control = 0;
+			control = set_field(control, DM_DMCONTROL_HARTSELLO, i);
+			control = set_field(control, DM_DMCONTROL_DMACTIVE, 1);
+
+			/* SETRESETHALTREQ can halt on 0x80000000 for AMP/SMP all harts */
+			control = set_field(control, DM_DMCONTROL_SETRESETHALTREQ, 1);
+			control = set_field(control, DM_DMCONTROL_HALTREQ, 1);
+
+			dmi_write(curr_target, DM_DMCONTROL, control);
+			dmi_read(curr_target, &control, DM_DMCONTROL);
+		}
+
+		/* Assert ndmreset */
+		LOG_DEBUG("Assert reset [%s]", target_name(curr_target));
+		control = set_field(control, DM_DMCONTROL_NDMRESET, 1);
+		dmi_write(curr_target, DM_DMCONTROL, control);
+
+		alive_sleep(nds32->reset_time);
+		dmi_read(curr_target, &dmstatus, DM_DMSTATUS);
 	}
-
-	/* Assert reset */
-	for (i = 0; i < user_def_hart_count; ++i) {
-		control = 0;
-		control = set_field(control, DM_DMCONTROL_HARTSELLO, i);
-		control = set_field(control, DM_DMCONTROL_DMACTIVE, 1);
-
-		/* SETRESETHALTREQ can halt on 0x80000000 for AMP/SMP all harts */
-		control = set_field(control, DM_DMCONTROL_SETRESETHALTREQ, 1);
-		control = set_field(control, DM_DMCONTROL_HALTREQ, 1);
-
-		dmi_write(target, DM_DMCONTROL, control);
-		dmi_read(target, &control, DM_DMCONTROL);
-	}
-
-	/* Assert ndmreset */
-	control = set_field(control, DM_DMCONTROL_NDMRESET, 1);
-	dmi_write(target, DM_DMCONTROL, control);
-
-	alive_sleep(nds32->reset_time);
-	dmi_read(target, &dmstatus, DM_DMSTATUS);
 
 	/* Deassert reset */
-	for (i = 0; i < user_def_hart_count; ++i) {
-		time_t start = time(NULL);
-		control = 0;
+	control = 0;
+	for (t = jtag_all_taps(); t; t = t->next_tap) {
+		/* Check tap enabled and only support NCEJDTM */
+		if (!t->enabled || t->idcode != 0x1000563d) {
+			LOG_DEBUG("Skip [%d] idcode 0x%08x", t->abs_chain_position, t->idcode);
+			continue;
+		}
+		LOG_DEBUG("[%d] idcode 0x%08x", t->abs_chain_position, t->idcode);
 
-		/* Clear the reset, but make sure haltreq is still set */
-		control = set_field(control, DM_DMCONTROL_HARTSELLO, i);
-		control = set_field(control, DM_DMCONTROL_DMACTIVE, 1);
-		control = set_field(control, DM_DMCONTROL_ACKHAVERESET, 1);
-		control = set_field(control, DM_DMCONTROL_CLRRESETHALTREQ, 1);
-		control = set_field(control, DM_DMCONTROL_HALTREQ, 1);
-
-		dmi_write(target, DM_DMCONTROL, control);
-		dmi_read(target, &control, DM_DMCONTROL);
-
-		do {
-			dmi_read(target, &dmstatus, DM_DMSTATUS);
-			if (time(NULL) - start > riscv_reset_timeout_sec) {
-				LOG_ERROR("Hart didn't halt coming out of reset in %ds; "
-				"dmstatus=0x%x; "
-				"Increase the timeout with riscv set_reset_timeout_sec.",
-				riscv_reset_timeout_sec, dmstatus);
-
-				/* Release haltreq when failed to halt */
-				control = set_field(control, DM_DMCONTROL_HALTREQ, 0);
-				dmi_write(target, DM_DMCONTROL, control);
-
-				return ERROR_FAIL;
+		/* Find first target in tap */
+		struct target *curr_target;
+		for (curr_target = all_targets; curr_target; curr_target = curr_target->next) {
+			if (curr_target->tap == t) {
+				LOG_DEBUG("Select first target[%s] in taps", target_name(curr_target));
+				break;
 			}
-		} while (get_field(dmstatus, DM_DMSTATUS_ALLHALTED) == 0);
+		}
 
-		control = set_field(control, DM_DMCONTROL_HALTREQ, 0);
-		dmi_write(target, DM_DMCONTROL, control);
-		dmi_read(target, &control, DM_DMCONTROL);
-		dmi_read(target, &dmstatus, DM_DMSTATUS);
+		/* Not found in this tap (very strange~) */
+		if (!curr_target) {
+			LOG_DEBUG("%d taps not found targets", t->abs_chain_position);
+			continue;
+		}
+
+		int user_def_hart_count = (int)curr_target->corenums;
+		for (i = 0; i < user_def_hart_count; ++i) {
+			LOG_DEBUG("Deassert reset [%s]", target_name(curr_target));
+			time_t start = time(NULL);
+
+			/* Clear the reset, but make sure haltreq is still set */
+			control = set_field(control, DM_DMCONTROL_HARTSELLO, i);
+			control = set_field(control, DM_DMCONTROL_DMACTIVE, 1);
+			control = set_field(control, DM_DMCONTROL_ACKHAVERESET, 1);
+			control = set_field(control, DM_DMCONTROL_CLRRESETHALTREQ, 1);
+			control = set_field(control, DM_DMCONTROL_HALTREQ, 1);
+
+			dmi_write(curr_target, DM_DMCONTROL, control);
+			dmi_read(curr_target, &control, DM_DMCONTROL);
+
+			do {
+				dmi_read(curr_target, &dmstatus, DM_DMSTATUS);
+				if (time(NULL) - start > riscv_reset_timeout_sec) {
+					LOG_ERROR("Hart didn't halt coming out of reset in %ds; "
+					"dmstatus=0x%x; "
+					"Increase the timeout with riscv set_reset_timeout_sec.",
+					riscv_reset_timeout_sec, dmstatus);
+
+					/* Release haltreq when failed to halt */
+					control = set_field(control, DM_DMCONTROL_HALTREQ, 0);
+					dmi_write(curr_target, DM_DMCONTROL, control);
+					break;
+				}
+
+				alive_sleep(1000);
+			} while (get_field(dmstatus, DM_DMSTATUS_ALLHALTED) == 0);
+
+			control = set_field(control, DM_DMCONTROL_HALTREQ, 0);
+			dmi_write(curr_target, DM_DMCONTROL, control);
+			dmi_read(curr_target, &control, DM_DMCONTROL);
+			dmi_read(curr_target, &dmstatus, DM_DMSTATUS);
+		}
 	}
 	reset_halt = true;
 	return ERROR_OK;
@@ -7139,6 +7212,11 @@ int nds_ace_get_reg(struct reg *reg)
 	/* Generate code to read value from ACR/ACM */
 	INSN_CODE_T_V5 *insn_code = gen_get_value_code(type_name, reg_idx);
 
+	if (!insn_code) {
+		LOG_ERROR("Unable to get ACR/ACM access code");
+		return ERROR_FAIL;
+	}
+
 	/** Update the value
 	 * [NOTE] The pointer of value is updated in following code.
 	 *       If assigning value to reg->value after these updates,
@@ -7150,6 +7228,7 @@ int nds_ace_get_reg(struct reg *reg)
 
 	bool init_acm_addr = false;
 	/* Execute the code generated by gen_get_value_code() iteratively */
+	int exec_out = ERROR_OK;
 	for (unsigned i = 0; i < insn_code->num; i++) {
 		/* Initialize */
 		struct riscv_program program;
@@ -7181,15 +7260,10 @@ int nds_ace_get_reg(struct reg *reg)
 		}
 
 		/* execute the code stored in program buffer */
-		int exec_out = riscv_program_exec(&program, target);
+		exec_out = riscv_program_exec(&program, target);
 		if (exec_out != ERROR_OK) {
 			LOG_ERROR("Unable to execute ACE utility program");
-
-			/* Restore temp register */
-			riscv_set_register(target, GDB_REGNO_T0, s0);
-			riscv_set_register(target, GDB_REGNO_T1, s1);
-			riscv_set_register(target, GDB_REGNO_T2, s2);
-			return exec_out;
+			break;
 		}
 
 		/* read value from program buffer */
@@ -7225,7 +7299,10 @@ int nds_ace_get_reg(struct reg *reg)
 	riscv_set_register(target, GDB_REGNO_T1, s1);
 	riscv_set_register(target, GDB_REGNO_T2, s2);
 
-	return ERROR_OK;
+	if (insn_code)
+		free(insn_code);
+
+	return exec_out;
 }
 
 int nds_ace_set_reg(struct reg *reg, unsigned char *val)
@@ -7441,6 +7518,11 @@ int nds_indirect_get_reg(struct reg *reg)
 		 ndsv5_indirect_csrs[csr_number].name);
 
 	switch (ndsv5_indirect_csrs[csr_number].priv) {
+		case CSR_PRIV_M:
+			csr_iselect = GDB_REGNO_CSR0 + CSR_MISELECT;
+			csr_ireg    = GDB_REGNO_CSR0 + CSR_MIREG + ndsv5_indirect_csrs[csr_number].ireg - 1;
+			break;
+
 		case CSR_PRIV_S:
 			csr_iselect = GDB_REGNO_CSR0 + CSR_SISELECT;
 			csr_ireg    = GDB_REGNO_CSR0 + CSR_SIREG + ndsv5_indirect_csrs[csr_number].ireg - 1;
@@ -7565,1484 +7647,6 @@ int ndsv5_get_delay_count(struct target *target)
 	return info->dmi_busy_delay;
 }
 
-/* tracer functions */
-static uint32_t trace_sel;
-static uint32_t selected_encoder(uint32_t offset)
-{
-	uint32_t encoder_addr = (DMI_TEADDRESSBASE + (trace_sel * 0x800) + offset);
-	return encoder_addr;
-}
-
-static uint32_t tracer_select_hart(uint32_t hartsel)
-{
-	trace_sel = hartsel;
-	LOG_DEBUG("trace_sel=%d", trace_sel);
-	return 0;
-}
-
-static uint32_t tracer_activate_encoder(struct target *target)
-{
-	uint32_t  te_ctrl_reg, te_info_reg, tf_info_reg;
-	uint32_t  ts_ctrl_reg;
-	uint32_t  te_inst_features_reg;
-	uint32_t  xtrigger_in_ctrl_reg;
-	uint32_t  xtrigger_out_ctrl_reg;
-	uint32_t  atb_ctrl_reg;
-	uint32_t  timeout_limit;
-	uint32_t  timeout_counter;
-	uint32_t  tmux_ctrl_reg;
-
-	riscv013_info_t *info = get_info(target);
-	/* info->abits = get_field(dtmcontrol, DTM_DTMCS_ABITS); */
-	if (info->abits <= 0x7) {
-		LOG_DEBUG("DBG_API:ERROR:value of dtmcs.ABITS (%d) is smaller than or equal to 7", info->abits);
-		LOG_DEBUG("no trace support is present in the target");
-		return 0;
-	}
-	LOG_DEBUG("DBG_API:activate TMUX_ITTMUXCTRL %d", trace_sel);
-	dmi_read(target, &tmux_ctrl_reg, TMUX_ITTMUXCTRL);
-	tmux_ctrl_reg |= (0x01 << trace_sel);
-	dmi_write(target, TMUX_ITTMUXCTRL, tmux_ctrl_reg);
-	dmi_read(target, &tmux_ctrl_reg, TMUX_ITTMUXCTRL);
-	LOG_DEBUG("DBG_API: tmux_ctrl_reg 0x%x", tmux_ctrl_reg);
-
-	LOG_DEBUG("DBG_API:activate encoder%d", trace_sel);
-	dmi_read(target, &te_ctrl_reg, selected_encoder(DMI_TECONTROL));
-	te_ctrl_reg |= DMI_TECONTROL_teActive;
-	dmi_write(target, selected_encoder(DMI_TECONTROL), te_ctrl_reg);
-
-	/* The hardware can take an arbitrarily long time to power up */
-	timeout_counter = 0;
-	timeout_limit	= 50; /* magic number waiting to be tuned */
-
-	while (timeout_counter < timeout_limit) {
-		dmi_read(target, &te_ctrl_reg, selected_encoder(DMI_TECONTROL));
-		if (te_ctrl_reg & DMI_TECONTROL_teActive)
-			break;
-		timeout_counter++;
-	}
-
-	if (timeout_counter >= timeout_limit)
-		LOG_DEBUG("DBG_API:ERROR:timeout waiting teActive to be set for encoder");
-
-	/* Read initial trace encoder registers */
-	dmi_read(target, &te_ctrl_reg, selected_encoder(DMI_TECONTROL));
-	dmi_read(target, &te_inst_features_reg, selected_encoder(DMI_TEINSTFEATURES));
-	dmi_read(target, &ts_ctrl_reg, selected_encoder(DMI_TSCONTROL));
-	dmi_read(target, &xtrigger_in_ctrl_reg, selected_encoder(DMI_XTRIGINCONTROL));
-	dmi_read(target, &xtrigger_out_ctrl_reg, selected_encoder(DMI_XTRIGOUTCONTROL));
-	dmi_read(target, &atb_ctrl_reg, selected_encoder(DMI_ATBCONTROL));
-	dmi_read(target, &te_info_reg, selected_encoder(DMI_TEIMPL));
-	dmi_read(target, &tf_info_reg, DMI_TFIMPL);
-	LOG_DEBUG("DBG_API:te_info_reg = 0x%x, tf_info_reg = 0x%x", te_info_reg, tf_info_reg);
-	LOG_DEBUG("DBG_API:te_ctrl_reg = 0x%x, te_inst_features_reg = 0x%x", te_ctrl_reg, te_inst_features_reg);
-	LOG_DEBUG("DBG_API:ts_ctrl_reg = 0x%x, xtrigger_in_ctrl_reg = 0x%x", ts_ctrl_reg, xtrigger_in_ctrl_reg);
-	LOG_DEBUG("DBG_API:xtrigger_out_ctrl_reg = 0x%x, atb_ctrl_reg = 0x%x", xtrigger_out_ctrl_reg, atb_ctrl_reg);
-	return 0;
-}
-
-static uint32_t tracer_deactivate_encoder(struct target *target)
-{
-	uint32_t  te_ctrl_reg;
-	uint32_t  timeout_limit;
-	uint32_t  timeout_counter;
-
-	RISCV_INFO(r);
-	tracer_select_hart(r->current_hartid);
-
-	LOG_DEBUG("DBG_API:deactivate encoder%d", trace_sel);
-	dmi_read(target, &te_ctrl_reg, selected_encoder(DMI_TECONTROL));
-	te_ctrl_reg &= ~DMI_TECONTROL_teActive;
-	dmi_write(target, selected_encoder(DMI_TECONTROL), te_ctrl_reg);
-
-	/* The hardware can take an arbitrarily long time to power down */
-	timeout_counter = 0;
-	timeout_limit	= 50; /* magic number waiting to be tuned */
-
-	while (timeout_counter < timeout_limit) {
-		dmi_read(target, &te_ctrl_reg, selected_encoder(DMI_TECONTROL));
-		if ((te_ctrl_reg & DMI_TECONTROL_teActive) == 0)
-			break;
-		timeout_counter++;
-	}
-
-	if (timeout_counter >= timeout_limit)
-		LOG_DEBUG("DBG_API:ERROR:timeout waiting teActive to be cleared for encoder");
-
-	return 0;
-}
-
-static uint32_t tracer_enable_encoder(struct target *target)
-{
-	uint32_t  te_ctrl_reg;
-	uint32_t  timeout_limit;
-	uint32_t  timeout_counter;
-
-	LOG_DEBUG("DBG_API:enable encoder%d", trace_sel);
-	dmi_read(target, &te_ctrl_reg, selected_encoder(DMI_TECONTROL));
-	te_ctrl_reg |= DMI_TECONTROL_teEnable;
-	dmi_write(target, selected_encoder(DMI_TECONTROL), te_ctrl_reg);
-
-	/* The hardware can take an arbitrarily long time to power down */
-	timeout_counter = 0;
-	timeout_limit	= 50; /* magic number waiting to be tuned */
-
-	while (timeout_counter < timeout_limit) {
-		dmi_read(target, &te_ctrl_reg, selected_encoder(DMI_TECONTROL));
-		if (te_ctrl_reg & DMI_TECONTROL_teEnable)
-			break;
-		timeout_counter++;
-	}
-
-	if (timeout_counter >= timeout_limit)
-		LOG_DEBUG("DBG_API:ERROR:timeout waiting teEnable to be set for encoder");
-
-	return 0;
-}
-
-static uint32_t tracer_disable_encoder(struct target *target)
-{
-	uint32_t  te_ctrl_reg;
-	uint32_t  timeout_limit;
-	uint32_t  timeout_counter;
-
-	RISCV_INFO(r);
-	tracer_select_hart(r->current_hartid);
-
-	LOG_DEBUG("DBG_API:disable encoder%d", trace_sel);
-	dmi_read(target, &te_ctrl_reg, selected_encoder(DMI_TECONTROL));
-	te_ctrl_reg &= ~DMI_TECONTROL_teEnable;
-	dmi_write(target, selected_encoder(DMI_TECONTROL), te_ctrl_reg);
-
-	/* The hardware can take an arbitrarily long time to power down */
-	timeout_counter = 0;
-	timeout_limit	= 50; /* magic number waiting to be tuned */
-
-	while (timeout_counter < timeout_limit) {
-		dmi_read(target, &te_ctrl_reg, selected_encoder(DMI_TECONTROL));
-		if ((te_ctrl_reg & DMI_TECONTROL_teEnable) == 0)
-			break;
-		timeout_counter++;
-	}
-
-	if (timeout_counter >= timeout_limit)
-		LOG_DEBUG("DBG_API:ERROR:timeout waiting teEnable to be cleared for encoder");
-
-	return 0;
-}
-
-static uint32_t tracer_set_itracing_mode(struct target *target,
-	uint32_t  call_stack_en,     /* teInstFeatures[3]: teInstEnCallStack */
-	uint32_t  inst_no_addr_diff, /* teInstFeatures[0]: teInstNoAddrDiff */
-	uint32_t  inhibit_src,       /* teControl[15]:     teInhibitSrc */
-	uint32_t  stall_en,          /* teControl[13]:     teInstStallEn */
-	uint32_t  itrigger_en,       /* teControl[11]:     teInstTrigEn */
-	uint32_t  trace_sync_extra,  /* teControl[9]:      ndsSyncExtra */
-	uint32_t  trace_context,     /* teControl[8]:      ndsTracePID */
-	uint32_t  trace_priv,        /* teControl[7]:      ndsTracePRIV */
-	uint32_t  te_inst_mode)      /* teControl[6:4]:    teInstMode */
-{
-	uint32_t te_ctrl_reg;
-	uint32_t te_inst_features_reg;
-
-	/* New spec mode: 0/3/6 */
-	if (te_inst_mode == 7) {
-		te_inst_mode = 6;
-		call_stack_en = 1;
-	}
-
-	LOG_DEBUG("DBG_API:set teInstEnCallStack to %d, teInstStallEn to %d, teInstTrigEn to %d, "
-	    "ndsSyncExtra to %d, ndsTracePID to %d, ndsTracePRIV to %d, teInstMode to %d for encoder%d",
-	    call_stack_en, stall_en, itrigger_en, trace_sync_extra, trace_context, trace_priv, te_inst_mode, trace_sel);
-	LOG_DEBUG("DBG_API:set teInhibitSrc to %d (1 to disable)", inhibit_src);
-
-	dmi_read(target, &te_inst_features_reg, selected_encoder(DMI_TEINSTFEATURES));
-	dmi_read(target, &te_ctrl_reg, selected_encoder(DMI_TECONTROL));
-
-	te_inst_features_reg &= ~(DMI_TEINSTFEATURES_teInstNoAddrDiff | DMI_TEINSTFEATURES_teInstEnCallStack);
-	if (call_stack_en)
-		te_inst_features_reg |= (DMI_TEINSTFEATURES_teInstEnCallStack);
-	if (inst_no_addr_diff)
-		te_inst_features_reg |= (DMI_TEINSTFEATURES_teInstNoAddrDiff);
-	te_inst_features_reg |= (DMI_TEINSTFEATURES_trTeInstExtendAddrMSB);  /* extended MSB to 64bits */
-
-	te_ctrl_reg &= ~(DMI_TECONTROL_teEnable);
-	if (inhibit_src)
-		te_ctrl_reg |= (DMI_TECONTROL_teInhibitSrc);
-	else
-		te_ctrl_reg &= ~(DMI_TECONTROL_teInhibitSrc);
-	if (stall_en)
-		te_ctrl_reg |= (DMI_TECONTROL_teInstStallEn);
-	else
-		te_ctrl_reg &= ~(DMI_TECONTROL_teInstStallEn);
-	if (itrigger_en)
-		te_ctrl_reg |= (DMI_TECONTROL_teInstTrigEn);
-	else
-		te_ctrl_reg &= ~(DMI_TECONTROL_teInstTrigEn);
-	if (trace_sync_extra)
-		te_ctrl_reg |= (DMI_TECONTROL_ndsSyncExtra);
-	else
-		te_ctrl_reg &= ~(DMI_TECONTROL_ndsSyncExtra);
-	if (trace_context)
-		te_ctrl_reg |= (DMI_TECONTROL_ndsTracePID);
-	else
-		te_ctrl_reg &= ~(DMI_TECONTROL_ndsTracePID);
-	if (trace_priv)
-		te_ctrl_reg |= (DMI_TECONTROL_ndsTracePRIV);
-	else
-		te_ctrl_reg &= ~(DMI_TECONTROL_ndsTracePRIV);
-
-	te_ctrl_reg &= ~(DMI_TECONTROL_teInstMode_MASK);
-	te_ctrl_reg |= ((te_inst_mode << DMI_TECONTROL_teInstMode_SHIFT) & DMI_TECONTROL_teInstMode_MASK);
-	dmi_write(target, selected_encoder(DMI_TEINSTFEATURES), te_inst_features_reg);
-	dmi_write(target, selected_encoder(DMI_TECONTROL), te_ctrl_reg);
-	return 0;
-}
-
-static uint32_t tracer_set_sync_mode(struct target *target,
-	uint32_t  sync_mode,      /* teControl[17:16]: teSyncMode */
-	uint32_t  max_interval)   /* teControl[23:20]: teSyncMax */
-{
-	uint32_t te_ctrl_reg;
-
-	dmi_read(target, &te_ctrl_reg, selected_encoder(DMI_TECONTROL));
-	te_ctrl_reg &= ~DMI_TECONTROL_teSyncMode_MASK;
-	te_ctrl_reg &= ~DMI_TECONTROL_teSyncMax_MASK;
-	te_ctrl_reg |= ((sync_mode << DMI_TECONTROL_teSyncMode_SHIFT) & DMI_TECONTROL_teSyncMode_MASK);
-	te_ctrl_reg |= ((max_interval << DMI_TECONTROL_teSyncMax_SHIFT) & DMI_TECONTROL_teSyncMax_MASK);
-	dmi_write(target, selected_encoder(DMI_TECONTROL), te_ctrl_reg);
-	return 0;
-}
-
-static uint32_t tracer_set_filter(struct target *target,
-		uint32_t filtermatchinst)
-{
-	LOG_DEBUG("Setting filter");
-
-	/* Enable filter control */
-	uint32_t trTeFilterControl_0;
-	dmi_read(target, &trTeFilterControl_0, selected_encoder(DMI_TEFILTER));
-	trTeFilterControl_0 |= 0x3; /* trTeFilterEnable = 1, trTeFilterMatchPrivilege = 1 */
-	dmi_write(target, selected_encoder(DMI_TEFILTER), trTeFilterControl_0);
-	dmi_read(target, &trTeFilterControl_0, selected_encoder(DMI_TEFILTER));
-	LOG_DEBUG("trTeFilterControl_0: 0x%x", trTeFilterControl_0);
-
-	/* Set trTeFilteriMatchInst */
-	uint32_t trTeFilterMatchInst_0;
-	dmi_read(target, &trTeFilterMatchInst_0, selected_encoder(DMI_TEFILTERMATCH0));
-	trTeFilterMatchInst_0 = filtermatchinst;
-	dmi_write(target, selected_encoder(DMI_TEFILTERMATCH0), trTeFilterMatchInst_0);
-	dmi_read(target, &trTeFilterMatchInst_0, selected_encoder(DMI_TEFILTERMATCH0));
-	LOG_DEBUG("trTeFilterMatchInst_0: 0x%x", trTeFilterMatchInst_0);
-
-	return 0;
-}
-
-
-static uint32_t tracer_set_timestamp_mode(struct target *target,
-	uint32_t  mode_enable,         /* tsControl[0]  : tsActive */
-	uint32_t  counter_enable,      /* tsControl[1]  : tsCount */
-	uint32_t  stop_on_debug,       /* tsControl[3]  : tsDebug */
-	uint32_t  msg_type,            /* tsControl[6:4]: tsType */
-	uint32_t  prescale,            /* tsControl[9:8]: tsPrescale */
-	uint32_t  nds_timestam_select) /* tsControl[15] : ndsTimestampSelect */
-{
-	uint32_t ts_ctrl_reg;
-
-	LOG_DEBUG("DBG_API:set tsActive to %d, tsCount to %d, tsDebug to %d, tsType to %d, tsPrescale to %d, ndsTimestampSelect to %d for encoder%d",
-		mode_enable, counter_enable, stop_on_debug, msg_type, prescale, nds_timestam_select, trace_sel);
-
-	dmi_read(target, &ts_ctrl_reg, selected_encoder(DMI_TSCONTROL));
-	ts_ctrl_reg &= ~(DMI_TSCONTROL_tsActive|DMI_TSCONTROL_tsCount|DMI_TSCONTROL_tsDebug);
-	if (mode_enable)
-		ts_ctrl_reg |= (DMI_TSCONTROL_tsActive);
-	if (counter_enable)
-		ts_ctrl_reg |= (DMI_TSCONTROL_tsCount);
-	if (stop_on_debug)
-		ts_ctrl_reg |= (DMI_TSCONTROL_tsDebug);
-
-	ts_ctrl_reg &= ~DMI_TSCONTROL_tsType_MASK;
-	ts_ctrl_reg |= ((msg_type << DMI_TSCONTROL_tsType_SHIFT) & DMI_TSCONTROL_tsType_MASK);
-	ts_ctrl_reg &= ~DMI_TSCONTROL_tsPrescale_MASK;
-	ts_ctrl_reg |= ((prescale << DMI_TSCONTROL_tsPrescale_SHIFT) & DMI_TSCONTROL_tsPrescale_MASK);
-	ts_ctrl_reg &= ~DMI_TSCONTROL_ndsTimestampSelect_MASK;
-	ts_ctrl_reg |=
-		((nds_timestam_select << DMI_TSCONTROL_ndsTimestampSelect_SHIFT) & DMI_TSCONTROL_ndsTimestampSelect_MASK);
-
-	dmi_write(target, selected_encoder(DMI_TSCONTROL), ts_ctrl_reg);
-	dmi_read(target, &ts_ctrl_reg, selected_encoder(DMI_TSCONTROL));
-	LOG_DEBUG("DBG_API: after setting %x", ts_ctrl_reg);
-	return 0;
-}
-
-static uint32_t tracer_enable_itracing(struct target *target)
-{
-	uint32_t te_ctrl_reg;
-
-	LOG_DEBUG("DBG_API:enable instruction trace for encoder%d", trace_sel);
-	dmi_read(target, &te_ctrl_reg, selected_encoder(DMI_TECONTROL));
-
-	te_ctrl_reg |= DMI_TECONTROL_teInstTracing;
-	dmi_write(target, selected_encoder(DMI_TECONTROL), te_ctrl_reg);
-	return 0;
-}
-
-static uint32_t tracer_disable_itracing(struct target *target)
-{
-	uint32_t te_ctrl_reg;
-
-	LOG_DEBUG("DBG_API:disable instruction trace for encoder%d", trace_sel);
-	dmi_read(target, &te_ctrl_reg, selected_encoder(DMI_TECONTROL));
-
-	te_ctrl_reg &= ~DMI_TECONTROL_teInstTracing;
-	dmi_write(target, selected_encoder(DMI_TECONTROL), te_ctrl_reg);
-	return 0;
-}
-
-static uint32_t tracer_reset_timestamp(struct target *target)
-{
-	uint32_t ts_ctrl_reg;
-
-	LOG_DEBUG("DBG_API:reset timestamp for encoder%d", trace_sel);
-	dmi_read(target, &ts_ctrl_reg, selected_encoder(DMI_TSCONTROL));
-	ts_ctrl_reg |= (DMI_TSCONTROL_tsReset);
-	dmi_write(target, selected_encoder(DMI_TSCONTROL), ts_ctrl_reg);
-	return 0;
-}
-/*
-static uint64_t tracer_get_timestamp(struct target *target)
-{
-	uint64_t	timestamp;
-	uint32_t	tsUpper;
-	uint32_t	tsUpper2;
-	uint32_t	tsLower;
-
-	while (1) {
-		dmi_read(target, &tsUpper, selected_encoder(DMI_TSUPPER));
-		dmi_read(target, &tsLower, selected_encoder(DMI_TSLOWER));
-		dmi_read(target, &tsUpper2, selected_encoder(DMI_TSUPPER));
-		if (tsUpper2 == tsUpper)
-			break;
-	}
-	timestamp = tsUpper;
-	timestamp <<= 32;
-	timestamp |= tsLower;
-	LOG_DEBUG("DBG_API:encoder%d: timestamp=0x%lx", trace_sel, timestamp);
-	return timestamp;
-}
-*/
-static int tracer_set_atbid(struct target *target, uint32_t atbid)
-{
-	uint32_t    atb_ctrl_reg;
-	if ((atbid == 0) || (atbid >= 0x70)) {
-		LOG_DEBUG("DBG_API:ERROR:atbID %d is invalid", atbid);
-		return -1;
-	}
-	dmi_read(target, &atb_ctrl_reg, selected_encoder(DMI_ATBCONTROL));
-	atb_ctrl_reg &= ~DMI_ATBCONTROL_atbId_MASK;
-	atb_ctrl_reg |= ((atbid << DMI_ATBCONTROL_atbId_SHIFT) & DMI_ATBCONTROL_atbId_MASK);
-	dmi_write(target, selected_encoder(DMI_ATBCONTROL), atb_ctrl_reg);
-	return 0;
-}
-/*
-static uint32_t tracer_get_atbid(struct target *target)
-{
-	uint32_t atb_ctrl_reg;
-	uint32_t atbid;
-
-	dmi_read(target, &atb_ctrl_reg, selected_encoder(DMI_ATBCONTROL));
-	atbid = (atb_ctrl_reg & DMI_ATBCONTROL_atbId_MASK) >> DMI_ATBCONTROL_atbId_SHIFT;
-	LOG_DEBUG("DBG_API:get atbId 0x%x for encoder%0d", atbid, trace_sel);
-	return atbid;
-}
-*/
-static uint32_t tracer_activate_tbuf(struct target *target)
-{
-	uint32_t tf_ctrl_reg;
-	uint32_t timeout_limit;
-	uint32_t timeout_counter;
-
-	riscv013_info_t *info = get_info(target);
-	/* info->abits = get_field(dtmcontrol, DTM_DTMCS_ABITS); */
-	if (info->abits <= 0x7) {
-		LOG_DEBUG("DBG_API:ERROR:value of dtmcs.ABITS (%d) is smaller than or equal to 7", info->abits);
-		LOG_DEBUG("no trace support is present in the target");
-		return 0;
-	}
-	LOG_DEBUG("DBG_API:activate tbuf");
-	dmi_read(target, &tf_ctrl_reg, DMI_TFCONTROL);
-	tf_ctrl_reg |= DMI_TFCONTROL_atbActive;
-	dmi_write(target, DMI_TFCONTROL, tf_ctrl_reg);
-
-	timeout_limit   = 50;
-	timeout_counter = 0;
-	while (timeout_counter < timeout_limit) {
-		dmi_read(target, &tf_ctrl_reg, DMI_TFCONTROL);
-		if (tf_ctrl_reg & DMI_TFCONTROL_atbActive)
-			break;
-		timeout_counter++;
-	}
-	if (timeout_counter >= timeout_limit)
-		LOG_DEBUG("DBG_API:ERROR:timeout waiting tfActive to be set");
-
-	/* Read initial trace buffer registers ??? */
-	dmi_read(target, &tf_ctrl_reg, DMI_TFCONTROL);
-	return 0;
-}
-
-static uint32_t tracer_deactivate_tbuf(struct target *target)
-{
-	uint32_t tf_ctrl_reg;
-	uint32_t timeout_limit;
-	uint32_t timeout_counter;
-
-	LOG_DEBUG("DBG_API:deactivate tbuf");
-	dmi_read(target, &tf_ctrl_reg, DMI_TFCONTROL);
-	tf_ctrl_reg &= ~DMI_TFCONTROL_atbActive;
-	dmi_write(target, DMI_TFCONTROL, tf_ctrl_reg);
-
-	timeout_limit   = 50;
-	timeout_counter = 0;
-	while (timeout_counter < timeout_limit) {
-		dmi_read(target, &tf_ctrl_reg, DMI_TFCONTROL);
-		if ((tf_ctrl_reg & DMI_TFCONTROL_atbActive) == 0)
-			break;
-		timeout_counter++;
-	}
-	if (timeout_counter >= timeout_limit)
-		LOG_DEBUG("DBG_API:ERROR:timeout waiting tfActive to be cleared");
-
-	return 0;
-}
-
-static uint32_t tracer_tbuf_enable_recording(struct target *target)
-{
-	uint32_t tf_ctrl_reg, teWrap;
-	uint32_t timeout_limit;
-	uint32_t timeout_counter;
-
-	LOG_DEBUG("DBG_API:tbuf:enable recording");
-#if 0
-	dmi_write(target, DMI_TERAMRP, 0x0);
-	/* dummy read fifo (clear fifo) */
-	uint32_t fifo_words, i, etb_data, etb_rptr;
-	fifo_words = TB_RAM_SIZE;
-	fifo_words >>= 2;
-	for (i = 0; i < fifo_words; i++) {
-		dmi_read(target, &etb_data, DMI_TERAMDATA);
-		dmi_read(target, &etb_rptr, DMI_TERAMRP);
-	  LOG_DEBUG("etb_rptr = 0x%x", etb_rptr);
-	}
-#endif
-
-	if (nds_trRamSize != 0 && ndsv5_tracer_smem_capability_check(target) == ERROR_OK) {
-		/* SMEM mode */
-		tracer_tbuf_set_ram_mode(target, 1);
-
-		/* The trRamWP/trRamRP registers should be initialized to trRamStart */
-		dmi_write(target, DMI_TRRAMWPLOW, (nds_trRamStart & 0xFFFFFFFF));
-		dmi_write(target, DMI_TRRAMWPHIGH, (nds_trRamStart >> 32));
-		dmi_write(target, DMI_TRRAMRPLOW, (nds_trRamStart & 0xFFFFFFFF));
-		dmi_write(target, DMI_TRRAMRPHIGH, (nds_trRamStart >> 32));
-
-		/* trRamStart */
-		dmi_write(target, DMI_TRRAMSTARTLOW, (nds_trRamStart & 0xFFFFFFFF));
-		dmi_write(target, DMI_TRRAMSTARTHIGH, (nds_trRamStart >> 32));
-
-		/* trRamLimit */
-		dmi_write(target, DMI_TRRAMLIMITLOW, (nds_trRamLimit & 0xFFFFFFFF));
-		dmi_write(target, DMI_TRRAMLIMITHIGH, (nds_trRamLimit >> 32));
-
-		TB_RAM_SIZE = nds_trRamSize;
-	} else {
-		/* SRAM mode */
-
-		/* reset teRamWP before recording */
-		uint32_t teramlimitlow;
-		dmi_read(target, &teramlimitlow, DMI_TFRAMLIMIT);
-		TB_RAM_SIZE = teramlimitlow + 4;
-		dmi_write(target, DMI_TERAMWP, 0);
-		timeout_limit   = 100;
-		timeout_counter = 0;
-		while (timeout_counter < timeout_limit) {
-			dmi_read(target, &teWrap, DMI_TERAMWP);
-			if (teWrap == 0)
-				break;
-			timeout_counter++;
-		}
-		tracer_tbuf_set_ram_mode(target, 0);
-		dmi_write(target, DMI_TERAMRP, 0x0);
-	}
-	LOG_DEBUG("bufsize(etb_wptr) = 0x%x(%d)", TB_RAM_SIZE, TB_RAM_SIZE);
-	ndsv5_tracer_buffer_init();
-
-	dmi_read(target, &tf_ctrl_reg, DMI_TFCONTROL);
-	tf_ctrl_reg |= DMI_TFCONTROL_tfEnable;
-	dmi_write(target, DMI_TFCONTROL, tf_ctrl_reg);
-
-	timeout_limit   = 100;
-	timeout_counter = 0;
-	while (timeout_counter < timeout_limit) {
-		dmi_read(target, &tf_ctrl_reg, DMI_TFCONTROL);
-		if (tf_ctrl_reg & DMI_TFCONTROL_tfEnable)
-			break;
-		timeout_counter++;
-	}
-	if (timeout_counter >= timeout_limit)
-		LOG_DEBUG("DBG_API:ERROR:timeout waiting tfEnable to be set");
-
-	return 0;
-}
-
-static uint32_t tracer_tbuf_disable_recording(struct target *target)
-{
-	uint32_t tf_ctrl_reg;
-	uint32_t timeout_limit;
-	uint32_t timeout_counter;
-
-	LOG_DEBUG("DBG_API:tbuf:disable recording");
-	dmi_read(target, &tf_ctrl_reg, DMI_TFCONTROL);
-	tf_ctrl_reg &= ~DMI_TFCONTROL_tfEnable;
-	dmi_write(target, DMI_TFCONTROL, tf_ctrl_reg);
-
-	timeout_limit   = 100;
-	timeout_counter = 0;
-	while (timeout_counter < timeout_limit) {
-		dmi_read(target, &tf_ctrl_reg, DMI_TFCONTROL);
-		if ((tf_ctrl_reg & DMI_TFCONTROL_tfEnable) == 0)
-			break;
-		timeout_counter++;
-	}
-	if (timeout_counter >= timeout_limit)
-		LOG_DEBUG("DBG_API:ERROR:timeout waiting tfEnable to be cleared");
-
-	/* Poll tfControl.tfEmpty in all Trace Funnels. Wait until all are 1 */
-	timeout_limit   = 1000;
-	timeout_counter = 0;
-	while (timeout_counter < timeout_limit) {
-		dmi_read(target, &tf_ctrl_reg, DMI_TFCONTROL);
-		if (tf_ctrl_reg & DMI_TFCONTROL_tfEmpty)
-			break;
-		timeout_counter++;
-	}
-	if (timeout_counter >= timeout_limit)
-		LOG_DEBUG("DBG_API:ERROR:timeout waiting tfEmpty to be set after disabling tbuf");
-
-	return 0;
-}
-
-static uint32_t tracer_tbuf_set_trace_format(struct target *target, uint32_t format)
-{
-	return 0;  /* Should removed this!? */
-
-	uint32_t tf_ctrl_reg;
-
-	LOG_DEBUG("DBG_API:tbuf:recording format is set to %d", format);
-	dmi_read(target, &tf_ctrl_reg, DMI_TFCONTROL);
-	tf_ctrl_reg &= ~DMI_TFCONTROL_teFormat_MASK;
-	tf_ctrl_reg |= ((format << DMI_TFCONTROL_teFormat_SHIFT) & DMI_TFCONTROL_teFormat_MASK);
-	dmi_write(target, DMI_TFCONTROL, tf_ctrl_reg);
-
-	return 0;
-}
-
-static uint32_t tracer_tbuf_set_stop_on_wrap(struct target *target, uint32_t mode)
-{
-	uint32_t tf_ctrl_reg;
-
-	LOG_DEBUG("DBG_API:tbuf:tfStopOnWrap is set to %d", mode);
-	dmi_read(target, &tf_ctrl_reg, DMI_TFCONTROL);
-	if (mode)
-		tf_ctrl_reg |= DMI_TFCONTROL_tfStopOnWrap;
-	else
-		tf_ctrl_reg &= ~DMI_TFCONTROL_tfStopOnWrap;
-	dmi_write(target, DMI_TFCONTROL, tf_ctrl_reg);
-
-	return 0;
-}
-
-static uint32_t tracer_tbuf_set_ram_mode(struct target *target, uint32_t mode)
-{
-	nds_trRamSMEM = (mode) ? true : false;
-
-	uint32_t tf_ctrl_reg;
-
-	LOG_DEBUG("DBG_API:tbuf:trRamModeSMEM is set to %d", mode);
-	dmi_read(target, &tf_ctrl_reg, DMI_TFCONTROL);
-	if (mode)
-		tf_ctrl_reg |= DMI_TFCONTROL_trRamModeSMEM;
-	else
-		tf_ctrl_reg &= ~DMI_TFCONTROL_trRamModeSMEM;
-	dmi_write(target, DMI_TFCONTROL, tf_ctrl_reg);
-
-	return 0;
-}
-
-static uint32_t tracer_tbuf_get_teWrap(struct target *target)
-{
-	uint32_t teWrap, ifWrap;
-
-	dmi_read(target, &teWrap, DMI_TERAMWP);
-	ifWrap = (teWrap & DMI_TERAMWP_teWrap);
-	return ifWrap;
-}
-
-static uint32_t tracer_enable_multiplexer(struct target *target)
-{
-	uint32_t  trFunnel_ctrl_reg, trFunnel_Impl_reg;
-	if (nds_tracer_multiplexer == 0)
-		return 0;
-
-	dmi_read(target, &trFunnel_Impl_reg, TMUX_trFunnelImpl);
-	LOG_DEBUG("DBG_API:tracer_enable_multiplexer, trFunnelImpl = 0x%x", trFunnel_Impl_reg);
-	dmi_read(target, &trFunnel_ctrl_reg, TMUX_trFunnelControl);
-	trFunnel_ctrl_reg |= TMUX_trFunnelControl_trFunnelActive;
-	trFunnel_ctrl_reg |= TMUX_trFunnelControl_trFunnelEnable;
-	dmi_write(target, TMUX_trFunnelControl, trFunnel_ctrl_reg);
-
-	uint32_t  tmux_ctrl_reg;
-	dmi_read(target, &tmux_ctrl_reg, TMUX_ITTMUXCTRL);
-	LOG_DEBUG("DBG_API: tmux_ctrl_reg 0x%x", tmux_ctrl_reg);
-	return 0;
-}
-
-static int ndsv5_tracer_buffer_init(void)
-{
-	if (p_etb_buf_start) {
-		free(p_etb_buf_start);
-		p_etb_buf_start = NULL;
-	}
-	LOG_DEBUG("Allocate buffer %d bytes", TB_RAM_SIZE*2);
-	p_etb_buf_start = (uint32_t *)malloc(TB_RAM_SIZE*2);
-	p_etb_buf_end = p_etb_buf_start;
-	p_etb_buf_end += (TB_RAM_SIZE >> 2);
-
-	/* reset to buffer start */
-	p_etb_wptr = p_etb_buf_start;
-	return 0;
-}
-
-static int ndsv5_tracer_buffer_free(void)
-{
-	if (p_etb_buf_start) {
-		free(p_etb_buf_start);
-		p_etb_buf_start = NULL;
-	}
-	return 0;
-}
-
-uint32_t ndsv5_tracer_setting(struct target *target)
-{
-	RISCV_INFO(r);
-	tracer_select_hart(r->current_hartid);
-
-	/* Activate trace encoder and set register */
-	tracer_activate_encoder(target);
-
-	/* Set teInstMode to 3, ndsTracePRIV to 0, ndsTracePID to 0, ndsSyncExtra to 0,
-		teInstTrigEn to 1, teInstStallEn to 0, teInstEnCallStack to 0 */
-	tracer_set_itracing_mode(target, 0, nds_teInstNoAddrDiff, nds_teInhibitSrc, 0, 1, 0, 0, 0, nds_trTeInstMode);
-
-	if (nds_tracer_action == CSR_MCONTROL_ACTION_TRACE_OFF)
-		tracer_enable_itracing(target);
-
-	/* Set teSyncMode to 1, teSyncMax to 4 */
-	tracer_set_sync_mode(target, 0x1, nds_trTeSyncMax);
-
-	if (nds_trTeFilteriMatchInst)
-		tracer_set_filter(target, nds_trTeFilteriMatchInst);
-
-	tracer_reset_timestamp(target);
-
-	if (nds_timestamp_on) {
-		uint32_t tsDebug, tsType, tsPrescale, tsSelect;
-		if (nds_trTsControl == 0) {
-			/* Activate timestamp and enable internal timestamp counter, set tsDebug to 0,
-				tsType to 1(externel), tsPrescale to 0, ndsTimestampSelect to 1(trTsEnable) */
-			tsDebug = 0;
-			tsType = 3;
-			tsPrescale = 0;
-			tsSelect = 1;
-		} else {
-			if (nds_trTsControl & DMI_TSCONTROL_tsDebug)
-				tsDebug = 1;
-			else
-				tsDebug = 0;
-			tsType = (nds_trTsControl & DMI_TSCONTROL_tsType_MASK) >> DMI_TSCONTROL_tsType_SHIFT;
-			tsPrescale = (nds_trTsControl & DMI_TSCONTROL_tsPrescale_MASK) >> DMI_TSCONTROL_tsPrescale_SHIFT;
-			tsSelect =
-				(nds_trTsControl & DMI_TSCONTROL_ndsTimestampSelect_MASK) >> DMI_TSCONTROL_ndsTimestampSelect_SHIFT;
-		}
-		tracer_set_timestamp_mode(target, 1, 1, tsDebug, tsType, tsPrescale, tsSelect);
-	}
-
-	tracer_set_atbid(target, 1);
-
-	/* Activate trace buffer and set its register */
-	tracer_activate_tbuf(target);
-	tracer_tbuf_set_trace_format(target, NEXUS_TRACE_FORMAT);
-	if (nds_tracer_stop_on_wrap == 0)
-		tracer_tbuf_set_stop_on_wrap(target, 0);
-	else
-		tracer_tbuf_set_stop_on_wrap(target, 1);
-
-	/* Enable trace buffer for recording */
-	tracer_tbuf_enable_recording(target);
-
-	/* Enable trace encoder and wait for trace-on event */
-	tracer_enable_encoder(target);
-
-	return 0;
-}
-
-uint32_t ndsv5_tracer_all_cores_setting(void)
-{
-	if (nds_tracer_on != 0)
-		return 0;
-
-	struct target *target = all_targets;
-	uint32_t coreid;
-	if (nds_tracer_capability == 0)
-		ndsv5_tracer_capability_check(target);
-
-	if (nds_tracer_capability != 1) {
-		LOG_DEBUG("TB_DEVARCH != 0x4200");
-		return 0;
-	}
-
-	for (target = all_targets; target; target = target->next) {
-		if (target->smp) {
-			struct target_list *tlist;
-			foreach_smp_target(tlist, target->smp_targets) {
-				struct target *t = tlist->target;
-				riscv_info_t *r = riscv_info(t);
-				coreid = r->current_hartid;
-				LOG_DEBUG("smp-coreid: %d ", coreid);
-				if (((0x01 << coreid) & nds_tracer_active_id) != 0) {
-					tracer_enable_multiplexer(t);
-					ndsv5_tracer_setting(t);
-				}
-			}
-		} else {
-			RISCV_INFO(r);
-			coreid = r->current_hartid;
-			LOG_DEBUG("amp-coreid: %d ", coreid);
-			if (((0x01 << coreid) & nds_tracer_active_id) != 0) {
-				tracer_enable_multiplexer(target);
-				ndsv5_tracer_setting(target);
-			}
-		}
-	}
-
-	nds_tracer_on = 1;
-	return 0;
-}
-
-static uint32_t nds_tracer_active_id_current; /* avoid using nds_tracer_active_id */
-uint32_t ndsv5_tracer_setting_current(struct target *target)
-{
-	LOG_DEBUG("nds_tracer_active_id_current: 0x%x", nds_tracer_active_id_current);
-
-	if (nds_tracer_capability == 0)
-		ndsv5_tracer_capability_check(target);
-
-	if (nds_tracer_capability != 1) {
-		LOG_DEBUG("TB_DEVARCH != 0x4200");
-		return 0;
-	}
-
-	/* First trace, enable buffer */
-	if (!nds_tracer_active_id_current) {
-		tracer_enable_multiplexer(target);
-
-		/* Activate trace buffer and set its register */
-		tracer_activate_tbuf(target);
-		tracer_tbuf_set_trace_format(target, NEXUS_TRACE_FORMAT);
-		if (nds_tracer_stop_on_wrap == 0)
-			tracer_tbuf_set_stop_on_wrap(target, 0);
-		else
-			tracer_tbuf_set_stop_on_wrap(target, 1);
-
-		/* Enable trace buffer for recording */
-		tracer_tbuf_enable_recording(target);
-	}
-
-	if (target->smp) {
-		struct target_list *tlist;
-		foreach_smp_target(tlist, target->smp_targets) {
-			struct target *t = tlist->target;
-			riscv_set_current_hartid(target, t->coreid);
-			uint32_t coreid = t->coreid;
-			LOG_DEBUG("smp-coreid: %d ", coreid);
-			nds_tracer_active_id_current |= (0x01 << coreid);
-			ndsv5_tracer_setting(t);
-		}
-	} else {
-		uint32_t coreid = target->coreid;
-		LOG_DEBUG("amp-coreid: %d ", coreid);
-		nds_tracer_active_id_current |= (0x01 << coreid);
-		ndsv5_tracer_setting(target);
-	}
-
-	nds_tracer_on = 1;
-	return 0;
-}
-
-uint32_t tracer_disable_encoder_all(void)
-{
-	struct target *target = all_targets;
-	uint32_t coreid;
-
-	if (target->smp) {
-		struct target_list *tlist;
-		foreach_smp_target(tlist, target->smp_targets) {
-			struct target *t = tlist->target;
-			riscv_info_t *r = riscv_info(t);
-			coreid = r->current_hartid;
-			if (((0x01 << coreid) & nds_tracer_active_id) != 0)
-				tracer_disable_encoder(t);
-		}
-		return 0;
-	}
-
-	for (target = all_targets; target; target = target->next) {
-		RISCV_INFO(r);
-		coreid = r->current_hartid;
-		if (((0x01 << coreid) & nds_tracer_active_id) != 0)
-			tracer_disable_encoder(target);
-	}
-	return 0;
-}
-
-uint32_t tracer_deactivate_encoder_all(void)
-{
-	struct target *target = all_targets;
-	uint32_t coreid;
-
-	if (target->smp) {
-		struct target_list *tlist;
-		foreach_smp_target(tlist, target->smp_targets) {
-			struct target *t = tlist->target;
-			riscv_info_t *r = riscv_info(t);
-			coreid = r->current_hartid;
-			if (((0x01 << coreid) & nds_tracer_active_id) != 0)
-				tracer_deactivate_encoder(t);
-		}
-		return 0;
-	}
-	for (target = all_targets; target; target = target->next) {
-		RISCV_INFO(r);
-		coreid = r->current_hartid;
-		if (((0x01 << coreid) & nds_tracer_active_id) != 0)
-			tracer_deactivate_encoder(target);
-	}
-	return 0;
-}
-
-uint32_t ndsv5_tracer_disable(struct target *target)
-{
-	ndsv5_tracer_buffer_free();
-
-	/* Disable instruction tracing */
-	tracer_disable_itracing(target);
-
-	/* Disable trace encoder and trace buffer */
-	tracer_disable_encoder_all();
-	tracer_tbuf_disable_recording(target);
-
-	/* Deactivate trace encoder and trace buffer */
-	tracer_deactivate_encoder_all();
-
-	tracer_deactivate_tbuf(target);
-
-	nds_tracer_on = 0;
-	return 0;
-}
-
-static int ndsv5_tracer_read_etb(struct target *target)
-{
-	uint32_t etb_rptr, etb_wptr, etb_data;
-	uint32_t fifo_words, i;
-
-	/* Disable instruction tracing */
-	tracer_disable_itracing(target);
-
-	/* Disable trace encoder and trace buffer */
-	tracer_disable_encoder_all();
-	tracer_tbuf_disable_recording(target);
-
-	nds_tracer_on = 0;
-
-	dmi_read(target, &etb_wptr, DMI_TERAMWP);
-	dmi_read(target, &etb_rptr, DMI_TERAMRP);
-	LOG_DEBUG("1.etb_wptr = 0x%x, etb_rptr = 0x%x", etb_wptr, etb_rptr);
-
-	if (etb_wptr & DMI_TERAMWP_teWrap) {
-		LOG_DEBUG("teWrap");
-		etb_wptr &= ~DMI_TERAMWP_teWrap;
-		etb_rptr = etb_wptr;
-		fifo_words = TB_RAM_SIZE;
-	} else {
-		if (nds_trRamSMEM) {
-			fifo_words = etb_wptr - etb_rptr;
-		} else {
-			etb_rptr = 0;
-			fifo_words = etb_wptr;
-		}
-	}
-	fifo_words >>= 2;
-	dmi_write(target, DMI_TERAMRP, etb_rptr);
-	dmi_read(target, &etb_wptr, DMI_TERAMWP);
-	dmi_read(target, &etb_rptr, DMI_TERAMRP);
-	LOG_DEBUG("2.etb_wptr = 0x%x, etb_rptr = 0x%x", etb_wptr, etb_rptr);
-
-	/* copy pkt from ETB to tmp buffer */
-	uint32_t *pcurr_wptr = (uint32_t *)p_etb_wptr;
-	pcurr_wptr += fifo_words;
-	LOG_DEBUG("p_etb_wptr = 0x%lx, p_etb_buf_end = 0x%lx, fifo_words = 0x%x",
-			(unsigned long)p_etb_wptr, (unsigned long)p_etb_buf_end, fifo_words);
-
-	if (nds_trRamSMEM) {
-		target_read_buffer(target, etb_rptr, fifo_words * 4, (uint8_t *)p_etb_buf_start);
-		p_etb_wptr += fifo_words * 4;
-	} else {
-		for (i = 0; i < fifo_words; i++) {
-			dmi_read(target, &etb_data, DMI_TERAMDATA);
-			*p_etb_wptr++ = etb_data;
-		}
-		dmi_read(target, &etb_wptr, DMI_TERAMWP);
-		dmi_read(target, &etb_rptr, DMI_TERAMRP);
-
-		LOG_DEBUG("3.etb_wptr = 0x%x, etb_rptr = 0x%x, fifo_words = 0x%x", etb_wptr, etb_rptr, fifo_words);
-
-		dmi_write(target, DMI_TERAMWP, 0x0);
-	}
-
-	return ERROR_OK;
-}
-
-int ndsv5_tracer_dumpfile(struct target *target, char *pFileName)
-{
-	char filename[2048];
-	/* pkt output path depend on log file path */
-
-	memset(filename, 0, sizeof(filename));
-	if (ndsv5_dump_trace_folder) {
-		LOG_DEBUG("dump_trace_folder: %s", ndsv5_dump_trace_folder);
-		strcpy(filename, ndsv5_dump_trace_folder);
-	}
-	strcat(filename, pFileName);
-	LOG_INFO("Dump pkt to %s", filename);
-
-	uint32_t total_pkt_bytes = 0;
-	FILE *pPacketFile = NULL;
-	pPacketFile = fopen(filename, "wb");
-	if (pPacketFile == NULL)
-		return ERROR_FAIL;
-
-	/* Prepare Parameter
-	 * byte[0]: srcbits
-	 * byte[1]: teInstNoAddrDiff
-	 * byte[2]: VALEN
-	 * byte[3]: version
-
-	 (1) srcbits 6
-	 SRC Source of Message. Field Width(4)
-	 Hart index or trace ID. This field is used for multi-hart/core trace
-
-	 (2) teInstNoAddrDiff = 0
-	 UADDR Unique Portion of Branch Target Address
-	 This field is produced by XOR-ing the branch target address with the most recent FADDR/UADDR/PC.
-	 When trTeInstNoAddrDiff is set, no XOR is performed and this field becomes FADDR.
-
-	 (3) VALEN, RISC-V ISA defines 3 different virtual memory addressing modes: Sv39, Sv48 and Sv57.
-	 In each of these modes the most significant bit (38, 47 or 56) is extended on all higher bits.
-	 It means that there is no need to send full 64-bit addresses and only report 39/48 or 57 bits of an address.
-	 */
-
-	unsigned char parameter[4];
-	uint32_t idx;
-
-	if (nds_teInhibitSrc == 0)
-		parameter[0] = 6;
-	else
-		parameter[0] = 0;
-	parameter[1] = (unsigned char) nds_teInstNoAddrDiff;
-	parameter[2] = 57;
-	parameter[3] = TRACER_VERSION;
-	/* Write parameters into file */
-	for (idx = 0; idx < 4; idx++)
-		fputc(parameter[idx], pPacketFile);
-
-	char *pbuf_start = (char *)p_etb_buf_start;
-	/* get data from ETB */
-	ndsv5_tracer_read_etb(target);
-
-	if (p_etb_wptr != p_etb_buf_start) {
-		total_pkt_bytes = (p_etb_wptr - p_etb_buf_start);
-		total_pkt_bytes <<= 2;
-	}
-	LOG_DEBUG("p_etb_wptr = 0x%lx, total_pkt_bytes = 0x%x",
-		(unsigned long)p_etb_wptr, total_pkt_bytes);
-
-	if (total_pkt_bytes)
-		fwrite(pbuf_start, 1, total_pkt_bytes, pPacketFile);
-	else
-		LOG_DEBUG("Buffer empty!!");
-
-	fclose(pPacketFile);
-
-	/* copy another ntracer.log */
-	char log_filename[256], write_line[32];
-	char *pLogName = (char *)&log_filename[0];
-	memcpy(&log_filename[0], pFileName, strlen((char *)pFileName));
-	memcpy(&log_filename[strlen((char *)pFileName)], ".log", 5);
-	pPacketFile = fopen(pLogName, "wb");
-
-	uint32_t i, *pData;
-	/* Write parameters into file */
-	pData = (uint32_t *)&parameter[0];
-	sprintf(&write_line[0], "%08x\n", *pData++);
-	fwrite(&write_line[0], 1, strlen(&write_line[0]), pPacketFile);
-
-	/* Write packets into file */
-	pData = (uint32_t *)pbuf_start;
-	for (i = 0; i < total_pkt_bytes/4; i++) {
-		sprintf(&write_line[0], "%08x\n", *pData++);
-		fwrite(&write_line[0], 1, strlen(&write_line[0]), pPacketFile);
-	}
-	fclose(pPacketFile);
-	/* reset to buffer start */
-	p_etb_wptr = p_etb_buf_start;
-
-	return ERROR_OK;
-}
-
-int ndsv5_tracer_polling(struct target *target)
-{
-	if (nds_tracer_on == 0)
-		return ERROR_FAIL;
-	LOG_DEBUG("ndsv5_tracer_polling...");
-	if (tracer_tbuf_get_teWrap(target) == 0) {
-		LOG_DEBUG("ndsv5_tracer_polling exit");
-		return ERROR_OK;
-	}
-	if (nds_tracer_stop_on_wrap == 0) {
-		LOG_DEBUG("teWrap but nds_tracer_stop_on_wrap=0");
-		return ERROR_OK;
-	}
-
-	struct target_type *tt = get_target_type(target);
-	if (tt->halt(target) != ERROR_OK)
-		LOG_ERROR("tt->halt() ERROR");
-	target->debug_reason = DBG_REASON_TRACE_BUFFULL;
-	target_call_event_callbacks(target, TARGET_EVENT_HALTED);
-	LOG_DEBUG("DBG_REASON_TRACE_BUFFULL, %d", target->debug_reason);
-	return ERROR_OK;
-}
-
-int ndsv5_tracer_capability_check(struct target *target)
-{
-	uint32_t  devarch_reg;
-	dmi_read(target, &devarch_reg, TB_DEVARCH);
-	LOG_DEBUG("TB_DEVARCH = 0x%x", devarch_reg);
-	/* TB_DEVARCH, 15:0 ARCHID Architecture ID RO 0x4200 */
-	if ((devarch_reg & 0xFFFF) == 0x4200) {
-		dmi_read(target, &devarch_reg, TMUX_DEVARCH);
-		LOG_DEBUG("TMUX_DEVARCH = 0x%x", devarch_reg);
-		if ((devarch_reg & 0xFFFF) == 0x4D00)
-			nds_tracer_multiplexer = 1;
-		nds_tracer_capability = 1;
-		return ERROR_OK;
-	}
-	nds_tracer_capability = 0xFF;
-	return ERROR_FAIL;
-}
-
-int ndsv5_tracer_smem_capability_check(struct target *target)
-{
-	uint32_t  tf_info_reg;
-	dmi_read(target, &tf_info_reg, DMI_TFIMPL);
-
-	/* Check trRamHasSMEM */
-	if ((tf_info_reg >> 13) & 0x1)
-		return ERROR_OK;
-	else
-		return ERROR_FAIL;
-}
-
-/* ============================================================================= */
-/*    packet parser                                                              */
-/*         input: packet file (pkt.log)                                          */
-/*         output: packet-decoded file (pkt.log-de)                              */
-/* ============================================================================= */
-#define TRACER_DECODE_MSG(x)  LOG_DEBUG x
-#define PACKET_BUF_SIZE       0x100000  /* 1MB */
-
-char *gpTcodeName[] = {
-	"0",
-	"1",
-	"OwnershipTrace",
-	"DirectBranch",
-	"IndirectBranch",
-	"5", "6", "7",
-	"Error",
-	"ProgramTraceSync",
-	"10",
-	"DirectBranchSync",
-	"IndirectBranchSync",
-	"13", "14", "15", "16", "17", "18", "19",
-	"20", "21", "22", "23", "24", "25", "26",
-	"ResourceFull",
-	"IndirectBranchHist",
-	"IndirectBranchHistSync",
-	"30", "31", "32",
-	"ProgramCorrelation",
-	"",
-};
-
-char *gpSyncName[] = {
-	"0",
-	"Exit_from_Reset",
-	"Period_Msg",
-	"Exit_from_Debug",
-	"4",
-	"Trace_Enable",
-	"Watchpoint",
-	"FIFO_Overrun",
-	"8",
-	"Exit_from_Power_down",
-	"",
-};
-
-char *gpEVcodeName[] = {
-	"Entry_Debug_mode",
-	"Entry_LowPower_mode",
-	"2", "3",
-	"Program_Trace_Disabled",
-	"Process_ID_Change",
-	"6", "7",
-	"Privilege_Level_Change",
-	"9", "10", "11", "12", "13", "14",
-	"Entry_Prohibited_Region",
-	"",
-};
-
-static char pkt_decoded_filename[256];
-
-static FILE *gpPktDecodedFile;
-static char pkt_decoded_data[256];
-unsigned int teSrcBits = 6;
-unsigned int teInstNoAddrDiff;
-unsigned long recent_PC[64];
-
-unsigned long ndsv5_get_variable_length_field(unsigned char **pSrcPkt, unsigned int PktSize)
-{
-	unsigned char *pCurrPkt = (unsigned char *)*pSrcPkt;
-	unsigned char cur_byte;
-	unsigned int shift_bits = 0;
-	unsigned long ret_data = 0;
-
-	while (PktSize) {
-		cur_byte = *pCurrPkt;
-		ret_data |= ((cur_byte >> 2) << shift_bits);
-		shift_bits += 6;
-		if (((cur_byte & MSEO_MASK) == MSEO_END_MSG) ||
-			  ((cur_byte & MSEO_MASK) == MSEO_END_FIELD)) {
-			break;
-		}
-		pCurrPkt++;
-		PktSize--;
-	}
-	*pSrcPkt = pCurrPkt;
-	return ret_data;
-}
-
-static unsigned int ndsv5_tracer_decode_pkt(unsigned char *pSrcPkt, unsigned int PktSize, char *p_text)
-{
-	unsigned char *pCurrPkt = (unsigned char *)pSrcPkt;
-	unsigned char cur_byte;
-	unsigned int if_start = 0, t_code;
-	unsigned int src_id = 0, sync_id = 0, icnt = 0, btype = 0;
-	unsigned long context = 0;
-	unsigned int rcode = 0, RDATA = 0, hist = 0, evcode = 0, cdf = 0;
-	unsigned long addrs = 0, xor_addrs, field_data;
-	unsigned int decoded_bytes = 0;
-
-	while (1) {
-		cur_byte = *pCurrPkt++;
-		if ((pCurrPkt - pSrcPkt) > PktSize)
-			break;
-
-		if (((cur_byte & MSEO_MASK) == MSEO_START) && (if_start == 0)) {
-			if_start = 1;
-			t_code = abs(cur_byte >> 2);
-
-			if (teSrcBits)
-				src_id = (unsigned int)(*pCurrPkt++ >> 2);
-
-			if ((pCurrPkt - pSrcPkt) > PktSize)
-				break;
-
-			/* ProgramTraceSync & IndirectBranch & DirectBranch ... */
-			if ((t_code == TCODE_ProgramTraceSync) ||
-				(t_code == TCODE_IndirectBranch) ||
-				(t_code == TCODE_DirectBranch) ||
-				(t_code == TCODE_ResourceFull) ||
-				(t_code == TCODE_OwnershipTrace) ||
-				(t_code == TCODE_ProgramCorrelation) ||
-				(t_code == TCODE_IndirectBranchHist) ||
-				(t_code == TCODE_DirectBranchSync) ||
-				(t_code == TCODE_IndirectBranchSync) ||
-				(t_code == TCODE_IndirectBranchHistSync)) {
-
-				field_data = ndsv5_get_variable_length_field(&pCurrPkt, (PktSize - (pCurrPkt - pSrcPkt)));
-
-				if (t_code == TCODE_ProgramTraceSync) {
-					sync_id = (unsigned int)(field_data & 0x0F);
-				  icnt    = (unsigned int)((field_data >> 4) & 0xFFFF);
-				  pCurrPkt++;
-				  if ((pCurrPkt - pSrcPkt) > PktSize)
-						break;
-				  addrs = ndsv5_get_variable_length_field(&pCurrPkt, (PktSize - (pCurrPkt - pSrcPkt)));
-
-					recent_PC[src_id] = addrs;
-					/* Full PC Address (without bit[0] */
-					addrs <<= 1;
-				} else if ((t_code == TCODE_DirectBranchSync) ||
-					(t_code == TCODE_IndirectBranchSync) ||
-					(t_code == TCODE_IndirectBranchHistSync)) {
-					sync_id = (unsigned int)(field_data & 0x0F);
-					if ((t_code == TCODE_IndirectBranchSync) || (t_code == TCODE_IndirectBranchHistSync)) {
-						btype = (unsigned int)((field_data >> 4) & 0x03);
-						pCurrPkt++;
-					  if ((pCurrPkt - pSrcPkt) > PktSize)
-							break;
-					  icnt = ndsv5_get_variable_length_field(&pCurrPkt, (PktSize - (pCurrPkt - pSrcPkt)));
-					} else {
-						icnt = (unsigned int)((field_data >> 4) & 0xFFFF);
-					}
-					pCurrPkt++;
-				  if ((pCurrPkt - pSrcPkt) > PktSize)
-						break;
-				  addrs = ndsv5_get_variable_length_field(&pCurrPkt, (PktSize - (pCurrPkt - pSrcPkt)));
-
-				  if (t_code == TCODE_IndirectBranchHistSync) {
-						pCurrPkt++;
-						if ((pCurrPkt - pSrcPkt) > PktSize)
-							break;
-						hist = ndsv5_get_variable_length_field(&pCurrPkt, (PktSize - (pCurrPkt - pSrcPkt)));
-					}
-				} else if ((t_code == TCODE_IndirectBranch) ||
-					(t_code == TCODE_IndirectBranchHist)) {
-					btype = (unsigned int)(field_data & 0x03);
-					icnt  = (unsigned int)((field_data >> 2) & 0xFFFF);
-					pCurrPkt++;
-					if ((pCurrPkt - pSrcPkt) > PktSize)
-						break;
-					xor_addrs = ndsv5_get_variable_length_field(&pCurrPkt, (PktSize - (pCurrPkt - pSrcPkt)));
-					if (teInstNoAddrDiff == 1)
-						addrs = xor_addrs;
-					else
-						addrs = (recent_PC[src_id] ^ xor_addrs);
-
-					recent_PC[src_id] = addrs;
-					/* Full PC Address (without bit[0] */
-					addrs <<= 1;
-					if (t_code == TCODE_IndirectBranchHist) {
-						pCurrPkt++;
-						if ((pCurrPkt - pSrcPkt) > PktSize)
-							break;
-						hist = ndsv5_get_variable_length_field(&pCurrPkt, (PktSize - (pCurrPkt - pSrcPkt)));
-					}
-				} else if (t_code == TCODE_DirectBranch)
-					icnt = (unsigned int)(field_data & 0xFFFF);
-				else if (t_code == TCODE_OwnershipTrace)
-					context = (unsigned long)(field_data & 0x1FFFF);
-				else if (t_code == TCODE_ResourceFull) {
-					rcode = (unsigned int)(field_data & 0xf);
-					RDATA = (unsigned int)(field_data >> 4);
-				} else if (t_code == TCODE_ProgramCorrelation) {
-					evcode = (unsigned int)(field_data & 0x0F);
-					cdf    = (unsigned int)((field_data >> 4) & 0x3);
-					icnt = (unsigned int)(field_data >> 6);
-				}
-
-				/* ICNT => Number of 16-bit half-word instruction data executed. */
-				icnt <<= 1;
-
-				if (p_text) {
-					/* IndirectBranch */
-					if (t_code == TCODE_IndirectBranch)
-						sprintf(p_text, "\n%s src: %d  btype: %d  icnt: 0x%x  addrs: 0x%lx ",
-						    gpTcodeName[t_code], src_id, btype, icnt, addrs);
-					/* IndirectBranchSync */
-					else if (t_code == TCODE_IndirectBranchSync)
-						sprintf(p_text, "\n%s src: %d  sync: %d(%s)  btype: %d  icnt: 0x%x  addrs: 0x%lx ",
-						    gpTcodeName[t_code], src_id, sync_id, gpSyncName[sync_id], btype, icnt, addrs);
-					/* DirectBranch */
-					else if (t_code == TCODE_DirectBranch)
-						sprintf(p_text, "\n%s src: %d  icnt: 0x%x ",
-						    gpTcodeName[t_code], src_id, icnt);
-					/* DirectBranchSync */
-					else if (t_code == TCODE_DirectBranchSync)
-						sprintf(p_text, "\n%s src: %d  sync: %d(%s)  icnt: 0x%x ",
-						    gpTcodeName[t_code], src_id, sync_id, gpSyncName[sync_id], icnt);
-					/* OwnershipTrace */
-					else if (t_code == TCODE_OwnershipTrace)
-						sprintf(p_text, "\n%s src: %d  process: 0x%lx ",
-						    gpTcodeName[t_code], src_id, context);
-					/* ResourceFull */
-					else if (t_code == TCODE_ResourceFull) {
-						if (rcode == 1)
-							sprintf(p_text, "\n%s src: %d  rcode: %d  hist: 0x%x ",
-						    gpTcodeName[t_code], src_id, rcode, RDATA);
-						else
-							sprintf(p_text, "\n%s src: %d  rcode: %d  RDATA: 0x%x ",
-						    gpTcodeName[t_code], src_id, rcode, RDATA);
-					}
-					/* IndirectBranchHist */
-					else if (t_code == TCODE_IndirectBranchHist)
-						sprintf(p_text, "\n%s src: %d  btype: %d  icnt: 0x%x  addrs: 0x%lx  hist: 0x%x ",
-						    gpTcodeName[t_code], src_id, btype, icnt, addrs, hist);
-					/* IndirectBranchHistSync */
-					else if (t_code == TCODE_IndirectBranchHistSync)
-						sprintf(p_text, "\n%s src: %d  sync: %d(%s)  btype: %d  icnt: 0x%x  addrs: 0x%lx  hist: 0x%x ",
-						    gpTcodeName[t_code], src_id, sync_id, gpSyncName[sync_id], btype, icnt, addrs, hist);
-					/* ProgramCorrelation */
-					else if (t_code == TCODE_ProgramCorrelation)
-						sprintf(p_text, "\n%s src: %d  evcode: %d(%s)  icnt: 0x%x  cdf: %d ",
-						    gpTcodeName[t_code], src_id, evcode, gpEVcodeName[evcode], icnt, cdf);
-					/* ProgramTraceSync */
-					else
-						sprintf(p_text, "\n%s src: %d  sync: %d(%s)  icnt: 0x%x  addrs: 0x%lx ",
-						    gpTcodeName[t_code], src_id, sync_id, gpSyncName[sync_id], icnt, addrs);
-				}
-				if ((*pCurrPkt & MSEO_MASK) == MSEO_END_MSG)
-					return (unsigned int)(pCurrPkt - pSrcPkt + 1);
-			}
-
-		} else if (((cur_byte & MSEO_MASK) == MSEO_END_MSG) && (if_start)) {
-			/* finish */
-			break;
-		}
-
-	}
-	decoded_bytes = (pCurrPkt - pSrcPkt);
-	if (decoded_bytes > PktSize)
-		return 0;
-	return decoded_bytes;
-}
-
-unsigned int ndsv5_tracer_read_logfile(unsigned char *curr_buf, FILE *pPacketFile)
-{
-	unsigned int pkt_value = 0, *dst_buf, read_size = 0;
-	char pPktBuf[64];
-	int result;
-
-	dst_buf = (unsigned int *)curr_buf;
-
-	/* get data from .log file */
-	while (fgets(pPktBuf, 64, pPacketFile) != NULL) {
-		result = sscanf(pPktBuf, "%x", &pkt_value);
-		if (result != 1)
-			break;
-		*dst_buf++ = pkt_value;
-		read_size += 4;
-	}
-	return read_size;
-}
-
-int ndsv5_tracer_decode_pktfile(char *pPktFileName)
-{
-	unsigned long buffer_size = PACKET_BUF_SIZE;
-	unsigned long read_size = 0, decoded_bytes = 0;
-	unsigned int cur_idx = 0, i;
-	unsigned char cur_data;
-	unsigned char *pPktBuf, *curr_buf;
-	char *pOutFileName = (char *)&pkt_decoded_filename[0];
-	FILE *pPacketFile = NULL;
-	char *p_text = &pkt_decoded_data[0];
-	char tmp_text[256];
-	char *p_tmp_text = &tmp_text[0];
-
-	memcpy(&pkt_decoded_filename[0], pPktFileName, strlen((char *)pPktFileName));
-	memcpy(&pkt_decoded_filename[strlen((char *)pPktFileName)], "-de", 4);
-	pPacketFile = fopen(pPktFileName, "rb");
-	gpPktDecodedFile = fopen(pOutFileName, "wb");
-	pPktBuf = (unsigned char *)malloc(PACKET_BUF_SIZE);
-	if (pPktBuf == NULL) {
-		TRACER_DECODE_MSG(("ERROR!! packet buffer !!"));
-		return -1;
-	}
-
-	curr_buf = pPktBuf;
-	if (pPacketFile) {
-		char *ret;
-		ret = strstr(pPktFileName, ".log");
-		if (ret)
-			/* get data from .log file */
-			read_size = ndsv5_tracer_read_logfile(curr_buf, pPacketFile);
-		else
-			/* get data from raw-pkt file */
-			read_size = fread(curr_buf, 1, buffer_size, pPacketFile);
-
-		/* decode Parameter
-		* byte[0]: srcbits
-		* byte[1]: teInstNoAddrDiff
-		* byte[2]: VALEN
-		* byte[3]: version
-		*/
-		teSrcBits = curr_buf[0];
-		teInstNoAddrDiff  = curr_buf[1];
-		curr_buf += 4;
-
-		/* TRACER_DECODE_MSG(("read_size = 0x%lx, curr_buf[0] = 0x%x\n", read_size, curr_buf[0])); */
-		while (read_size) {
-			p_text[0] = 0;
-			decoded_bytes = ndsv5_tracer_decode_pkt(curr_buf, read_size, p_text);
-			/*TRACER_DECODE_MSG(("\n:pkt: [%d] ", cur_idx));*/
-			p_tmp_text = &tmp_text[0];
-			sprintf(p_tmp_text, "\n:pkt: [%d] ", cur_idx);
-			p_tmp_text += strlen((char *)p_tmp_text);
-			for (i = 0; i < decoded_bytes; i++) {
-				cur_data = (unsigned char)curr_buf[i];
-				sprintf(p_tmp_text, "%02x", cur_data);
-				p_tmp_text += 2;
-			}
-			/* TRACER_DECODE_MSG(("%s", p_text)); */
-			fwrite((char *)&tmp_text[0], 1, strlen((char *)tmp_text), gpPktDecodedFile);
-
-			if (decoded_bytes) {
-				if (gpPktDecodedFile)
-					fwrite((char *)pkt_decoded_data, 1, strlen((char *)pkt_decoded_data), gpPktDecodedFile);
-
-			} else {
-				TRACER_DECODE_MSG(("ERROR!! packet decode ERROR !!"));
-				break;
-			}
-			/* TRACER_DECODE_MSG(("read_size=0x%lx, decoded_bytes=0x%lx", read_size, decoded_bytes)); */
-			if (read_size >= decoded_bytes)
-				read_size -= decoded_bytes;
-			else
-				read_size = 0;
-			/* if (cur_idx >= 4090)
-				break; */
-			curr_buf += decoded_bytes;
-			cur_idx += decoded_bytes;
-		}
-
-	}
-
-	if (pPacketFile)
-		fclose(pPacketFile);
-	if (gpPktDecodedFile)
-		fclose(gpPktDecodedFile);
-	free(pPktBuf);
-
-	return 0;
-}
-
 int ndsv5013_hart_count(struct target *target)
 {
 	dm013_info_t *dm = get_dm(target);
@@ -9073,4 +7677,3 @@ int ndsv5013_hart_count(struct target *target)
 
 #endif /* _NDS_V5_ONLY_ */
 /********************************************************************/
-

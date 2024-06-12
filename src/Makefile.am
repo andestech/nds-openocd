@@ -31,6 +31,9 @@ else
 %C%_libopenocd_la_CPPFLAGS += -DPKGBLDDATE=\"`date +%F-%R`\"
 endif
 
+# add encryption key as a define macro
+AM_CPPFLAGS += -DCOPILOT_GAS_KEY=`cat $(top_srcdir)/src/copilot-gas-key/key`
+
 # add default CPPFLAGS
 %C%_libopenocd_la_CPPFLAGS += $(AM_CPPFLAGS) $(CPPFLAGS)
 
@@ -54,7 +57,8 @@ endif
 	%D%/server/libserver.la \
 	%D%/rtos/librtos.la \
 	%D%/helper/libhelper.la \
-	%D%/rtt/librtt.la
+	%D%/rtt/librtt.la \
+	%D%/tiny-AES-c/libaes.la
 
 BIN2C = $(srcdir)/%D%/helper/bin2char.sh
 
@@ -86,3 +90,4 @@ include %D%/server/Makefile.am
 include %D%/flash/Makefile.am
 include %D%/pld/Makefile.am
 include %D%/rtt/Makefile.am
+include %D%/tiny-AES-c/Makefile.am

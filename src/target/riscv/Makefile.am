@@ -18,6 +18,8 @@ noinst_LTLIBRARIES += %D%/libriscv.la
 ## NDSV5
 %C%_libriscv_la_SOURCES += \
 	%D%/ndsv5_encoding.h \
+	%D%/debug_defines_ncetrace.h \
 	%D%/ndsv5.h \
 	%D%/ndsv5.c \
+	%D%/ndsv5-trace.c \
 	%D%/ndsv5-013.h

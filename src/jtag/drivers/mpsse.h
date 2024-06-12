@@ -78,6 +78,12 @@ void mpsse_purge(struct mpsse_ctx *ctx);
 #ifdef _NDS_V5_ONLY_
 /* two wire mode */
 void cjtag_data_in(uint8_t *out_read_buffer, uint8_t *cjtag_in, unsigned bit_count);
+void mpsse_ndsv5_tracer2_read_tbuf_size(struct mpsse_ctx *ctx, size_t *size);
+void mpsse_ndsv5_tracer2_read_tbuf_data(struct mpsse_ctx *ctx, uint8_t *buf, size_t *nwords);
+void mpsse_ndsv5_tracer2_set_recording(struct mpsse_ctx *ctx, bool enabled);
+void mpsse_ndsv5_tracer2_reset_tbuf_ptr(struct mpsse_ctx *ctx);
+void mpsse_ndsv5_tracer2_stop_on_wrap(struct mpsse_ctx *ctx, bool enabled);
+void mpsse_ndsv5_tracer2_set_tbuf_size(struct mpsse_ctx *ctx, unsigned int trace_size);
 #endif
 
 #endif /* OPENOCD_JTAG_DRIVERS_MPSSE_H */

@@ -1168,7 +1168,7 @@ static bool jtag_examine_chain_check(uint8_t *idcodes, unsigned count)
 				} else {
 					/* aice-micro 2wire mode,
 					 * use 2wire config(reference aice_micro_sdp.cfg) and reinit adapter(jtag) */
-					command_run_line(cmd_ctx, "ftdi ftdi_two_wire_mode");
+					command_run_line(cmd_ctx, "ftdi ftdi_sdp_mode");
 					command_run_line(cmd_ctx, "ftdi vid_pid 0x0403 0x6010");
 					command_run_line(cmd_ctx, "ftdi layout_init 0x4d08 0x4f1b");
 				}

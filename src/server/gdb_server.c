@@ -1298,7 +1298,11 @@ static int gdb_new_connection(struct connection *connection)
 	}
 
 	gdb_actual_connections++;
+#if _NDS_V5_ONLY_
+	log_printf_lf(LOG_LVL_DEBUG,
+#else
 	log_printf_lf(all_targets->next ? LOG_LVL_INFO : LOG_LVL_DEBUG,
+#endif /* _NDS_V5_ONLY_ */
 			__FILE__, __LINE__, __func__,
 			"New GDB Connection: %d, Target %s, state: %s",
 			gdb_actual_connections,

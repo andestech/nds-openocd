@@ -26,7 +26,12 @@ struct riscv_program;
 #define RISCV_MAX_HWBPS 16
 
 #define DEFAULT_COMMAND_TIMEOUT_SEC		2
-#define DEFAULT_RESET_TIMEOUT_SEC		30
+
+#if _NDS_V5_ONLY_
+	#define DEFAULT_RESET_TIMEOUT_SEC		10
+#else
+	#define DEFAULT_RESET_TIMEOUT_SEC		30
+#endif
 
 #define RISCV_SATP_MODE(xlen)  ((xlen) == 32 ? SATP32_MODE : SATP64_MODE)
 #define RISCV_SATP_PPN(xlen)  ((xlen) == 32 ? SATP32_PPN : SATP64_PPN)
@@ -122,9 +127,10 @@ typedef struct {
 
 #if _NDS_V5_ONLY_
 	riscv_reg_t marchid;
+	riscv_reg_t mhartid;
+
 	bool group_resume_supported;
 	bool group_halt_supported;
-	riscv_reg_t mhartid;
 #endif
 
 	/* Cached value of vlenb. 0 if vlenb is not readable for some reason. */

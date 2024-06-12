@@ -27,8 +27,11 @@
 #include <libusb.h>
 
 #if _NDS_V5_ONLY_
+#include <jtag/jtag.h>
+#include <jtag/interface.h>
 #include <target/nds32_new/nds32_log.h>
 char *ftdi_device_address;
+extern bool oscan1_mode;
 #endif /* _NDS_V5_ONLY_ */
 
 /* Compatibility define for older libusb-1.0 */
@@ -66,6 +69,13 @@ char *ftdi_device_address;
 #define SIO_RESET_SIO 0
 #define SIO_RESET_PURGE_RX 1
 #define SIO_RESET_PURGE_TX 2
+
+
+#if _NDS_V5_ONLY_
+/* Helper function */
+static uint32_t mpsse_ndsv5_aice_read_ctrl(struct mpsse_ctx *ctx, uint8_t ctrl);
+static void mpsse_ndsv5_aice_version(struct mpsse_ctx *ctx);
+#endif
 
 struct mpsse_ctx {
 	struct libusb_context *usb_ctx;
@@ -367,7 +377,7 @@ static bool open_matching_device(struct mpsse_ctx *ctx, const uint16_t *vid, con
 		break;
 	default:
 #if _NDS_V5_ONLY_
-		LOG_ERROR("unsupported FTDI chip type: 0x%04x, set to FT2232H", desc.bcdDevice);
+		LOG_INFO("unsupported FTDI chip type: 0x%04x, set to FT2232H", desc.bcdDevice);
 		ctx->type = TYPE_FT2232H;
 		break;
 #else /* _NDS_V5_ONLY_ */
@@ -485,6 +495,11 @@ struct mpsse_ctx *mpsse_open(const uint16_t *vid, const uint16_t *pid, const cha
 		ctx->usb_dev = 0;
 		goto error;
 	}
+
+#if _NDS_V5_ONLY_
+	if (*vid == 0x1cfc)
+		mpsse_ndsv5_aice_version(ctx);
+#endif
 
 	err = libusb_control_transfer(ctx->usb_dev, FTDI_DEVICE_OUT_REQTYPE,
 			SIO_SET_LATENCY_TIMER_REQUEST, 255, ctx->index, NULL, 0,
@@ -616,7 +631,7 @@ void mpsse_clock_data_in(struct mpsse_ctx *ctx, uint8_t *in, unsigned in_offset,
 
 #ifdef _NDS_V5_ONLY_
 /* two wire mode */
-extern uint8_t two_wire_mode;
+extern uint8_t ndsv5_ftdi_sdp_mode;
 
 static void cjtag_data_out(const uint8_t *out, unsigned out_offset, uint8_t *cjtag_out,
 	unsigned bit_count) {
@@ -635,6 +650,10 @@ static void cjtag_data_out(const uint8_t *out, unsigned out_offset, uint8_t *cjt
 		/* fill data */
 		while (bit < out_bit_count && b < 8) {
 			uint8_t target_bit = out_byte & 0x1;
+
+			if (oscan1_mode) /* TDI values should be inverted in the OScan1 mode */
+				target_bit = (~target_bit) & 0x1;
+
 			out_byte = out_byte >> 1;
 			cjtag_out[idx_wb] = cjtag_out[idx_wb] | (target_bit << b);
 
@@ -713,6 +732,8 @@ void cjtag_data_in(uint8_t *out_read_buffer, uint8_t *cjtag_in, unsigned bit_cou
 static void mpsse_clock_data_two(struct mpsse_ctx *ctx, const uint8_t *out, unsigned out_offset, uint8_t *in,
 	unsigned in_offset, unsigned length, uint8_t mode) {
 	/* TODO: On H chips, use command 0x8E/0x8F if in and out are both 0 */
+	LOG_DEBUG_IO("%s%s %d bits", in ? "in" : "", out ? "out" : "", length);
+
 	if (out || (!out && !in))
 		mode |= 0x10;
 	if (in)
@@ -723,7 +744,7 @@ static void mpsse_clock_data_two(struct mpsse_ctx *ctx, const uint8_t *out, unsi
 	int cjtag_out_bytes = DIV_ROUND_UP(length * 3, 8);
 	/* no matter length is divied by 8 exactly or not, to ensure it's in a legal
 	 * range, add 1 */
-	uint8_t cjtag_out[cjtag_out_bytes+1];
+	uint8_t cjtag_out[65536] = {0x0};  /* uint8_t cjtag_out[cjtag_out_bytes+1] */
 	unsigned cjtag_out_offset = 0;
 	for (int i = 0; i < cjtag_out_bytes+1; i++)
 		cjtag_out[i] = 0;
@@ -793,7 +814,7 @@ void mpsse_clock_data(struct mpsse_ctx *ctx, const uint8_t *out, unsigned out_of
 	}
 
 #ifdef _NDS_V5_ONLY_
-	if (two_wire_mode == 1) {
+	if (ndsv5_ftdi_sdp_mode == 1) {
 		mpsse_clock_data_two(ctx, out, out_offset, in, in_offset, length, mode);
 		return;
 	}
@@ -859,9 +880,49 @@ void mpsse_clock_data(struct mpsse_ctx *ctx, const uint8_t *out, unsigned out_of
 	}
 }
 
+#ifdef _NDS_V5_ONLY_
+void oscan1_mpsse_bit_write_tms(struct mpsse_ctx *ctx, uint8_t byte, unsigned length, uint8_t mode)
+{
+	LOG_DEBUG_IO("byte: 0x%x, length: %d", byte, length);
+	/* Guarantee buffer space enough for a minimum size transfer */
+	if (buffer_write_space(ctx) < 3)
+		ctx->retval = mpsse_flush(ctx);
+
+	mode |= 0x42;
+	while (length >= 2) {
+		/* local data_out = bit_or(bit_lshift(bit_and(byte, 0x2), 4), bit_lshift(bit_and(byte, 0x1), 1)) */
+		/* byte = bit_rshift(byte, 2) */
+		uint8_t data_out = ((byte & 0x2) << 3) | ((byte & 0x1) << 1);
+		byte >>= 2;
+		buffer_write_byte(ctx, mode);
+		buffer_write_byte(ctx, 6-1);
+		buffer_write_byte(ctx, data_out);
+		length -= 2;
+	}
+	if (length > 0) {
+		/* local data_out = bit_lshift(bit_and(byte, 0x1), 1) */
+		uint8_t data_out = ((byte & 0x1) << 1);
+		buffer_write_byte(ctx, mode);
+		buffer_write_byte(ctx, 3-1);
+		buffer_write_byte(ctx, data_out);
+	}
+
+	ctx->retval = mpsse_flush(ctx);
+}
+#endif
+
 void mpsse_clock_tms_cs_out(struct mpsse_ctx *ctx, const uint8_t *out, unsigned out_offset,
 	unsigned length, bool tdi, uint8_t mode)
 {
+#ifdef _NDS_V5_ONLY_
+	LOG_DEBUG_IO("length %d", length);
+	if (oscan1_mode) {
+		LOG_DEBUG_IO("oscan1_mpsse_bit_write_tms: (curr_state: %s)", tap_state_name(tap_get_state()));
+		oscan1_mpsse_bit_write_tms(ctx, *out, length, mode);
+		return;
+	}
+#endif
+	LOG_DEBUG_IO("mpsse_clock_tms_cs_out (curr_state: %s)", tap_state_name(tap_get_state()));
 	mpsse_clock_tms_cs(ctx, out, out_offset, 0, 0, length, tdi, mode);
 }
 
@@ -1124,6 +1185,7 @@ static LIBUSB_CALL void read_cb(struct libusb_transfer *transfer)
 	 * while copying the chunk buffer to the read buffer */
 	unsigned num_packets = DIV_ROUND_UP(transfer->actual_length, packet_size);
 	unsigned chunk_remains = transfer->actual_length;
+	LOG_DEBUG_IO("# of packets: %d", num_packets);
 	for (unsigned i = 0; i < num_packets && chunk_remains > 2; i++) {
 		unsigned this_size = packet_size - 2;
 		if (this_size > chunk_remains - 2)
@@ -1134,6 +1196,7 @@ static LIBUSB_CALL void read_cb(struct libusb_transfer *transfer)
 			ctx->read_chunk + packet_size * i + 2,
 			this_size);
 		res->transferred += this_size;
+		LOG_DEBUG_IO("chunk_remains: %d", chunk_remains);
 		chunk_remains -= this_size + 2;
 		if (res->transferred == ctx->read_count) {
 			res->done = true;
@@ -1194,6 +1257,212 @@ static LIBUSB_CALL void write_cb(struct libusb_transfer *transfer)
 #endif /* _NDS_V5_ONLY_ */
 	}
 }
+
+#if _NDS_V5_ONLY_
+
+#define AICE_RESPONSE_MAX 16384
+#define BULK_IN_TIMEOUT 5000
+#define BULK_OUT_TIMEOUT 5000
+
+static uint32_t mpsse_ndsv5_aice_read_ctrl(struct mpsse_ctx *ctx, uint8_t ctrl)
+{
+	int nwrite;
+	uint8_t out_buf[3];
+	out_buf[0] = 0x50;
+	out_buf[1] = 0x00;
+	out_buf[2] = ctrl;
+	libusb_bulk_transfer(ctx->usb_dev, ctx->out_ep, out_buf, 3, &nwrite, BULK_OUT_TIMEOUT);
+	busy_sleep(1);
+
+	uint8_t in_buf[AICE_RESPONSE_MAX];
+	int res = libusb_bulk_transfer(ctx->usb_dev, ctx->in_ep, in_buf, AICE_RESPONSE_MAX, &nwrite, BULK_IN_TIMEOUT);
+
+	uint32_t result = (in_buf[2] << 24) |
+			  (in_buf[3] << 16) |
+			  (in_buf[4] <<  8) |
+			  (in_buf[5] <<  0);
+
+	LOG_DEBUG("aice_ctrl: 0x%x data: 0x%" PRIx32, ctrl, result);
+
+	if (res == 0)
+		return result;
+	else
+		return 0;
+}
+
+extern uint32_t ndsv5_mpsse_t2;
+static void mpsse_ndsv5_aice_version(struct mpsse_ctx *ctx)
+{
+	uint32_t hw_ver = mpsse_ndsv5_aice_read_ctrl(ctx, 0x1);
+	uint32_t fpga_ver = mpsse_ndsv5_aice_read_ctrl(ctx, 0x2);
+	uint32_t fw_ver = mpsse_ndsv5_aice_read_ctrl(ctx, 0x3);
+
+	uint16_t did = (hw_ver >> 16) & 0xFFFF;
+	hw_ver &= 0xFFFF;
+
+	char *aice_str;
+	ndsv5_mpsse_t2 = 0;
+	switch (did) {
+		case 2:
+			aice_str = strdup("Andes AICE-MINI+");
+			break;
+
+		case 5:
+			ndsv5_mpsse_t2 = 1;
+			aice_str = strdup("Andes AICE-T2");
+			break;
+
+		default:
+			aice_str = strdup("Andes AICE");
+			break;
+	};
+
+
+	NDS32_LOG("%s v%" PRIx8 ".%" PRIx8 ".%" PRIx8, aice_str, hw_ver & 0xFF, fpga_ver & 0xFF, fw_ver & 0xFF);
+
+	if (aice_str)
+		free(aice_str);
+}
+
+enum AICE_2T_EXTENSION_MPSSE_CMD {
+	TRACER2_READ_TBUF_SIZE        = 0xe1,
+	TRACER2_READ_TBUF_DATA        = 0xe2,
+	TRACER2_SET_RECORDING         = 0xe3,
+	TRACER2_RESET_TBUF_PTR        = 0xe4,
+	TRACER2_SET_TBUF_STOP_ON_WRAP = 0xe6,
+	TRACER2_SET_TBUF_SIZE         = 0xe7,
+};
+
+void mpsse_ndsv5_tracer2_read_tbuf_size(struct mpsse_ctx *ctx, size_t *size)
+{
+	buffer_write_byte(ctx, TRACER2_READ_TBUF_SIZE);
+	buffer_add_read(ctx, (uint8_t *)size, 0, 32, 0);
+	ctx->retval = mpsse_flush(ctx);
+	LOG_DEBUG_IO("size: 0x%zx", *size);
+}
+
+static uint32_t mpsse_ndsv5_tracer2_read_raw_data(struct mpsse_ctx *ctx, uint8_t *buf, uint32_t read_bytes)
+{
+	/* return data of MPSSE commands is prefixed with 0x32 0x60
+	 * if they are the first valid response in a USB packet.*/
+	uint8_t tmp_buf[AICE_RESPONSE_MAX+2] = {0};
+	int counter = 0;
+	int transferred;
+	uint32_t current_read = 0;
+
+	while (current_read < read_bytes) {
+		int res = libusb_bulk_transfer(ctx->usb_dev, ctx->in_ep, tmp_buf, AICE_RESPONSE_MAX, &transferred, BULK_IN_TIMEOUT);
+		LOG_DEBUG("#%d read_bytes: %d/%d, now transferred: %d", counter++, current_read, read_bytes, transferred);
+		keep_alive();
+
+		if (res == 0) {
+			if (transferred >= 2) {
+				DEBUG_PRINT_BUF(tmp_buf, transferred);
+				memcpy(buf, tmp_buf+2, transferred-2);
+			} else {
+				LOG_DEBUG("[ERROR] transferred = 0");
+				return current_read;
+			}
+		} else {
+			LOG_DEBUG("[ERROR] read_raw_data transfer error: %d", res);
+			return current_read;
+		}
+
+		current_read += (transferred-2);
+		buf += (transferred-2);
+	}
+	return current_read;
+}
+
+void mpsse_ndsv5_tracer2_read_tbuf_data(struct mpsse_ctx *ctx, uint8_t *buf, size_t *nwords)
+{
+	uint32_t total_bytes = *nwords * 4;
+	uint32_t offset = 0;
+
+	LOG_DEBUG_IO("Read nwords: 0x%zx", *nwords);
+	while (total_bytes) {
+		uint32_t read_bytes = total_bytes;
+		if (read_bytes > AICE_RESPONSE_MAX)
+			read_bytes = AICE_RESPONSE_MAX;
+
+		uint32_t read_words = read_bytes/4;
+		LOG_DEBUG("Current read_words: 0x%x, read_bytes: %d (%d/%zd)",
+				read_words, read_bytes, offset, *nwords*4);
+		uint8_t buffer[6];
+		int nwrite;
+		buffer[0] = TRACER2_READ_TBUF_DATA;
+		buffer[1] = 0xff & (read_words >> 0);
+		buffer[2] = 0xff & (read_words >> 8);
+		buffer[3] = 0xff & (read_words >> 16);
+		buffer[4] = 0xff & (read_words >> 24);
+		buffer[5] = 0x87;
+		libusb_bulk_transfer(ctx->usb_dev, ctx->out_ep, buffer, 6, &nwrite, BULK_OUT_TIMEOUT);
+		busy_sleep(10);
+		read_bytes = mpsse_ndsv5_tracer2_read_raw_data(ctx, buf+offset, read_bytes);
+
+		total_bytes -= read_bytes;
+		offset += read_bytes;
+		LOG_DEBUG("Remains: %d bytes", total_bytes);
+		keep_alive();
+	}
+}
+
+void mpsse_ndsv5_tracer2_set_recording(struct mpsse_ctx *ctx, bool enabled)
+{
+	LOG_DEBUG_IO("status: %s", enabled? "enable":"disable");
+	/* 1: enable recording */
+	/* 0: disable recording */
+	buffer_write_byte(ctx, TRACER2_SET_RECORDING);
+	if (enabled)
+		buffer_write_byte(ctx, 0x1);
+	else
+		buffer_write_byte(ctx, 0x0);
+	ctx->retval = mpsse_flush(ctx);
+}
+
+void mpsse_ndsv5_tracer2_reset_tbuf_ptr(struct mpsse_ctx *ctx)
+{
+	LOG_DEBUG_IO("Reset tbug ptr");
+	buffer_write_byte(ctx, TRACER2_RESET_TBUF_PTR);
+	ctx->retval = mpsse_flush(ctx);
+}
+
+void mpsse_ndsv5_tracer2_stop_on_wrap(struct mpsse_ctx *ctx, bool enabled)
+{
+	LOG_DEBUG_IO("status: %s", enabled? "enable":"disable");
+	/* 1: enable stop-on-wrap */
+	/* 0: disable stop-on-wrap */
+	buffer_write_byte(ctx, TRACER2_SET_TBUF_STOP_ON_WRAP);
+	if (enabled)
+		buffer_write_byte(ctx, 0x1);
+	else
+		buffer_write_byte(ctx, 0x0);
+	ctx->retval = mpsse_flush(ctx);
+}
+
+void mpsse_ndsv5_tracer2_set_tbuf_size(struct mpsse_ctx *ctx, unsigned int trace_size)
+{
+
+	LOG_DEBUG("Trace_size: %u", trace_size);
+
+	/* set trace buffer size limit for stop on wrap,
+	 * size = 2^n bytes, where n <= 29,
+	 * if n more than 29 then it will shrink to 29
+	 */
+	int n = 0;
+	while(trace_size) {
+		n++;
+		trace_size >>= 1;
+	}
+
+	if (n > 29)
+		n = 29;
+
+	LOG_DEBUG("Set n = %u (size: %u)", n, (2 << n));
+	buffer_write_byte(ctx, TRACER2_SET_TBUF_SIZE);
+	buffer_write_byte(ctx, n);
+}
+#endif /* _NDS_V5_ONLY_ */
 
 int mpsse_flush(struct mpsse_ctx *ctx)
 {

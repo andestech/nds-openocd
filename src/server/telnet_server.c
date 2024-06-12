@@ -225,7 +225,7 @@ static int telnet_new_connection(struct connection *connection)
 	int i;
 
 #if _NDS_V5_ONLY_
-	LOG_INFO("Establising Telnet connection");
+	NDS_INFO("Establising Telnet connection");
 #endif
 
 	telnet_connection = malloc(sizeof(struct telnet_connection));
@@ -250,7 +250,7 @@ static int telnet_new_connection(struct connection *connection)
 
 	/* negotiate telnet options */
 #if _NDS_V5_ONLY_
-	LOG_INFO("Negotiate telnet options");
+	NDS_INFO("Negotiate telnet options");
 #endif
 	telnet_write(connection, negotiate, strlen(negotiate));
 
@@ -260,7 +260,7 @@ static int telnet_new_connection(struct connection *connection)
 		telnet_write(connection, "\r\n", 2);
 
 #if _NDS_V5_ONLY_
-		LOG_INFO("telnet banner: %s", telnet_service->banner);
+		NDS_INFO("telnet banner: %s", telnet_service->banner);
 #endif
 	}
 
@@ -848,7 +848,7 @@ static int telnet_input(struct connection *connection)
 		}
 		fwrite(bin_file_start, 1, bin_file_size, O_FILE);
 		fclose(O_FILE);
-		LOG_INFO("base64enc_data checksum %d", checksum);
+		LOG_INFO("base64enc_data checksum %d", checksum); /* Keep it, or target_burn may hang. */
 		free(bin_file_start);
 		free(nds_remotetargetburn_fpath);
 		free(nds_remotetargetburn_buffer);

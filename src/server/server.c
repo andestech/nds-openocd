@@ -109,7 +109,11 @@ static int add_connection(struct service *service, struct command_context *cmd_c
 			(char *)&flag,			/* the cast is historical cruft */
 			sizeof(int));			/* length of option value */
 
+#if _NDS_V5_ONLY_
+		NDS_INFO("accepting '%s' connection on tcp/%s", service->name, service->port);
+#else
 		LOG_INFO("accepting '%s' connection on tcp/%s", service->name, service->port);
+#endif
 		retval = service->new_connection(c);
 		if (retval != ERROR_OK) {
 			close_socket(c->fd);
@@ -284,7 +288,9 @@ int add_service(const struct service_driver *driver, const char *port,
 			sizeof(off));
 #endif /* _NDS_V5_ONLY_ */
 
+#ifndef _WIN32
 		socket_nonblock(c->fd);
+#endif
 
 		memset(&c->sin, 0, sizeof(c->sin));
 #if _NDS_V5_ONLY_
@@ -356,10 +362,11 @@ int add_service(const struct service_driver *driver, const char *port,
 #endif /* _NDS_V5_ONLY_ */
 		socklen_t addr_in_size = sizeof(addr_in);
 		if (getsockname(c->fd, (struct sockaddr *)&addr_in, &addr_in_size) == 0)
-			LOG_INFO("Listening on port %hu for %s connections",
 #if _NDS_V5_ONLY_
-				 ntohs(addr_in.sin6_port), c->name);
+			NDS_INFO("Listening on port %hu for %s connections",
+					ntohs(addr_in.sin6_port), c->name);
 #else /* _NDS_V5_ONLY_ */
+			LOG_INFO("Listening on port %hu for %s connections",
 				 ntohs(addr_in.sin_port), c->name);
 #endif /* _NDS_V5_ONLY_ */
 	} else if (c->type == CONNECTION_STDINOUT) {
@@ -620,7 +627,11 @@ int server_loop(struct command_context *command_context)
 								&address_size);
 						close_socket(tmp_fd);
 					}
+#if _NDS_V5_ONLY_
+					NDS_INFO(
+#else /* _NDS_V5_ONLY_ */
 					LOG_INFO(
+#endif /* _NDS_V5_ONLY_ */
 						"rejected '%s' connection, no more connections allowed",
 						service->name);
 				}
@@ -642,7 +653,11 @@ int server_loop(struct command_context *command_context)
 								shutdown_openocd = SHUTDOWN_REQUESTED;
 							}
 							remove_connection(service, c);
+#if _NDS_V5_ONLY_
+							NDS_INFO("dropped '%s' connection",
+#else /* _NDS_V5_ONLY_ */
 							LOG_INFO("dropped '%s' connection",
+#endif /* _NDS_V5_ONLY_ */
 								service->name);
 							c = next;
 							continue;
@@ -765,17 +780,9 @@ int server_init(struct command_context *cmd_ctx)
 	return ERROR_OK;
 }
 
-#if _NDS32_ONLY_
-extern int nds_freerun_all_targets(void);
-#endif /* _NDS32_ONLY_ */
 int server_quit(void)
 {
 	remove_services();
-
-#if _NDS32_ONLY_
-	nds_freerun_all_targets();
-#endif /* _NDS32_ONLY_ */
-
 	target_quit();
 
 #ifdef _WIN32
@@ -850,7 +857,11 @@ COMMAND_HANDLER(handle_poll_period_command)
 	else
 		COMMAND_PARSE_NUMBER(int, CMD_ARGV[0], polling_period);
 
+#if _NDS_V5_ONLY_
+	NDS_INFO("set servers polling period to %ums", polling_period);
+#else
 	LOG_INFO("set servers polling period to %ums", polling_period);
+#endif
 
 	return ERROR_OK;
 }

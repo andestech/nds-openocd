@@ -539,6 +539,8 @@ static int maybe_add_trigger_t1(struct target *target,
 	return ERROR_OK;
 }
 
+extern uint32_t nds_tracer_on;
+extern uint32_t nds_tracer_action;
 static int maybe_add_trigger_t2(struct target *target,
 		struct trigger *trigger, uint64_t tdata1)
 {
@@ -552,8 +554,15 @@ static int maybe_add_trigger_t2(struct target *target,
 
 	/* address/data match trigger */
 	tdata1 |= CSR_MCONTROL_DMODE(riscv_xlen(target));
-	tdata1 = set_field(tdata1, CSR_MCONTROL_ACTION,
+	if (nds_tracer_action == CSR_MCONTROL_ACTION_TRACE_ON) {
+		/* for trace from, trigger tracer, do not enter debug mode */
+		tdata1 = set_field(tdata1, CSR_MCONTROL_ACTION, nds_tracer_action);
+		LOG_DEBUG("nds_tracer_from, tdata1 = 0x%lx, action = 0x%x", tdata1, nds_tracer_action);
+	} else {
+		tdata1 = set_field(tdata1, CSR_MCONTROL_ACTION,
 			CSR_MCONTROL_ACTION_DEBUG_MODE);
+	}
+
 	tdata1 = set_field(tdata1, CSR_MCONTROL_MATCH, CSR_MCONTROL_MATCH_EQUAL);
 	tdata1 |= CSR_MCONTROL_M;
 
@@ -686,8 +695,8 @@ static int add_trigger(struct target *target, struct trigger *trigger)
 			/* trigger from breakpoint:ignor address alignment and length issue */
 		} else {
 			/* trigger from watchpoint:address alignment and extend length */
-			LOG_DEBUG("ori_trigger_address:0x%lx, ori_trigger_length:0x%x",
-					(long unsigned int)trigger->address, trigger->length);
+			LOG_DEBUG("ori_trigger_address:0x%" TARGET_PRIxADDR ", ori_trigger_length:0x%x",
+					trigger->address, trigger->length);
 			uint64_t end_address;
 			end_address = trigger->address + trigger->length;
 			/* 8bytes alignment:contain rv32(4bytes or rv32dc:8bytes) and rv64(8bytes) */
@@ -1226,7 +1235,7 @@ static int old_or_new_riscv_step(struct target *target, int current,
 
 #if _NDS_V5_ONLY_
 	if (target->debug_reason == DBG_REASON_WPTANDBKPT) {
-		if ((r->marchid & 0xff) == 0x22 && (r->marchid & 0xF0000) == 0x0) {
+		if((r->marchid & 0xff) == 0x22 && (r->marchid & 0xF0000) == 0x0) {
 			/* e-23516 Handling N22 Imprecise */
 			LOG_DEBUG("Handle N22 Imprecise");
 			if (current) {
@@ -2662,11 +2671,9 @@ int riscv_openocd_poll(struct target *target)
 
 #if _NDS_V5_ONLY_
 	ndsv5_tracer_polling(target);
-	/*
-	 * Checking any hart RPH_DISCOVERED_HALTED
-	 * if yes, do riscv_openocd_poll()
-	 * else return riscv_openocd_poll()
-	 */
+	// Checking any hart RPH_DISCOVERED_HALTED
+	// if yes, do riscv_openocd_poll()
+	// else return riscv_openocd_poll()
 	RISCV_INFO(rr);
 	if ((rr->group_halt_supported) && (target->smp)) {
 		unsigned nobody_trigger_halted = 1;
@@ -2744,10 +2751,17 @@ int riscv_openocd_poll(struct target *target)
 		LOG_DEBUG("should_remain_halted=%d, should_resume=%d",
 				  should_remain_halted, should_resume);
 		if (should_remain_halted && should_resume) {
+#if _NDS_V5_ONLY_
+			LOG_DEBUG("%d harts should remain halted, and %d should resume.",
+						should_remain_halted, should_resume);
+			should_remain_halted = 0;
+			LOG_DEBUG("force set %d harts should remain halted", should_remain_halted);
+#else
 			LOG_WARNING("%d harts should remain halted, and %d should resume.",
 						should_remain_halted, should_resume);
 			should_remain_halted = 0;
 			LOG_WARNING("force set %d harts should remain halted", should_remain_halted);
+#endif
 		}
 		if (should_remain_halted) {
 			LOG_DEBUG("halt all");
@@ -4261,7 +4275,7 @@ static bool gdb_regno_cacheable(enum gdb_regno regno, bool write)
 	/* For ACE */
 	if (regno == GDB_REGNO_T0 ||
 	    regno == GDB_REGNO_T1 ||
-	    regno == GDB_REGNO_T2)
+	    regno == GDB_REGNO_T2 )
 		return false;
 #endif
 
@@ -4878,7 +4892,7 @@ int riscv_init_registers(struct target *target)
 		return ERROR_FAIL;
 	target->reg_cache->name = "RISC-V Registers";
 #if _NDS_V5_ONLY_
-	target->reg_cache->num_regs = GDB_REGNO_COUNT + acr_reg_count_v5;
+	target->reg_cache->num_regs = GDB_REGNO_COUNT + GDB_INDIRECT_REGNO_COUNT + acr_reg_count_v5;
 #else /* _NDS_V5_ONLY_ */
 	target->reg_cache->num_regs = GDB_REGNO_COUNT;
 #endif /* _NDS_V5_ONLY_ */
@@ -4931,9 +4945,11 @@ int riscv_init_registers(struct target *target)
 	/* These types are built into gdb. */
 	static struct reg_data_type type_ieee_single = { .type = REG_TYPE_IEEE_SINGLE, .id = "ieee_single" };
 	static struct reg_data_type type_ieee_double = { .type = REG_TYPE_IEEE_DOUBLE, .id = "ieee_double" };
+	static struct reg_data_type type_bloat16 = { .type = REG_TYPE_FLOAT, .id = "bfloat16" };
 	static struct reg_data_type_union_field single_double_fields[] = {
 		{"float", &type_ieee_single, single_double_fields + 1},
-		{"double", &type_ieee_double, NULL},
+		{"double", &type_ieee_double, single_double_fields + 2},
+		{"bfloat16", &type_bloat16, NULL},
 	};
 	static struct reg_data_type_union single_double_union = {
 		.fields = single_double_fields
@@ -5402,7 +5418,12 @@ int riscv_init_registers(struct target *target)
 					r->exist = riscv_supports_extension(target, 'S') ||
 						riscv_supports_extension(target, 'N');
 					break;
-
+#if _NDS_V5_ONLY_
+				case CSR_SISELECT:
+				case CSR_SIREG:
+					r->exist = riscv_supports_extension(target, 'S');
+					break;
+#endif
 				case CSR_PMPCFG1:
 				case CSR_PMPCFG3:
 				case CSR_CYCLEH:
@@ -5569,8 +5590,13 @@ int riscv_init_registers(struct target *target)
 
 #if _NDS_V5_ONLY_
 		} else if (number >= GDB_REGNO_COUNT && number < (GDB_REGNO_COUNT+GDB_INDIRECT_REGNO_COUNT)) {
+			/* TODO: Add indirect CSR support */
 			r->group = "csr";
 			r->feature = &feature_csr;
+			r->arch_info = calloc(1, sizeof(riscv_reg_info_t));
+			if (!r->arch_info)
+				return ERROR_FAIL;
+			((riscv_reg_info_t *) r->arch_info)->target = target;
 			r->type = &nds_indirect_reg_access_type;
 
 			unsigned csr_number = number - GDB_REGNO_COUNT;
@@ -5631,7 +5657,7 @@ int riscv_init_registers(struct target *target)
 	 *   {"sram_matrix", 64, 256, {"", ""}, {"", ""} },
 	 * };
 	 */
-	LOG_DEBUG("ACR ID starts from %d", GDB_REGNO_COUNT);
+	LOG_DEBUG("ACR ID starts from %d", GDB_REGNO_COUNT + GDB_INDIRECT_REGNO_COUNT);
 	unsigned int reg_list_idx = GDB_REGNO_COUNT + GDB_INDIRECT_REGNO_COUNT;
 	for (unsigned int i = 0; i < acr_type_count_v5; i++) {
 		unsigned int acr_number = acr_info_list_v5->num;

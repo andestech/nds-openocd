@@ -20,6 +20,7 @@
 #include "riscv/ndsv5.h"
 #include "register.h"
 #include "semihosting_common.h"
+#include "smp.h"
 
 #define NDS32_PROFILE_SAMPLES_PER_S   100/*(2)*/
 #define NDS32_PROFILE_PROBE_MS        (1000/NDS32_PROFILE_SAMPLES_PER_S)
@@ -137,7 +138,7 @@ static void write_gmon_2(struct nds32_v5 *nds32)
 {
 	char filename[2048];
 	/* gmon.out output path depend on log file path */
-	LOG_INFO("log_output_path: %s", log_output_path);
+	NDS_INFO("log_output_path: %s", log_output_path);
 	memset(filename, 0, sizeof(filename));
 
 	char *c = strstr(log_output_path, "iceman_debug0.log");
@@ -149,16 +150,11 @@ static void write_gmon_2(struct nds32_v5 *nds32)
 
 	struct target *target = nds32->target;
 	uint32_t coreid = target->coreid;
-	LOG_DEBUG("coreid: %d", coreid);
-	if (coreid == 0)
-		strcat(filename, "gmon.out");
-	else {
-		char name_tmp[32];
-		memset(name_tmp, 0, sizeof(name_tmp));
-		sprintf(name_tmp, "gmon_core%02d.out", coreid);
-		strcat(filename, name_tmp);
-	}
-	LOG_INFO("filename: %s", filename);
+	char name_tmp[32];
+	memset(name_tmp, 0, sizeof(name_tmp));
+	sprintf(name_tmp, "gmon_%s.out", target_name(target));
+	strcat(filename, name_tmp);
+	NDS_INFO("coreid: %d, filename: %s", coreid, filename);
 
 	FILE *f = fopen(filename, "wb");
 	if (f == NULL)
@@ -219,7 +215,7 @@ static void write_gmon_2(struct nds32_v5 *nds32)
 
 	fclose(f);
 
-	LOG_INFO("Wrote gmom.out! prof_total_samples = %d", nds32->prof_total_samples);
+	NDS_INFO("Wrote gmom.out! prof_total_samples = %d", nds32->prof_total_samples);
 }
 
 #if _NDS_MEM_Q_ACCESS_
@@ -238,15 +234,13 @@ static int ndsv5_profile_probe_pc(void *priv)
 		uint64_t reg_pc_value = 0;
 
 		if (target->smp) {
-			/* For all SMP hart */
-			for (int i = 0; i < riscv_count_harts(target); ++i) {
-				if (riscv_set_current_hartid(target, i) != ERROR_OK) {
-					LOG_DEBUG("set_current_hartid FAIL");
-					return ERROR_FAIL;
-				}
-
-				if (ndsv5_probe_pc_quick_access(target, &reg_pc_value) != ERROR_OK) {
-					LOG_DEBUG("probe_pc_quick FAIL");
+			struct target_list *list;
+			foreach_smp_target(list, target->smp_targets) {
+				struct target *t = list->target;
+				if (!target_was_examined(t))
+					continue;
+				if (ndsv5_probe_pc_quick_access(t, &reg_pc_value) != ERROR_OK) {
+					LOG_DEBUG("[%s] probe_pc_quick FAIL", target_name(t));
 					return ERROR_FAIL;
 				}
 
@@ -257,7 +251,6 @@ static int ndsv5_profile_probe_pc(void *priv)
 					LOG_ERROR("prof_num_samples overflow: 0x%x", nds32->prof_num_samples);
 					nds32->prof_num_samples--;
 				}
-
 			}
 		} else {
 			if (ndsv5_probe_pc_quick_access(target, &reg_pc_value) != ERROR_OK) {

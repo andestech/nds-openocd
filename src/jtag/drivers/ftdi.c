@@ -104,7 +104,12 @@
 extern char *ftdi_device_address;
 
 /* declare global config variable for two wire mode */
-uint8_t two_wire_mode;
+uint8_t ndsv5_ftdi_sdp_mode;
+
+/* AICE-MICRO cjtag support */
+static void ndsv5_cjtag_reset_escape(void);
+void ndsv5_cjtag_selection_escape(void);
+bool oscan1_mode;
 #endif
 
 static char *ftdi_device_desc;
@@ -452,14 +457,6 @@ static void ftdi_execute_statemove(struct jtag_command *cmd)
 	/* shortest-path move to desired end state */
 	if (tap_get_state() != tap_get_end_state() || tap_get_end_state() == TAP_RESET)
 		move_to_state(tap_get_end_state());
-
-#if _NDS_V5_ONLY_
-	uint8_t tms_bits = 0xFF;
-	int tms_count = sizeof(tms_bits)*8;
-	mpsse_clock_tms_cs_out(mpsse_ctx, &tms_bits, 0, tms_count, false, ftdi_jtag_mode);
-	mpsse_clock_tms_cs_out(mpsse_ctx, &tms_bits, 0, tms_count, false, ftdi_jtag_mode);
-#endif
-
 }
 
 /**
@@ -571,7 +568,7 @@ static void ftdi_execute_scan(struct jtag_command *cmd)
 
 		if (i == cmd->cmd.scan->num_fields - 1 && tap_get_state() != tap_get_end_state()) {
 #ifdef _NDS_V5_ONLY_
-			if (two_wire_mode) {
+			if (ndsv5_ftdi_sdp_mode) {
 				DO_CLOCK_DATA(mpsse_ctx,
 						field->out_value,
 						0,
@@ -632,7 +629,7 @@ static void ftdi_execute_scan(struct jtag_command *cmd)
 				tap_set_state(tap_state_transition(tap_get_state(), 0));
 			}
 #ifdef _NDS_V5_ONLY_
-			}	/* end for "if else (two_wire_mode)" */
+			}	/* end for "if else (ndsv5_ftdi_sdp_mode)" */
 #endif
 		} else
 			DO_CLOCK_DATA(mpsse_ctx,
@@ -732,6 +729,11 @@ static void ftdi_execute_command(struct jtag_command *cmd)
 #if BUILD_FTDI_OSCAN1 == 1
 			oscan1_reset_online_activate(); /* put the target back into OSCAN1 mode */
 #endif
+#ifdef _NDS_V5_ONLY_
+			LOG_DEBUG("JTAG_RESET");
+			ndsv5_cjtag_reset_escape();
+			ndsv5_cjtag_selection_escape();
+#endif
 			break;
 		case JTAG_RUNTEST:
 			ftdi_execute_runtest(cmd);
@@ -741,6 +743,13 @@ static void ftdi_execute_command(struct jtag_command *cmd)
 #if BUILD_FTDI_OSCAN1 == 1
 			oscan1_reset_online_activate(); /* put the target back into OSCAN1 mode */
 #endif
+
+#if _NDS_V5_ONLY_
+			LOG_DEBUG("TLR_RESET");
+			ftdi_execute_statemove(cmd);
+			ndsv5_cjtag_reset_escape();
+			ndsv5_cjtag_selection_escape();
+#endif /* _NDS_V5_ONLY_ */
 			break;
 		case JTAG_PATHMOVE:
 			ftdi_execute_pathmove(cmd);
@@ -775,7 +784,7 @@ static int ftdi_execute_queue(void)
 	for (struct jtag_command *cmd = jtag_command_queue; cmd; cmd = cmd->next, jtag_command_queue_length += 1)
 		;
 	uint8_t ***cjtag_cmds = malloc(sizeof(uint8_t **) * jtag_command_queue_length);
-	if (two_wire_mode) {
+	if (ndsv5_ftdi_sdp_mode) {
 		int j = 0;
 		for (struct jtag_command *cmd = jtag_command_queue; cmd; cmd = cmd->next, j += 1) {
 			/* fill the write buffer with the desired command */
@@ -798,7 +807,7 @@ static int ftdi_execute_queue(void)
 			ftdi_execute_command(cmd);
 		}
 #ifdef _NDS_V5_ONLY_
-	} /* end for "if else (two_wire_mode)" */
+	} /* end for "if else (ndsv5_ftdi_sdp_mode)" */
 #endif
 
 	if (led)
@@ -807,7 +816,7 @@ static int ftdi_execute_queue(void)
 	int retval = mpsse_flush(mpsse_ctx);
 
 #ifdef _NDS_V5_ONLY_
-	if (two_wire_mode) {
+	if (ndsv5_ftdi_sdp_mode) {
 		int j = 0;
 		for (struct jtag_command *cmd = jtag_command_queue; cmd; cmd = cmd->next, j += 1) {
 			if (cmd->type == JTAG_SCAN) {
@@ -860,7 +869,6 @@ static int ftdi_initialize(void)
 			if (ftdi_vid[i] == 0x1cfc) {
 				nds_ftdi_devices = 1;
 				LOG_DEBUG("Find Andes FTDI device!!");
-				NDS32_LOG("Andes AICE-MINI+");
 				unsigned max_taps = jtag_tap_count();
 				LOG_DEBUG("max tap count: %d, jtag_max_scans %d", max_taps, nds_jtag_max_scans);
 				if (nds_jtag_max_scans > 32) {
@@ -898,6 +906,9 @@ static int ftdi_initialize(void)
 				mpsse_flush(mpsse_ctx);
 
 				switch (data_low >> 6) {
+					case 0x1: /* AD7 = 0, AD6 = 1 */
+						NDS32_LOG("Andes AICE-MICRO H/W R1.2");
+						break;
 					case 0x2: /* AD7 = 1, AD6 = 0 */
 						NDS32_LOG("Andes AICE-MICRO H/W R1.1");
 						break;
@@ -1230,6 +1241,156 @@ static void oscan1_reset_online_activate(void)
 
 #endif /* #if BUILD_FTDI_OSCAN1 == 1 */
 
+
+#ifdef _NDS_V5_ONLY_
+/* AICE-MICRO cjtag support */
+static void ndsv5_cjtag_reset_escape()
+{
+	if (!oscan1_mode)
+		return;
+	/*
+	 * From ftdi_lib.lua
+	 * function cjtag_reset_escape()
+	 *   local byte0 = 0x03 -- 0b0000_0011 jtag_oen=0 tms=0 tdi=1 tck=1
+	 *   local byte1 = 0x0b -- 0b0000_1011 jtag_oen=0 tms=1 tdi=1 tck=1
+	 *   local dir   = 0x1b -- 0b0001_1011
+	 *   local data = {}
+	 *   local short_seq = {}
+	 *   local i
+	 *
+	 *   table.insert(data, MPSSE_SET_DATA_BITS_LOW_BYTE) -- start; posedge tck
+	 *   table.insert(data, byte1)
+	 *   table.insert(data, dir)
+	 *
+	 *   for i=1,4 do
+	 *     table.insert(data, MPSSE_SET_DATA_BITS_LOW_BYTE)
+	 *     table.insert(data, byte0)
+	 *     table.insert(data, dir)
+	 *
+	 *     table.insert(data, MPSSE_SET_DATA_BITS_LOW_BYTE)
+	 *     table.insert(data, byte1)
+	 *     table.insert(data, dir)
+	 *   end
+	 *
+	 *   table.insert(data, MPSSE_SET_DATA_BITS_LOW_BYTE)  -- return tck to 0 (negedge tck)
+	 *   table.insert(data, bit_and(byte1, 0xfe))
+	 *   table.insert(data, dir)
+	 *
+	 *   aice.send_raw_data(data)
+	 * end
+	 *
+	 */
+
+	LOG_DEBUG("ndsv5_cjtag_reset_escape");
+	uint8_t byte0 = 0x03;
+	uint8_t byte1 = 0x0b;
+	uint8_t dir   = 0x1b;
+
+	mpsse_flush(mpsse_ctx);
+	mpsse_set_data_bits_low_byte(mpsse_ctx, byte1, dir);
+
+	for (int i = 0; i < 4; i++) {
+		mpsse_set_data_bits_low_byte(mpsse_ctx, byte0, dir);
+		mpsse_set_data_bits_low_byte(mpsse_ctx, byte1, dir);
+	}
+
+	mpsse_set_data_bits_low_byte(mpsse_ctx, (byte1 & 0xfe), dir);
+	mpsse_flush(mpsse_ctx);
+
+	/* >= 22 dummy clocks with TMS == HIGH. TAP: ??? => Reset */
+	LOG_DEBUG_IO("Clock dummy RESET");
+	uint8_t tms_bits = 0xFF;
+	int tms_count = sizeof(tms_bits)*8;
+	mpsse_clock_tms_cs(mpsse_ctx, &tms_bits, 0, 0, 0, tms_count, false, ftdi_jtag_mode);
+	mpsse_clock_tms_cs(mpsse_ctx, &tms_bits, 0, 0, 0, tms_count, false, ftdi_jtag_mode);
+	mpsse_clock_tms_cs(mpsse_ctx, &tms_bits, 0, 0, 0, tms_count, false, ftdi_jtag_mode);
+	LOG_DEBUG_IO("Clock dummy RESET done");
+	mpsse_flush(mpsse_ctx);
+}
+
+void ndsv5_cjtag_selection_escape()
+{
+	if (!oscan1_mode)
+		return;
+	/*
+	 * From ftdi_lib.lua
+ 	 *	function cjtag_selection_escape()
+	 *		local byte0 = 0x03 -- 0b0000_0011 jtag_oen=0 tms=0 tdi=1 tck=1
+	 *		local byte1 = 0x0b -- 0b0000_1011 jtag_oen=0 tms=1 tdi=1 tck=1
+	 * 		local dir   = 0x1b -- 0b0001_1011
+	 *		local data = {}
+	 *		local short_seq = {}
+	 *		local i
+	 *
+	 *		table.insert(data, MPSSE_SET_DATA_BITS_LOW_BYTE) -- start; posedge tck
+	 *		table.insert(data, byte0)
+	 *		table.insert(data, dir)
+	 *
+	 *		for i=1,3 do
+	 *			table.insert(data, MPSSE_SET_DATA_BITS_LOW_BYTE)
+	 *			table.insert(data, byte1)
+	 *			table.insert(data, dir)
+	 *
+	 *			table.insert(data, MPSSE_SET_DATA_BITS_LOW_BYTE)
+	 *			table.insert(data, byte0)
+	 *			table.insert(data, dir)
+	 *		end
+	 *
+	 *		table.insert(data, MPSSE_SET_DATA_BITS_LOW_BYTE)  -- return tck to 0 (negedge tck)
+	 *		table.insert(data, bit_and(byte0, 0xfe))
+	 *		table.insert(data, dir)
+	 *
+	 *		table.insert(data, MPSSE_BIT_WRITE_TMS)
+	 *		table.insert(data, 4-1)
+	 *		table.insert(data, 0xc)
+	 *		table.insert(data, MPSSE_BIT_WRITE_TMS) -- EC; short seq
+	 *		table.insert(data, 4-1)
+	 *		table.insert(data, 0x8)
+	 *		table.insert(data, MPSSE_BIT_WRITE_TMS) -- CP
+	 *		table.insert(data, 4-1)
+	 *		table.insert(data, 0x0)
+	 *
+	 *		aice.send_raw_data(data)
+	 */
+	LOG_DEBUG("ndsv5_cjtag_selection_escape");
+	LOG_DEBUG("Move to IDLE");
+
+	/* TAP: Reset -> Idle */
+	uint8_t tms = 0x01;
+	mpsse_clock_tms_cs(mpsse_ctx, &tms, 0, 0, 0, 1, false, ftdi_jtag_mode);
+	tap_set_state(TAP_IDLE);
+	LOG_DEBUG("Force set to TAP_IDLE! (curr_state: %s)", tap_state_name(tap_get_state()));
+
+	LOG_DEBUG("Issue cjtag_selection_escape");
+
+	uint8_t byte0 = 0x03;
+	uint8_t byte1 = 0x0b;
+	uint8_t dir   = 0x1b;
+
+	uint8_t data0 = 0xc;
+	uint8_t data1 = 0x8;
+	uint8_t data2 = 0x0;
+
+	mpsse_set_data_bits_low_byte(mpsse_ctx, byte0, dir);
+	for (int i = 0; i < 3; i++) {
+		mpsse_set_data_bits_low_byte(mpsse_ctx, byte1, dir);
+		mpsse_set_data_bits_low_byte(mpsse_ctx, byte0, dir);
+	}
+
+	mpsse_set_data_bits_low_byte(mpsse_ctx, (byte0 & 0xfe), dir); /* return tck to 0 (negedge tck) */
+
+	mpsse_clock_tms_cs(mpsse_ctx, &data0, 0, 0, 0, 4, false, ftdi_jtag_mode);
+	mpsse_clock_tms_cs(mpsse_ctx, &data1, 0, 0, 0, 4, false, ftdi_jtag_mode);
+	mpsse_clock_tms_cs(mpsse_ctx, &data2, 0, 0, 0, 4, false, ftdi_jtag_mode);
+	mpsse_flush(mpsse_ctx);
+	LOG_DEBUG("Issue Done! (curr_state: %s)", tap_state_name(tap_get_state()));
+	tap_set_state(TAP_IDLE);
+	LOG_DEBUG("Force set to TAP_IDLE! (curr_state: %s)", tap_state_name(tap_get_state()));
+}
+
+#endif /* _NDS_V5_ONLY_  */
+
+
 COMMAND_HANDLER(ftdi_handle_device_desc_command)
 {
 	if (CMD_ARGC == 1) {
@@ -1445,7 +1606,7 @@ COMMAND_HANDLER(ftdi_handle_tdo_sample_edge_command)
 	return ERROR_OK;
 }
 
-#if BUILD_FTDI_OSCAN1 == 1
+#if BUILD_FTDI_OSCAN1 == 1 || _NDS_V5_ONLY_
 COMMAND_HANDLER(ftdi_handle_oscan1_mode_command)
 {
 	if (CMD_ARGC > 1)
@@ -1454,25 +1615,33 @@ COMMAND_HANDLER(ftdi_handle_oscan1_mode_command)
 	if (CMD_ARGC == 1)
 		COMMAND_PARSE_ON_OFF(CMD_ARGV[0], oscan1_mode);
 
+#if _NDS_V5_ONLY_
+	ndsv5_ftdi_sdp_mode = oscan1_mode;
+	LOG_DEBUG("oscan1_mode: %s, ndsv5_ftdi_sdp_mode = %s",
+			oscan1_mode ? "on" : "off",
+			ndsv5_ftdi_sdp_mode ? "on" : "off");
+#endif
+
 	command_print(CMD, "oscan1 mode: %s.", oscan1_mode ? "on" : "off");
 	return ERROR_OK;
 }
 #endif
 
 #if _NDS_V5_ONLY_
-COMMAND_HANDLER(ftdi_handle_two_wire_mode)
+COMMAND_HANDLER(ftdi_handle_ndsv5_ftdi_sdp_mode)
 {
-	two_wire_mode = 1;
+	LOG_DEBUG("Enable ndsv5_ftdi_sdp_mode");
+	ndsv5_ftdi_sdp_mode = 1;
 	return ERROR_OK;
 }
 
 static int ftdi_handle_write_pins_command(Jim_Interp *interp, int argc, Jim_Obj * const *argv)
 {
 	/* Disable AICE-MICRO 2w mode */
-	uint8_t two_wire_mode_bak;
-	if (two_wire_mode) {
-		two_wire_mode_bak = two_wire_mode;
-		two_wire_mode = 0;
+	uint8_t ndsv5_ftdi_sdp_mode_bak;
+	if (ndsv5_ftdi_sdp_mode) {
+		ndsv5_ftdi_sdp_mode_bak = ndsv5_ftdi_sdp_mode;
+		ndsv5_ftdi_sdp_mode = 0;
 
 		LOG_DEBUG("[OLD] out = 0x%x, dir = 0x%x", output, direction);
 
@@ -1528,10 +1697,10 @@ static int ftdi_handle_write_pins_command(Jim_Interp *interp, int argc, Jim_Obj 
 	}
 
 	/* Restore AICE-MICRO 2w mode if needed */
-	if (two_wire_mode_bak) {
+	if (ndsv5_ftdi_sdp_mode_bak) {
 		LOG_DEBUG("[Restore OLD] out = 0x%x, dir = 0x%x", output, direction);
 
-		two_wire_mode = 1;
+		ndsv5_ftdi_sdp_mode = 1;
 		output |= 0x4100;
 		direction |= 0x4000;
 
@@ -1662,7 +1831,7 @@ static const struct command_registration ftdi_subcommand_handlers[] = {
 			"allow signalling speed increase)",
 		.usage = "(rising|falling)",
 	},
-#if BUILD_FTDI_OSCAN1 == 1
+#if BUILD_FTDI_OSCAN1 == 1 || _NDS_V5_ONLY_
 	{
 		.name = "oscan1_mode",
 		.handler = &ftdi_handle_oscan1_mode_command,
@@ -1673,10 +1842,10 @@ static const struct command_registration ftdi_subcommand_handlers[] = {
 #endif
 #if _NDS_V5_ONLY_
 	{
-		.name = "ftdi_two_wire_mode",
-		.handler = &ftdi_handle_two_wire_mode,
+		.name = "ftdi_sdp_mode",
+		.handler = &ftdi_handle_ndsv5_ftdi_sdp_mode,
 		.mode = COMMAND_ANY,
-		.help = "enable two fire mode",
+		.help = "enable FTDI SDP mode",
 		.usage = "NULL"
 	},
 	{
@@ -1962,6 +2131,52 @@ static int ftdi_swd_switch_seq(enum swd_special_seq seq)
 	return ERROR_OK;
 }
 
+#if _NDS_V5_ONLY_
+/* Supporting PIB sink functionality
+ * The trace_freq is stalled to point to an array of unsigned integers as follows:
+ * [0]: Trace size
+ * [1]: stop on wrap (1: enable, 0: disable)
+ */
+static int ftdi_ndsv5_config_trace(bool enabled, enum tpiu_pin_protocol pin_protocol,
+		uint32_t port_size, unsigned int *trace_freq,
+		unsigned int traceclkin_freq, uint16_t *prescaler)
+{
+	if (enabled) {
+		/* enable recording and reset write ptr */
+		LOG_DEBUG("Enable tracer2");
+		mpsse_ndsv5_tracer2_set_recording(mpsse_ctx, true);
+		mpsse_ndsv5_tracer2_reset_tbuf_ptr(mpsse_ctx);
+
+		if (trace_freq) {
+			unsigned int trace_size = trace_freq[0];
+			unsigned int trace_stop_on_wrap = trace_freq[1];
+			LOG_DEBUG("trace_size: %u, stop_on_wrap: %u",
+					trace_size, trace_stop_on_wrap);
+			mpsse_ndsv5_tracer2_stop_on_wrap(mpsse_ctx, (trace_stop_on_wrap? true : false));
+			mpsse_ndsv5_tracer2_set_tbuf_size(mpsse_ctx, trace_size);
+		}
+	} else {
+		LOG_DEBUG("Disable tracer2");
+		mpsse_ndsv5_tracer2_set_recording(mpsse_ctx, false);
+	}
+	return ERROR_OK;
+}
+
+static int ftdi_ndsv5_poll_trace(uint8_t *buf, size_t *size)
+{
+	if (*size == 0) { // special case: probe PIB current size
+		LOG_DEBUG("Polling tbuf size");
+		mpsse_ndsv5_tracer2_read_tbuf_size(mpsse_ctx, size);
+	} else {
+		LOG_DEBUG("Get tbuf");
+		mpsse_ndsv5_tracer2_read_tbuf_data(mpsse_ctx, buf, size);
+	}
+
+	return ERROR_OK;
+}
+
+#endif /* _NDS_V5_ONLY_ */
+
 static const struct swd_driver ftdi_swd = {
 	.init = ftdi_swd_init,
 	.switch_seq = ftdi_swd_switch_seq,
@@ -1988,6 +2203,11 @@ struct adapter_driver ftdi_adapter_driver = {
 	.speed = ftdi_speed,
 	.khz = ftdi_khz,
 	.speed_div = ftdi_speed_div,
+
+#if _NDS_V5_ONLY_
+	.config_trace = ftdi_ndsv5_config_trace,
+	.poll_trace = ftdi_ndsv5_poll_trace,
+#endif
 
 	.jtag_ops = &ftdi_interface,
 	.swd_ops = &ftdi_swd,

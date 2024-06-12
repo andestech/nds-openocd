@@ -60,7 +60,7 @@ static const struct jim_nvp nvp_jtag_tap_event[] = {
 };
 
 #if _NDS_V5_ONLY_
-extern uint8_t two_wire_mode;
+extern uint8_t ndsv5_ftdi_sdp_mode;
 #endif
 
 struct jtag_tap *jtag_tap_by_jim_obj(Jim_Interp *interp, Jim_Obj *o)
@@ -196,7 +196,7 @@ static int jim_command_drscan(Jim_Interp *interp, int argc, Jim_Obj * const *arg
 	struct scan_field *compressed_fields = NULL;
 	uint8_t *compressed_out = NULL;
 	uint8_t compressed_out_offset = 0;
-	if (two_wire_mode) {
+	if (ndsv5_ftdi_sdp_mode) {
 		compressed_fields = malloc(sizeof(struct scan_field));
 		int total_bits = 0;
 		for (i = 2, field_count = 0; i < argc; i += 2, field_count += 1)
@@ -230,7 +230,7 @@ static int jim_command_drscan(Jim_Interp *interp, int argc, Jim_Obj * const *arg
 	}
 
 #ifdef _NDS_V5_ONLY_
-	if (two_wire_mode) {
+	if (ndsv5_ftdi_sdp_mode) {
 		for (i = 2, field_count = 0, compressed_out_offset = 0; i < argc; i += 2, field_count += 1) {
 			bit_copy(fields[field_count].in_value, 0,
 					compressed_out, compressed_out_offset, fields[field_count].num_bits);

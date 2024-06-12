@@ -9,10 +9,11 @@
 #endif
 #include <server/server.h>
 #include <helper/log.h>
+#include <jtag/jtag.h>
+#include <jtag/adapter.h>
 #include "target.h"
 #include "riscv/riscv.h"
 #include "riscv/ndsv5.h"
-#include "jtag/jtag.h"
 
 const char *ndsv5_burner_port = "2354";
 static struct target *ndsv5_burner_target;
@@ -25,6 +26,7 @@ static uint32_t select_burner_rtos_hartid;
 /* Command code table */
 enum burner_command_table {
 	BURNER_INIT = 0x01, /* OBSOLETE */
+	BURNER_JTAG_CLOCK = 0x03,
 	BURNER_QUIT = 0x04,
 	BURNER_SELECT_CORE = 0x05,
 	MONITOR_CMD = 0x06,
@@ -56,7 +58,7 @@ enum burner_command_table {
 	WRITE_EDM_SR = 0x61,
 	READ_EDM_JDP = 0x6E,
 	WRITE_EDM_JDP = 0x6F,
-	READ_REG = 0x70, /* No support in V5 */
+	READ_REG = 0x70,
 	WRITE_REG = 0x71, /* No support in V5 */
 };
 
@@ -309,6 +311,44 @@ static int set_rtos_hartid(uint32_t target_num)
 	return ERROR_OK;
 }
 
+static int ndsv5_burner_read_reg(struct target *target, unsigned char *packet, int *response_len)
+{
+	unsigned int ReadReg, ReadData;
+
+	ReadData = 0xFFFFFFFF;
+	ReadReg  = ((((unsigned int)packet[5] << 24) & 0xFF000000) |
+		    (((unsigned int)packet[4] << 16) & 0x00FF0000) |
+		    (((unsigned int)packet[3] << 8)  & 0x0000FF00) |
+		    (((unsigned int)packet[2] << 0)  & 0x000000FF));
+
+	struct reg *reg = ndsv5_get_reg_by_CSR(target, ReadReg);
+	if (reg != NULL)
+		ReadData = ndsv5_get_register_value(reg);
+	else
+		return ERROR_FAIL;
+
+	packet[2] = (char)((ReadData & 0xFF000000) >> 24);
+	packet[3] = (char)((ReadData & 0x00FF0000) >> 16);
+	packet[4] = (char)((ReadData & 0x0000FF00) >> 8);
+	packet[5] = (char)((ReadData & 0x000000FF) >> 0);
+	*response_len = 6;
+
+	return ERROR_OK;
+}
+
+static int ndsv5_burner_set_jtag(struct target *target, unsigned char *packet)
+{
+	int retval = ERROR_OK;
+	uint32_t khz = ((((unsigned int)packet[5] << 24) & 0xFF000000) |
+			(((unsigned int)packet[4] << 16) & 0x00FF0000) |
+			(((unsigned int)packet[3] << 8)  & 0x0000FF00) |
+			(((unsigned int)packet[2] << 0)  & 0x000000FF));
+	LOG_DEBUG("Received khz: %u\n", khz);
+
+	retval = adapter_config_khz(khz);
+	return retval;
+}
+
 static int ndsv5_burner_input(struct connection *connection)
 {
 	unsigned char cmmd_buffer[BURNER_BUFFER_SIZE] = {0};
@@ -394,6 +434,7 @@ static int ndsv5_burner_input(struct connection *connection)
 			break;
 		case RESET_HOLD:
 			/* reset and halt all harts(AMP) */
+			ndsv5_access_memory_pack_batch_run(target, 1); /* Flush buffer */
 			retval = ndsv5_reset_halt_as_examine(target);
 			if (retval != ERROR_OK)
 				buf_p[0] |= 0x80;
@@ -401,22 +442,26 @@ static int ndsv5_burner_input(struct connection *connection)
 			break;
 		case RESET_TARGET:
 			/* TODO: Use SRST as default!! */
+			ndsv5_access_memory_pack_batch_run(target, 1); /* Flush buffer */
 			ndsv5_reset_target(target, RESET_HALT);
 
 			/* free run in debug mode */
 			retval = target_resume(target, 1, 0, 0, 0);
-			/*
-			retval = ndsv5_srst_reset_target(target);
+			/* //retval = ndsv5_srst_reset_target(target); */
+			//if (retval != ERROR_OK)
+			//	buf_p[0] |= 0x80;
+			res_length = 2;
+			break;
+
+		case READ_REG:
+			retval = ndsv5_burner_read_reg(target, buf_p, &res_length);
 			if (retval != ERROR_OK)
 				buf_p[0] |= 0x80;
-			*/
-			res_length = 2;
 			break;
 
 		case RESET_AICE:
 		case BURNER_INIT:
 		case WRITE_IO:
-		case READ_REG:
 		case WRITE_REG:
 			/* do nothing */
 			res_length = 2;
@@ -425,6 +470,12 @@ static int ndsv5_burner_input(struct connection *connection)
 		case BURNER_QUIT:
 			debug_level = debug_level_bak;
 			return -1;
+
+		case BURNER_JTAG_CLOCK:
+			if (ndsv5_burner_set_jtag(target, buf_p) != ERROR_OK)
+				buf_p[0] |= 0x80;
+			res_length = 2;
+			break;
 
 		case BURNER_SELECT_CORE:
 			burner_coreid = get_u32(buf_p+1);

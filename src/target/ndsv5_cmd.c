@@ -1,4 +1,4 @@
-/*
+			/*
  * SPDX-License-Identifier: GPL-2.0+
  * Copyright (c) 2019 Andes Technology, Ya-Ting Lin <yating@andestech.com>
  * Copyright (C) 2019 Hellosun Wu <wujiheng.tw@gmail.com>
@@ -43,15 +43,16 @@ extern int ndsv5_profile_init(struct target *target);
 extern int ndsv5_profile_state(struct target *target);
 extern int ndsv5_profile_post(struct target *target);
 extern int ndsv5_burner_server_init(struct target *target);
-
-/* Trace */
 extern uint32_t ndsv5_tracer_all_cores_setting(void);
-extern uint32_t ndsv5_tracer_disable(struct target *target);
+extern uint32_t ndsv5_tracer_setting_current(struct target *target);
+extern uint32_t ndsv5_tracer_disable_all(struct target *target);
+extern uint32_t ndsv5_tracer_disable_current(struct target *target);
 extern int ndsv5_tracer_dumpfile(struct target *target, char *pFileName);
 extern int ndsv5_tracer_decode_pktfile(char *pFileName);
 extern int ndsv5_tracer_polling(struct target *target);
 extern int ndsv5_tracer_capability_check(struct target *target);
 extern int ndsv5_tracer_smem_capability_check(struct target *target);
+extern int ndsv5_tracer_pib_capability_check(struct target *target);
 extern uint32_t nds_tracer_action;
 extern uint32_t nds_tracer_stop_on_wrap;
 extern uint32_t nds_trTeSyncMax, nds_trTeInstMode;
@@ -59,9 +60,9 @@ extern uint32_t nds_teInhibitSrc;
 extern uint64_t nds_tracer_active_id;
 extern uint32_t nds_timestamp_on, nds_trTsControl;
 extern uint32_t nds_trTeFilteriMatchInst;
+extern uint32_t nds_trTeFilterMatchValueContext;
+extern uint32_t nds_trTeFilterMatchMaskContext;
 extern uint64_t nds_trRamStart;
-extern uint64_t nds_trRamSize;
-extern uint64_t nds_trRamLimit;
 
 
 /* global command context from openocd.c */
@@ -78,6 +79,7 @@ FILE *nds_script_dmi_read;
 FILE *nds_script_dmi_write;
 
 uint64_t ndsv5_reg_misa_value;
+uint64_t ndsv5_reg_marchid_value;
 uint32_t ndsv5_cur_script_status;
 uint32_t ndsv5_cur_reg_number;
 uint64_t ndsv5_cur_reg_value;
@@ -116,7 +118,7 @@ uint32_t nds_bak_debug_buf_size;
 
 struct nds32_v5 *gpnds32_v5;
 extern unsigned int MaxLogFileSize;
-char *ndsv5_dump_trace_folder;
+char* ndsv5_dump_trace_folder;
 
 
 static const char *const NDS_MEMORY_ACCESS_NAME[] = {
@@ -258,6 +260,7 @@ __COMMAND_HANDLER(handle_ndsv5_query_capability_command)
 	 * not(default value 0 mean bus mode icon exist) */
 	uint32_t if_tracer = 0, if_profiling = 1, disable_busmode = 0;
 	uint32_t if_tracer_smem = 0;
+	uint32_t if_tracer_pib = 0;
 	uint32_t hit_exception = 1, if_targetburn = 1;
 	uint32_t if_pwr_sample = 0;
 	uint32_t q_access_mode = 0;
@@ -302,11 +305,12 @@ __COMMAND_HANDLER(handle_ndsv5_query_capability_command)
 		if_tracer = 0;
 
 
-	if (if_tracer == 0) {
-		if_tracer_smem = 0;
-	} else {
+	if (if_tracer) {
 		if (ndsv5_tracer_smem_capability_check(target) == ERROR_OK)
 			if_tracer_smem = 1;
+
+		if (ndsv5_tracer_pib_capability_check(target) == ERROR_OK)
+			if_tracer_pib = 1;
 	}
 
 	/* check IX CCTL command support */
@@ -322,6 +326,7 @@ __COMMAND_HANDLER(handle_ndsv5_query_capability_command)
 
 	command_print(CMD, "tracer:%d;"
 			   "tracer_smem:%d;"
+			   "tracer_pib:%d;"
 			   "profiling:%d;"
 			   "disbus:%d;"
 			   "exception:%d;"
@@ -337,6 +342,7 @@ __COMMAND_HANDLER(handle_ndsv5_query_capability_command)
 			   "btb_dump:%d;",
 				if_tracer,
 				if_tracer_smem,
+				if_tracer_pib,
 				if_profiling,
 				disable_busmode,
 				hit_exception,
@@ -481,11 +487,11 @@ __COMMAND_HANDLER(handle_ndsv5_configure_command)
 		command_print(CMD, "configure: %s = 0x%08x", CMD_ARGV[0], tmp_jtag_max_scans);
 
 		if ((nds_ftdi_devices == 1) && (tmp_jtag_max_scans >= nds_jtag_max_scans)) {
-			LOG_INFO("nds_ftdi_devices=1 and user defined jtag_max_scans >= %d,"
+			NDS_INFO("nds_ftdi_devices=1 and user defined jtag_max_scans >= %d,"
 					"no update nds_jtag_max_scans", nds_jtag_max_scans);
-			LOG_INFO("nds_jtag_max_scans: %d", nds_jtag_max_scans);
+			NDS_INFO("nds_jtag_max_scans: %d", nds_jtag_max_scans);
 		} else {
-			LOG_INFO("Setting nds_jtag_max_scans(%d) to tmp_jtag_max_scans(%d)",
+			NDS_INFO("Setting nds_jtag_max_scans(%d) to tmp_jtag_max_scans(%d)",
 					nds_jtag_max_scans, tmp_jtag_max_scans);
 			nds_jtag_max_scans = tmp_jtag_max_scans;
 		}
@@ -760,7 +766,31 @@ __COMMAND_HANDLER(handle_ndsv5_configure_command)
 			LOG_ERROR("configure: %s failed", CMD_ARGV[0]);
 			return ERROR_FAIL;
 		}
-		command_print(CMD, "configure: %s = %s", CMD_ARGV[0], ndsv5_dump_trace_folder);
+		command_print(cmd, "configure: %s = %s", CMD_ARGV[0], ndsv5_dump_trace_folder);
+	} else if (strcmp(CMD_ARGV[0], "component") == 0) {
+		if (CMD_ARGC != 4) {
+			LOG_DEBUG("error! nds configure <component> [dmi|apb] <addr>");
+			ndsv5_print_components(CMD);
+			return ERROR_FAIL;
+		}
+
+		char *name = strdup(CMD_ARGV[1]);
+		uint64_t addr;
+		COMMAND_PARSE_NUMBER(u64, CMD_ARGV[3], addr);
+		int result = ERROR_OK;
+
+		if (strcmp(CMD_ARGV[2], "dmi") == 0)
+			result = ndsv5_update_component(CMD, name, NDSV5_COMP_ADDR_DMI, addr);
+		else if (strcmp(CMD_ARGV[2], "apb") == 0)
+			result = ndsv5_update_component(CMD, name, NDSV5_COMP_ADDR_APB, addr);
+		else {
+			NDS32_LOG("<-- configure: component addr_type '%s' unknown! -->", CMD_ARGV[2]);
+			result = ERROR_FAIL;
+		}
+
+		if (name)
+			free(name);
+		return result;
 	} else {
 		command_print(CMD, "configure: property '%s' unknown!", CMD_ARGV[0]);
 		NDS32_LOG("<-- configure: property '%s' unknown! -->", CMD_ARGV[0]);
@@ -894,11 +924,11 @@ COMMAND_HANDLER(ndsv5_handle_l2c_command)
 				COMMAND_PARSE_NUMBER(u64, CMD_ARGV[2], va);
 
 				if (CMD_ARGC == 3)
-					return ndsv5_dump_l2cache_va(target, va);
+					return ndsv5_dump_l2cache_va(target, CMD, va);
 
 				uint64_t way;
 				COMMAND_PARSE_NUMBER(u64, CMD_ARGV[3], way);
-				return ndsv5_dump_l2cache_va_way(target, va, way);
+				return ndsv5_dump_l2cache_va_way(target, CMD, va, way);
 			} else {
 				command_print(CMD, "%s: No valid parameter", target_name(target));
 				command_print(CMD, "Usage: dump va <address>");
@@ -914,7 +944,7 @@ COMMAND_HANDLER(ndsv5_handle_l2c_command)
 				LOG_ERROR("Usage: Usage: query config");
 				return ERROR_FAIL;
 			} else if (strcmp(CMD_ARGV[1], "config") == 0) {
-				return ndsv5_query_l2cache_config(target);
+				return ndsv5_query_l2cache_config(CMD, target);
 			} else {
 				command_print(CMD, "%s: No valid parameter", target_name(target));
 				command_print(CMD, "Usage: query config");
@@ -994,7 +1024,7 @@ __COMMAND_HANDLER(handle_ndsv5_memory_access_command)
 				memory->access_channel = NDS_MEMORY_ACC_BUS;
 			else {
 				LOG_ERROR("memory access channel: BUS, but sysbusaccess:%d", nds_sys_bus_supported);
-				LOG_INFO("Change back to CPU");
+				command_print(CMD, "Change back to CPU");
 				memory->access_channel = NDS_MEMORY_ACC_CPU;
 			}
 		} else if (strcmp(CMD_ARGV[0], "cpu") == 0) {
@@ -1074,7 +1104,8 @@ __COMMAND_HANDLER(handle_ndsv5_cache_command)
 	return result;
 }
 
-static int ndsv5_iord_cache_dump(struct target *target, unsigned int cache_type, const char **argv, int argc)
+static int ndsv5_iord_cache_dump(struct target *target, struct command_invocation *cmd,
+		unsigned int cache_type, const char **argv, int argc)
 {
 	if (argc < 2) {
 		LOG_ERROR("Usage: dump all <filename>(optimal) / dump va <address>");
@@ -1129,7 +1160,7 @@ static int ndsv5_iord_cache_dump(struct target *target, unsigned int cache_type,
 				file_name = "dcache.dump";
 		}
 		NDS_INFO("dump all %ccache to file: %s", file_name[0], file_name);
-		result = ndsv5_dump_cache(target, cache_type, file_name);
+		result = ndsv5_dump_cache(target, cmd, cache_type, file_name);
 	} else if (strcmp(argv[1], "va") == 0) {
 		if (argc < 3) {
 			LOG_ERROR("Usage: dump va <address>");
@@ -1141,7 +1172,7 @@ static int ndsv5_iord_cache_dump(struct target *target, unsigned int cache_type,
 			LOG_ERROR("option value ('%s') is not valid", argv[2]);
 			return result;
 		}
-		result = ndsv5_dump_cache_va(target, cache_type, va);
+		result = ndsv5_dump_cache_va(target, cmd, cache_type, va);
 	} else {
 		LOG_ERROR("%s: No valid parameter", target_name(target));
 		LOG_ERROR("Usage: dump all <filename>(optimal) / dump va <address>");
@@ -1197,13 +1228,13 @@ __COMMAND_HANDLER(handle_ndsv5_icache_command)
 		else if ((strcmp(CMD_ARGV[0], "enable") == 0) || (strcmp(CMD_ARGV[0], "disable") == 0))
 			result = ndsv5_enableornot_cache(target, ICACHE, CMD_ARGV[0]);
 		else if (strcmp(CMD_ARGV[0], "dump") == 0)
-			result = ndsv5_iord_cache_dump(target, ICACHE, CMD_ARGV, CMD_ARGC);
+			result = ndsv5_iord_cache_dump(target, CMD, ICACHE, CMD_ARGV, CMD_ARGC);
 		else if (strcmp(CMD_ARGV[0], "query") == 0) {
 			if (CMD_ARGC != 2) {
 				LOG_ERROR("Usage: Usage: query config");
 				return ERROR_FAIL;
 			} else if (strcmp(CMD_ARGV[1], "config") == 0) {
-				return ndsv5_query_l1cache_config(target, icache);
+				return ndsv5_query_l1cache_config(CMD, target, icache);
 			} else {
 				command_print(CMD, "%s: No valid parameter", target_name(target));
 				command_print(CMD, "Usage: query config");
@@ -1269,13 +1300,13 @@ __COMMAND_HANDLER(handle_ndsv5_dcache_command)
 		else if ((strcmp(CMD_ARGV[0], "enable") == 0) || (strcmp(CMD_ARGV[0], "disable") == 0))
 			result = ndsv5_enableornot_cache(target, DCACHE, CMD_ARGV[0]);
 		else if (strcmp(CMD_ARGV[0], "dump") == 0)
-			result = ndsv5_iord_cache_dump(target, DCACHE, CMD_ARGV, CMD_ARGC);
+			result = ndsv5_iord_cache_dump(target, CMD, DCACHE, CMD_ARGV, CMD_ARGC);
 		else if (strcmp(CMD_ARGV[0], "query") == 0) {
 			if (CMD_ARGC != 2) {
 				LOG_ERROR("Usage: Usage: query config");
 				return ERROR_FAIL;
 			} else if (strcmp(CMD_ARGV[1], "config") == 0) {
-				return ndsv5_query_l1cache_config(target, dcache);
+				return ndsv5_query_l1cache_config(CMD, target, dcache);
 			} else {
 				command_print(CMD, "%s: No valid parameter", target_name(target));
 				command_print(CMD, "Usage: query config");
@@ -1291,6 +1322,7 @@ __COMMAND_HANDLER(handle_ndsv5_dcache_command)
 static COMMAND_HELPER(handle_ndsv5_tlb_command_helper, enum tlb_target type)
 {
 	struct target *target = get_current_target(CMD_CTX);
+	//struct nds32 *nds32 = target_to_nds32(target);
 	int result;
 
 	if (ndsv5_tlb_dump_capability_check(target) != ERROR_OK) {
@@ -1313,7 +1345,7 @@ static COMMAND_HELPER(handle_ndsv5_tlb_command_helper, enum tlb_target type)
 					filename = strdup("tlb.dump");
 
 				LOG_DEBUG("dump all dcache to file: %s", filename);
-				result = ndsv5_dump_tlb_all(target, filename, type);
+				result = ndsv5_dump_tlb_all(target, filename, CMD, type);
 				free(filename);
 				return result;
 			} else if (strcmp(CMD_ARGV[1], "va") == 0) {
@@ -1323,7 +1355,7 @@ static COMMAND_HELPER(handle_ndsv5_tlb_command_helper, enum tlb_target type)
 				uint32_t asid = (uint32_t)-1;
 				if (CMD_ARGC == 4)
 					COMMAND_PARSE_NUMBER(u32, CMD_ARGV[3], asid);
-				return ndsv5_dump_tlb_va(target, va, type, asid);
+				return ndsv5_dump_tlb_va(target, CMD, va, type, asid);
 			} else {
 				command_print(CMD, "%s: No valid parameter", target_name(target));
 				command_print(CMD, "Usage: dump all <filename>(optimal) / dump va <address>");
@@ -1708,50 +1740,6 @@ COMMAND_HANDLER(ndsv5_get_smp_target_count)
 	return ERROR_OK;
 }
 
-/* Copy from target.c */
-static const struct jim_nvp nvp_target_endian[] = {
-	{ .name = "big",    .value = TARGET_BIG_ENDIAN },
-	{ .name = "little", .value = TARGET_LITTLE_ENDIAN },
-	{ .name = "be",     .value = TARGET_BIG_ENDIAN },
-	{ .name = "le",     .value = TARGET_LITTLE_ENDIAN },
-	{ .name = NULL,     .value = -1 },
-};
-COMMAND_HANDLER(handle_ndsv5_targets_command)
-{
-	int retval = ERROR_OK;
-	struct target *target = all_targets;
-	command_print(CMD, "    TargetName         Type       Endian TapName            State         Coreid  ");
-	command_print(CMD, "--  ------------------ ---------- ------ ------------------ ------------- --------");
-	while (target) {
-		const char *state;
-		char marker = ' ';
-
-		if (target->tap->enabled)
-			state = target_state_name(target);
-		else
-			state = "tap-disabled";
-
-		if (CMD_CTX->current_target == target)
-			marker = '*';
-
-		/* keep columns lined up to match the headers above */
-		command_print(CMD,
-				"%2d%c %-18s %-10s %-6s %-18s %-13s %4d",
-				target->target_number,
-				marker,
-				target_name(target),
-				target_type_name(target),
-				jim_nvp_value2name_simple(nvp_target_endian,
-					target->endianness)->name,
-				target->tap->dotted_name,
-				state,
-				target->coreid);
-		target = target->next;
-	}
-
-	return retval;
-}
-
 extern const struct command_registration riscv_exec_command_handlers[];
 extern const struct command_registration nds32_exec_command_handlers[];
 extern const struct command_registration semihosting_common_handlers[];
@@ -1907,13 +1895,6 @@ static const struct command_registration ndsv5_exec_command_handlers[] = {
 		.help = "tlb control",
 	},
 	{
-		.name = "targets",
-		.handler = handle_ndsv5_targets_command,
-		.mode = COMMAND_EXEC,
-		.usage = " ",
-		.help = "[targets]",
-	},
-	{
 		.chain = riscv_exec_command_handlers,
 	},
 	{
@@ -1990,6 +1971,8 @@ static const char * const target_debug_reason[] = {
 
 int ndsv5_handle_poll(struct target *target)
 {
+	ndsv5_tracer_polling(target);
+
 	if (nds_print_cur_state != target->state) {
 		if (target->state == TARGET_HALTED)
 			NDS_INFO("target->state = %s, target->debug_reason = %s",
@@ -2392,6 +2375,8 @@ static int ndsv5_init_option_reg(struct target *target)
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MMSC_CFG2].exist = false;
 
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MSECCFGH].exist = false;
+
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MCACHE_CTL2].exist = false;
 	}
 
 	reg_name = ndsv5_get_CSR_name(target, CSR_MISA);
@@ -2488,6 +2473,7 @@ static int ndsv5_init_option_reg(struct target *target)
 	p_cur_reg = register_get_by_name(target->reg_cache, reg_name, 1);
 	p_cur_reg->type->get(p_cur_reg);
 	reg_marchid_value = buf_get_u64(p_cur_reg->value, 0, p_cur_reg->size);
+	ndsv5_reg_marchid_value = reg_marchid_value;
 
 	reg_name = ndsv5_get_CSR_name(target, CSR_MIMPID);
 	p_cur_reg = register_get_by_name(target->reg_cache, reg_name, 1);
@@ -2545,16 +2531,11 @@ static int ndsv5_init_option_reg(struct target *target)
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG].exist = false;
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG2].exist = false;
 
-
-			/* mmsc_cfg2.XCSR == 1 */
-			NDS_INFO("disable CSR_MNDSX_RDATA / CSR_MNDSX_WDATA");
-			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNDSX_RDATA].exist = false;
-			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNDSX_WDATA].exist = false;
-
-
 			/* if RV32 mmsc_cfg2.ALT_FP_FMT == 1 */
 			NDS_INFO("disable CSR_UMISC_CTL");
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_UMISC_CTL].exist = false;
+			NDS_INFO("disable CSR_UZOBCTL");
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_UZOBCTL].exist = false;
 
 			/* mmsc_cfg2.MSC_EXT3 == 1 */
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MMSC_CFG3].exist = false;
@@ -2612,21 +2593,16 @@ static int ndsv5_init_option_reg(struct target *target)
 				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG2].exist = false;
 			}
 
-			/* if RV32 mmsc_cfg2.XCSR[24] == 1 */
-			if ((reg_mmsc_cfg2_value & 0x1000000) == 0) {
-				NDS_INFO("disable CSR_MNDSX_RDATA / CSR_MNDSX_WDATA");
-				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNDSX_RDATA].exist = false;
-				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNDSX_WDATA].exist = false;
-			}
-
 			/* if RV32 mmsc_cfg2.ALT_FP_FMT[25] == 1 */
 			if ((reg_mmsc_cfg2_value & 0x2000000) == 0) {
 				NDS_INFO("disable CSR_UMISC_CTL");
 				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_UMISC_CTL].exist = false;
+				NDS_INFO("disable CSR_UZOBCTL");
+				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_UZOBCTL].exist = false;
 			}
 
 			/* if RV32 mmsc_cfg2.MSC_EXT3[31] */
-			if ((reg_mmsc_cfg_value & 0x80000000) == 0) {
+			if ((reg_mmsc_cfg2_value & 0x80000000) == 0) {
 				NDS_INFO("disable CSR_MMSC_CFG3");
 				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MMSC_CFG3].exist = false;
 			}
@@ -2676,13 +2652,6 @@ static int ndsv5_init_option_reg(struct target *target)
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG].exist = false;
 		}
 
-		/* if RV64 mmsc_cfg.XCSR[56] == 1 */
-		if ((reg_mmsc_cfg_value & 0x100000000000000) == 0) {
-			NDS_INFO("disable CSR_MNDSX_RDATA / CSR_MNDSX_WDATA");
-			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNDSX_RDATA].exist = false;
-			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNDSX_WDATA].exist = false;
-		}
-
 		/* if RV64 mmsc_cfg.MSC_EXT3[63] == 1 */
 		if ((reg_mmsc_cfg_value & 0x8000000000000000) == 0) {
 			NDS_INFO("disable CSR_MMSC_CFG3");
@@ -2693,7 +2662,13 @@ static int ndsv5_init_option_reg(struct target *target)
 		if ((reg_mmsc_cfg_value & 0x200000000000000) == 0) {
 			NDS_INFO("disable CSR_UMISC_CTL");
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_UMISC_CTL].exist = false;
+			NDS_INFO("disable CSR_UZOBCTL");
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_UZOBCTL].exist = false;
 		}
+
+		/* Internal CSRs */
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRANDSEQH].exist = false;   /* PCG32 init sequence high (RV32 only) */
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRANDSTATEH].exist = false; /* PCG32 init state high (RV32 only) */
 	}
 
 	/* MMSC_CFG3 */
@@ -2712,10 +2687,21 @@ static int ndsv5_init_option_reg(struct target *target)
 		if ((reg_mmsc_cfg3_value & 0x80)) {
 			NDS_INFO("Enable CSR_UMISC_CTL");
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_UMISC_CTL].exist = true;
+			NDS_INFO("Enable CSR_UZOBCTL");
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_UZOBCTL].exist = true;
+		}
+
+		/* mmsc_cfg3.SHADOW == 1 */
+		if ((reg_mmsc_cfg3_value & 0x100) == 0) {
+			for (i = GDB_REGNO_COUNT+CSR_SHADOW_CFG; i <= GDB_REGNO_COUNT+CSR_SHADOW_DBG; i++)
+				target->reg_cache->reg_list[i].exist = false;
 		}
 	} else {
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MHVM_CFG].exist = false;
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MHVMB].exist = false;
+
+		for (i = GDB_REGNO_COUNT+CSR_SHADOW_CFG; i <= GDB_REGNO_COUNT+CSR_SHADOW_DBG; i++)
+			target->reg_cache->reg_list[i].exist = false;
 	}
 
 
@@ -2782,6 +2768,8 @@ static int ndsv5_init_option_reg(struct target *target)
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SSTATEEN1].exist = false;
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SSTATEEN2].exist = false;
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SSTATEEN3].exist = false;
+
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG3].exist = false;
 	} else {
 		reg_name = ndsv5_get_CSR_name(target, CSR_MRVARCH_CFG);
 		p_cur_reg = register_get_by_name(target->reg_cache, reg_name, 1);
@@ -2808,6 +2796,81 @@ static int ndsv5_init_option_reg(struct target *target)
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SSTATEEN1].exist = false;
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SSTATEEN2].exist = false;
 			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SSTATEEN3].exist = false;
+		}
+
+		/* mrvarch_cfg.MRVARCH_EXT3[63] == 1 */
+		if ((riscv_xlen(target) == 64) && ((reg_mrvarch_value & 0x8000000000000000) == 0)) {
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG3].exist = false;
+			NDS_INFO("disable CSR_MRVARCH_CFG3 register");
+		}
+	}
+
+
+	if (riscv_xlen(target) ==32) {
+		/* MRVARCH_CFG2 check */
+		if (!target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG2].exist) {
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG3].exist = false;
+		} else {
+			reg_name = ndsv5_get_CSR_name(target, CSR_MRVARCH_CFG2);
+			p_cur_reg = register_get_by_name(target->reg_cache, reg_name, 1);
+			p_cur_reg->type->get(p_cur_reg);
+			uint64_t reg_mrvarch2_value = buf_get_u64(p_cur_reg->value, 0, p_cur_reg->size);
+
+			/* RV32, mrvarch_cfg2.MRVARCH_EXT3[31] == 1 */
+			if ((reg_mrvarch2_value & 0x80000000) == 0) {
+				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG3].exist = false;
+				NDS_INFO("disable CSR_MRVARCH_CFG3 register");
+			}
+		}
+
+		if (!target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MCACHE_CTL].exist) {
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MCACHE_CTL2].exist = false;
+		} else {
+			reg_name = ndsv5_get_CSR_name(target, CSR_MCACHE_CTL);
+			p_cur_reg = register_get_by_name(target->reg_cache, reg_name, 1);
+			p_cur_reg->type->get(p_cur_reg);
+			uint64_t reg_mcache_ctl_value = buf_get_u64(p_cur_reg->value, 0, p_cur_reg->size);
+
+			/* mcache_ctl.CHE_EXT[31] == 1 */
+			if ((reg_mcache_ctl_value & 0x80000000) == 0)
+				target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MCACHE_CTL2].exist = false;
+		}
+	}
+
+
+	/* MRVARCH_CFG3 check */
+	if (!target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRVARCH_CFG3].exist) {
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRNXVEC].exist = false;
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNSCRATCH].exist = false;
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNEPC].exist = false;
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNCAUSE].exist = false;
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNSTATUS].exist = false;
+
+		/* SPMP Register */
+		NDS_INFO("Disable all SPMP registers");
+		for (i = GDB_REGNO_COUNT+CSR_SPMPCFG0; i <= GDB_REGNO_COUNT+CSR_SPMPSWITCH1; i++)
+			target->reg_cache->reg_list[i].exist = false;
+	} else {
+		reg_name = ndsv5_get_CSR_name(target, CSR_MRVARCH_CFG3);
+		p_cur_reg = register_get_by_name(target->reg_cache, reg_name, 1);
+		p_cur_reg->type->get(p_cur_reg);
+		uint64_t reg_mrvarch3_value = buf_get_u64(p_cur_reg->value, 0, p_cur_reg->size);
+
+		/* mrvarch_cfg3.Smrnmi[5:4] == 1 */
+		if ((reg_mrvarch3_value & 0x30) == 0) {
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MRNXVEC].exist = false;
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNSCRATCH].exist = false;
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNEPC].exist = false;
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNCAUSE].exist = false;
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MNSTATUS].exist = false;
+		}
+
+		/* mrvarch_cfg3.Spmp[3:2] == 1 */
+		if ((reg_mrvarch3_value & 0xc) == 0) {
+			/* SPMP Register */
+			NDS_INFO("Disable all SPMP registers");
+			for (i = GDB_REGNO_COUNT+CSR_SPMPCFG0; i <= GDB_REGNO_COUNT+CSR_SPMPSWITCH1; i++)
+				target->reg_cache->reg_list[i].exist = false;
 		}
 	}
 
@@ -3379,16 +3442,9 @@ int ndsv5_get_gdb_fileio_info(struct target *target, struct gdb_fileio_info *fil
 
 	NDS_INFO("hit syscall ID: 0x%x\n", (uint32_t)nds32->active_syscall_id);
 
-	/* free previous identifier storage */
-	if (NULL != fileio_info->identifier) {
-		free(fileio_info->identifier);
-		fileio_info->identifier = NULL;
-	}
-
 	switch (nds32->active_syscall_id) {
 		case NDS_EBREAK_EXIT:
-			fileio_info->identifier = (char *)malloc(5);
-			sprintf(fileio_info->identifier, "exit");
+			fileio_info->identifier = "exit";
 			fileio_info->param_1 = buf_get_u64(reg_r0->value, 0, reg_r0->size);
 			/*
 			target->is_program_exit = true;
@@ -3397,8 +3453,7 @@ int ndsv5_get_gdb_fileio_info(struct target *target, struct gdb_fileio_info *fil
 		case NDS_EBREAK_OPEN:
 			{
 				uint8_t filename[256];
-				fileio_info->identifier = (char *)malloc(5);
-				sprintf(fileio_info->identifier, "open");
+				fileio_info->identifier = "open";
 				fileio_info->param_1 = buf_get_u64(reg_r0->value, 0, reg_r0->size);
 				/* reserve fileio_info->param_2 for length of path */
 				fileio_info->param_3 = buf_get_u64(reg_r1->value, 0, reg_r1->size);
@@ -3410,27 +3465,23 @@ int ndsv5_get_gdb_fileio_info(struct target *target, struct gdb_fileio_info *fil
 			}
 			break;
 		case NDS_EBREAK_CLOSE:
-			fileio_info->identifier = (char *)malloc(6);
-			sprintf(fileio_info->identifier, "close");
+			fileio_info->identifier = "close";
 			fileio_info->param_1 = buf_get_u64(reg_r0->value, 0, reg_r0->size);
 			break;
 		case NDS_EBREAK_READ:
-			fileio_info->identifier = (char *)malloc(5);
-			sprintf(fileio_info->identifier, "read");
+			fileio_info->identifier = "read";
 			fileio_info->param_1 = buf_get_u64(reg_r0->value, 0, reg_r0->size);
 			fileio_info->param_2 = buf_get_u64(reg_r1->value, 0, reg_r1->size);
 			fileio_info->param_3 = buf_get_u64(reg_r2->value, 0, reg_r2->size);
 			break;
 		case NDS_EBREAK_WRITE:
-			fileio_info->identifier = (char *)malloc(6);
-			sprintf(fileio_info->identifier, "write");
+			fileio_info->identifier = "write";
 			fileio_info->param_1 = buf_get_u64(reg_r0->value, 0, reg_r0->size);
 			fileio_info->param_2 = buf_get_u64(reg_r1->value, 0, reg_r1->size);
 			fileio_info->param_3 = buf_get_u64(reg_r2->value, 0, reg_r2->size);
 			break;
 		case NDS_EBREAK_LSEEK:
-			fileio_info->identifier = (char *)malloc(6);
-			sprintf(fileio_info->identifier, "lseek");
+			fileio_info->identifier = "lseek";
 			fileio_info->param_1 = buf_get_u64(reg_r0->value, 0, reg_r0->size);
 			fileio_info->param_2 = buf_get_u64(reg_r1->value, 0, reg_r1->size);
 			fileio_info->param_3 = buf_get_u64(reg_r2->value, 0, reg_r2->size);
@@ -3438,8 +3489,7 @@ int ndsv5_get_gdb_fileio_info(struct target *target, struct gdb_fileio_info *fil
 		case NDS_EBREAK_UNLINK:
 			{
 				uint8_t filename[256];
-				fileio_info->identifier = (char *)malloc(7);
-				sprintf(fileio_info->identifier, "unlink");
+				fileio_info->identifier = "unlink";
 				fileio_info->param_1 = buf_get_u64(reg_r0->value, 0, reg_r0->size);
 				/* reserve fileio_info->param_2 for length of path */
 
@@ -3451,8 +3501,7 @@ int ndsv5_get_gdb_fileio_info(struct target *target, struct gdb_fileio_info *fil
 		case NDS_EBREAK_RENAME:
 			{
 				uint8_t filename[256];
-				fileio_info->identifier = (char *)malloc(7);
-				sprintf(fileio_info->identifier, "rename");
+				fileio_info->identifier = "rename";
 				fileio_info->param_1 = buf_get_u64(reg_r0->value, 0, reg_r0->size);
 				/* reserve fileio_info->param_2 for length of old path */
 				fileio_info->param_3 = buf_get_u64(reg_r1->value, 0, reg_r1->size);
@@ -3468,16 +3517,14 @@ int ndsv5_get_gdb_fileio_info(struct target *target, struct gdb_fileio_info *fil
 			}
 			break;
 		case NDS_EBREAK_FSTAT:
-			fileio_info->identifier = (char *)malloc(6);
-			sprintf(fileio_info->identifier, "fstat");
+			fileio_info->identifier = "fstat";
 			fileio_info->param_1 = buf_get_u64(reg_r0->value, 0, reg_r0->size);
 			fileio_info->param_2 = buf_get_u64(reg_r1->value, 0, reg_r1->size);
 			break;
 		case NDS_EBREAK_STAT:
 			{
 				uint8_t filename[256];
-				fileio_info->identifier = (char *)malloc(5);
-				sprintf(fileio_info->identifier, "stat");
+				fileio_info->identifier = "stat";
 				fileio_info->param_1 = buf_get_u64(reg_r0->value, 0, reg_r0->size);
 				/* reserve fileio_info->param_2 for length of old path */
 				fileio_info->param_3 = buf_get_u64(reg_r1->value, 0, reg_r1->size);
@@ -3488,15 +3535,13 @@ int ndsv5_get_gdb_fileio_info(struct target *target, struct gdb_fileio_info *fil
 			}
 			break;
 		case NDS_EBREAK_GETTIMEOFDAY:
-			fileio_info->identifier = (char *)malloc(13);
-			sprintf(fileio_info->identifier, "gettimeofday");
+			fileio_info->identifier = "gettimeofday";
 			fileio_info->param_1 = buf_get_u64(reg_r0->value, 0, reg_r0->size);
 			fileio_info->param_2 = buf_get_u64(reg_r1->value, 0, reg_r1->size);
 			break;
 
 		default:
-			fileio_info->identifier = (char *)malloc(8);
-			sprintf(fileio_info->identifier, "unknown");
+			fileio_info->identifier = "unknown";
 			break;
 	}
 
@@ -3678,7 +3723,7 @@ int ndsv5_virtual_hosting_check(struct target *target)
 			/* Check  syscall id */
 			uint32_t i;
 			for (i = 0; i < NDS_EBREAK_NUMS; i++) {
-				if ((reg_syscall_value&0xFFFF) == (SEMIHOSTING_SYS_GET_CMDLINE&0xFFFF)) {
+				if ((reg_syscall_value&0xFFFF) == (SEMIHOSTING_SYS_GET_CMDLINE&0xFFFF)) { 
 					NDS_INFO("Virtual hosting get cmdline");
 
 					if (!p_nds_cmdline) {
@@ -4120,7 +4165,7 @@ int ndsv5_disassemble_c_load(unsigned int opcode, unsigned int *p_insn,
 
 	for (i = MATCH_ID_C_LOAD; i < MATCH_ID_LOAD_NUMS; i++) {
 		/* For Zcb check [15-10][1-0] */
-		if (i >= MATCH_ID_C_ZCB_LOAD)
+		if ( i >= MATCH_ID_C_ZCB_LOAD)
 			chk_opcode = (opcode & MASK_ZCB_LOAD_STORE);
 		if (chk_opcode == g_insn_load_match[i])
 			break;
@@ -5044,11 +5089,18 @@ __COMMAND_HANDLER(handle_ndsv5_tracer_command)
 	}
 
 	static int if_tracer_smem = -1;
+	static int if_tracer_pib = -1;
 	if (if_tracer_smem == -1) {
 		if (ndsv5_tracer_smem_capability_check(target) == ERROR_OK)
 			if_tracer_smem = 1;
 		else
 			if_tracer_smem = 0;
+	}
+	if (if_tracer_pib == -1) {
+		if (ndsv5_tracer_pib_capability_check(target) == ERROR_OK)
+			if_tracer_pib = 1;
+		else
+			if_tracer_pib = 0;
 	}
 
 	if (strcmp(CMD_ARGV[0], "on") == 0) {
@@ -5058,7 +5110,15 @@ __COMMAND_HANDLER(handle_ndsv5_tracer_command)
 		ndsv5_tracer_all_cores_setting();
 	} else if (strcmp(CMD_ARGV[0], "off") == 0) {
 		LOG_DEBUG("trace off");
-		ndsv5_tracer_disable(target);
+		ndsv5_tracer_disable_all(target);
+	} else if (strcmp(CMD_ARGV[0], "current-on") == 0) {
+		LOG_DEBUG("trace current-enable");
+		nds_tracer_action = CSR_MCONTROL_ACTION_TRACE_OFF;
+		nds_tracer_stop_on_wrap = 1;
+		ndsv5_tracer_setting_current(target);
+	} else if (strcmp(CMD_ARGV[0], "current-off") == 0) {
+		LOG_DEBUG("trace current-disable");
+		ndsv5_tracer_disable_current(target);
 	} else if (strcmp(CMD_ARGV[0], "to") == 0) {
 		LOG_DEBUG("trace to");
 		nds_tracer_action = CSR_MCONTROL_ACTION_TRACE_OFF;
@@ -5104,6 +5164,18 @@ __COMMAND_HANDLER(handle_ndsv5_tracer_command)
 		COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], matchinst);
 		LOG_DEBUG("match-inst 0x%x", matchinst);
 		nds_trTeFilteriMatchInst = matchinst;
+	} else if ((strcmp(CMD_ARGV[0], "match-context") == 0) && (CMD_ARGC > 1)) {
+		uint32_t matchcontext = 0;
+		COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], matchcontext);
+
+		if (CMD_ARGC > 2) {
+			uint32_t matchmask = 0;
+			COMMAND_PARSE_NUMBER(u32, CMD_ARGV[2], matchmask);
+			LOG_DEBUG("match-mask 0x%x", matchmask);
+			nds_trTeFilterMatchMaskContext = matchmask;
+		}
+		LOG_DEBUG("match-context 0x%x", matchcontext);
+		nds_trTeFilterMatchValueContext = matchcontext;
 	} else if (strcmp(CMD_ARGV[0], "timestamp") == 0) {
 		unsigned int timestamp_on = 0;
 		if (CMD_ARGC > 1) {
@@ -5127,6 +5199,7 @@ __COMMAND_HANDLER(handle_ndsv5_tracer_command)
 
 		COMMAND_PARSE_NUMBER(u64, CMD_ARGV[1], nds_trRamStart);
 		nds_trRamStart &= ~(0xf); /* For 16-bytes align */
+		ndsv5_trace_mem_mode = NDSV5_TRACE_MEM_SMEM;
 		LOG_DEBUG("trRamStart 0x%" PRIx64, nds_trRamStart);
 	} else if ((strcmp(CMD_ARGV[0], "smem-size") == 0) && (CMD_ARGC > 1)) {
 		if (if_tracer_smem == 0) {
@@ -5134,19 +5207,32 @@ __COMMAND_HANDLER(handle_ndsv5_tracer_command)
 			return ERROR_FAIL;
 		}
 
-		COMMAND_PARSE_NUMBER(u64, CMD_ARGV[1], nds_trRamSize);
-		if (nds_trRamSize == 0x0) {
-			LOG_DEBUG("smem-size 0, reset nds_trRamLimit!");
-			nds_trRamSize = 0;
-			nds_trRamLimit = 0;
+		COMMAND_PARSE_NUMBER(u64, CMD_ARGV[1], ndsv5_trace_ram_size);
+		ndsv5_trace_ram_size &= ~(0xf); /* For 16-bytes align */
+
+		if (ndsv5_trace_ram_size == 0x0) {
+			LOG_DEBUG("Reset Trace ram_mode to SRAM");
+			ndsv5_trace_mem_mode = NDSV5_TRACE_MEM_SRAM;
+			ndsv5_trace_ram_size = 4 * 1024;
 		} else {
-			nds_trRamLimit = nds_trRamStart + nds_trRamSize;
-			nds_trRamLimit &= ~(0xf); /* For 16-bytes align */
-			nds_trRamSize = nds_trRamLimit - nds_trRamStart;
-			nds_trRamLimit -= 1;
+			LOG_DEBUG("smem-size 0x%" PRIx64, ndsv5_trace_ram_size);
+			ndsv5_trace_mem_mode = NDSV5_TRACE_MEM_SMEM;
 		}
-		LOG_DEBUG("trRamLimit 0x%" PRIx64 " (Size: 0x%" PRIx64 ")",
-				nds_trRamLimit, nds_trRamSize);
+	} else if ((strcmp(CMD_ARGV[0], "ram-mode") == 0) && (CMD_ARGC > 1)) {
+		if (strcmp(CMD_ARGV[1], "sram") == 0)
+			ndsv5_trace_mem_mode = NDSV5_TRACE_MEM_SRAM;
+		else if (strcmp(CMD_ARGV[1], "smem") == 0)
+			ndsv5_trace_mem_mode = NDSV5_TRACE_MEM_SMEM;
+		else if (strcmp(CMD_ARGV[1], "pib") == 0)
+			ndsv5_trace_mem_mode = NDSV5_TRACE_MEM_PIB;
+		else
+			LOG_ERROR("Unrecognize trace ram_mode %s", CMD_ARGV[1]);
+
+		LOG_DEBUG("Current Trace ram-mode %s", CMD_ARGV[1]);
+	} else if ((strcmp(CMD_ARGV[0], "ram-size") == 0) && (CMD_ARGC > 1)) {
+		COMMAND_PARSE_NUMBER(u64, CMD_ARGV[1], ndsv5_trace_ram_size);
+		ndsv5_trace_ram_size &= ~(0xf); /* For 16-bytes align */
+		LOG_DEBUG("trace ram-size 0x%" PRIx64, ndsv5_trace_ram_size);
 	} else {
 		command_print(CMD, "NDS tracer command ERROR");
 	}
