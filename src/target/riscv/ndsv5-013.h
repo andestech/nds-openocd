@@ -142,6 +142,6 @@ int write_memory_bus_v1_opt(struct target *target, target_addr_t address,
 extern uint32_t nds_no_reset_detect;
 extern uint32_t nds_no_halt_detect;
 
-
+extern int ndsv5_set_group(struct target *target, int coreid, int grouptype, int groupid);
 
 #endif /* __NDSV5_013_H_ */

@@ -52,6 +52,9 @@ static unsigned long compare_words = 0x100000;
 #define LOG_TIME    LOG_DEBUG
 #endif
 
+extern __COMMAND_HANDLER(handle_ndsv5_tracer_command);
+extern bool is_ndsv5(struct target *target);
+
 static unsigned long nds32_skip_find_1stsync;
 static unsigned long nds32_fifo_words_per_transfer = (TRACER_MAX_OTB_PER_TRANSFER >> 2);
 unsigned long nds32_chk_tracer_support;
@@ -1509,6 +1512,8 @@ __COMMAND_HANDLER(handle_nds32_tracer_command)
 	struct nds32 *nds32 = target_to_nds32(target);
 
 	if (!is_nds32(nds32)) {
+		if (is_ndsv5(target))
+			return handle_ndsv5_tracer_command(cmd);
 		command_print(CMD, "current target isn't an Andes core");
 		return ERROR_FAIL;
 	}

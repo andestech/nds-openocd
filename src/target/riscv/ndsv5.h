@@ -79,16 +79,29 @@ enum ndsv5_trace_mem_mode {
 };
 
 struct ndsv5_indirect_csr_info {
-	uint32_t priv;
-	uint32_t groupid;
-	uint32_t ireg;
+	uint32_t   priv;
+	uint64_t   groupid;
+	uint32_t   ireg;
 	const char *name;
+	uint8_t    custom;
+
+	/* Note from Smcsrind/Sscsrind extension spec:
+	 * Values of miselect with the most-significant bit set (bit XLEN-1 = 1)
+	 * are designated only for custom use,
+	 * presumably for accessing custom registers through the alias CSRs.
+	 * Values with the MSB clear are for standard use and reserved until allocated.
+	 * If XLEN changes, the MSB of miselect moves accordingly,
+	 * retaining its value.
+	 *
+	 * */
 };
 
 enum ndsv5_component_id {
 	NDSV5_COMP_NCETENC,
 	NDSV5_COMP_NCETMUX,
 	NDSV5_COMP_NCETBUF,
+	NDSV5_COMP_NCETAXI,
+	NDSV5_COMP_NCETMUX2,
 
 	NDSV5_COMP_COUNT,
 };
@@ -112,6 +125,12 @@ extern struct ndsv5_component ndsv5_comps[];
 	.addr = ad,                     \
 }
 
+#define DMI_TEADDRESSBASE   (0x8000) /* Trace Encoder Base Address */
+#define DMI_TMUXADDRESSBASE (0x4000) /* Trace Multiplexer Base Address */
+#define DMI_TBADDRESSBASE   (0x2000) /* Trace Buffer Base Address */
+#define APB_TAADDRESSBASE    (0xF231E000) /* Bus Trace Encoder */
+#define APB_TMUX2ADDRESSBASE (0xF231F000) /* Level-2 Trace Multiplexer */
+#define APB_TRACEADDRESSUNKNOWN (0xFFFFFFFF) /* Unknown */
 
 
 
@@ -137,6 +156,7 @@ extern uint32_t ndsv5_without_announce;
 extern uint32_t ndsv5_dmi_abstractcs;
 extern uint32_t ndsv5_byte_access_from_burn;
 extern uint32_t ndsv5_mpsse_t2;
+extern uint32_t ndsv5_target_keep_halt_as_examine;
 
 #if _NDS_MEM_Q_ACCESS_
 extern uint32_t nds_dmi_quick_access;
@@ -532,5 +552,6 @@ int riscv_program_vslide1down_vx(struct riscv_program *p, enum gdb_regno rd, enu
 /********************************************************************/
 
 extern int ndsv5013_hart_count(struct target *target);
+extern bool is_ndsv5(struct target *target);
 
 #endif /* __NDSV5_H_ */

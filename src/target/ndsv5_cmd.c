@@ -63,6 +63,7 @@ extern uint32_t nds_trTeFilteriMatchInst;
 extern uint32_t nds_trTeFilterMatchValueContext;
 extern uint32_t nds_trTeFilterMatchMaskContext;
 extern uint64_t nds_trRamStart;
+extern uint32_t nds_trTeInstExtendAddrMSB;
 
 
 /* global command context from openocd.c */
@@ -591,8 +592,20 @@ __COMMAND_HANDLER(handle_ndsv5_configure_command)
 				return ERROR_FAIL;
 			}
 			g_value_milmb = ndsv5_get_register_value(reg_milmb);
-			if ((g_value_milmb & 0x1) == 0)
-				ndsv5_set_register_value(reg_milmb, (g_value_milmb | 0x1));
+
+			/* Enable ILM */
+			if ((g_value_milmb & 0x1) == 0) {
+				LOG_DEBUG("Enable ILM for target burner");
+				g_value_milmb |= 0x1;
+				ndsv5_set_register_value(reg_milmb, g_value_milmb);
+			}
+
+			/* Disable ECC if default ON */
+			if ((g_value_milmb & 0x6) != 0) {
+				LOG_DEBUG("Disable ILM.ECC for target burner");
+				g_value_milmb &= ~0x6UL;
+				ndsv5_set_register_value(reg_milmb, g_value_milmb);
+			}
 		}
 	} else if (strcmp(CMD_ARGV[0], "dmi_quick_access") == 0) {
 		if (CMD_ARGC > 1)
@@ -791,6 +804,10 @@ __COMMAND_HANDLER(handle_ndsv5_configure_command)
 		if (name)
 			free(name);
 		return result;
+	} else if (strcmp(CMD_ARGV[0], "target_keep_halt_as_examine") == 0) {
+		if (CMD_ARGC > 1)
+			COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], ndsv5_target_keep_halt_as_examine);
+		LOG_DEBUG("configure: %s = 0x%08x", CMD_ARGV[0], ndsv5_target_keep_halt_as_examine);
 	} else {
 		command_print(CMD, "configure: property '%s' unknown!", CMD_ARGV[0]);
 		NDS32_LOG("<-- configure: property '%s' unknown! -->", CMD_ARGV[0]);
@@ -983,6 +1000,8 @@ COMMAND_HANDLER(nds32_handle_count_to_check_dm_command)
 		LOG_ERROR("expected exactly one argument to nds count_to_check_dm "
 				"<count_of_checking>");
 
+	riscv_command_timeout_sec = v5_count_to_check_dm / 1000;
+	riscv_reset_timeout_sec = v5_count_to_check_dm / 1000;
 	return ERROR_OK;
 }
 
@@ -1388,6 +1407,67 @@ __COMMAND_HANDLER(handle_ndsv5_dtlb_command)
 __COMMAND_HANDLER(handle_ndsv5_stlb_command)
 {
 	return CALL_COMMAND_HANDLER(handle_ndsv5_tlb_command_helper, NDSV5_TLB_TARGET_STLB);
+}
+
+__COMMAND_HANDLER(handle_ndsv5_set_group_command)
+{
+	/* nds set_group <core-id> <group-type> <group-id>] */
+	struct target *target = get_current_target(CMD_CTX);
+
+	if (CMD_ARGC > 0) {
+		int coreid;
+		int grouptype;
+		int groupid;
+
+		COMMAND_PARSE_NUMBER(int, CMD_ARGV[0], coreid);
+		COMMAND_PARSE_NUMBER(int, CMD_ARGV[2], groupid);
+
+		LOG_DEBUG("target: %s", target_name(target));
+
+		if (strncmp(CMD_ARGV[1], "resume", 6) == 0)
+			grouptype = 1;
+		else
+			grouptype = 0;
+
+		if (coreid < 0)
+			LOG_DEBUG("coreid: all hartid in SMP");
+		else
+			LOG_DEBUG("coreid: %d", coreid);
+
+		LOG_DEBUG("grouptype: %s", grouptype ? "RESUME" : "HALT");
+
+		if (groupid < 0) {
+			LOG_ERROR("Error groupid %d, force set to 0", groupid);
+			groupid = 0;
+		} else {
+			LOG_DEBUG("groupid: %d", groupid);
+		}
+
+		if (coreid >= 0)
+			return ndsv5_set_group(target, coreid, grouptype, groupid);
+		else {
+			if (target->smp) {
+				struct target_list *tlist;
+				foreach_smp_target(tlist, target->smp_targets) {
+					struct target *t = tlist->target;
+					LOG_DEBUG("target: %s", target_name(t));
+					int retval = ndsv5_set_group(t, t->coreid, grouptype, groupid);
+					if (retval != ERROR_OK) {
+						LOG_ERROR("SMP set failed on %s, skip setting!", target_name(t));
+						return ERROR_FAIL;
+					}
+				}
+			} else {
+				LOG_ERROR("target not SMP, unable to list hartid, skip setting!");
+				return ERROR_FAIL;
+			}
+		}
+	} else {
+		command_print(CMD, "%s: No valid parameter", target_name(target));
+		return ERROR_FAIL;
+	}
+
+	return ERROR_OK;
 }
 
 __COMMAND_HANDLER(handle_ndsv5_reset_and_hold)
@@ -1895,6 +1975,13 @@ static const struct command_registration ndsv5_exec_command_handlers[] = {
 		.help = "tlb control",
 	},
 	{
+		.name = "set_group",
+		.handler = handle_ndsv5_set_group_command,
+		.mode = COMMAND_EXEC,
+		.usage = "nds set_group <coreid> halt/resume <group-id>",
+		.help = "set/clear core in halt/resume group",
+	},
+	{
 		.chain = riscv_exec_command_handlers,
 	},
 	{
@@ -2232,7 +2319,8 @@ struct reg_arch_type ndsv5_reg_arch_type = {
 	.set = ndsv5_register_set
 };
 
-char gNDSVectorRegBuf[32][1024/8];
+/* WARNING: vector support up to 4096 bits */
+char gNDSVectorRegBuf[32][4096/8];
 static int ndsv5_register_vector_get(struct reg *reg)
 {
 	riscv_reg_info_t *reg_info = reg->arch_info;
@@ -2377,6 +2465,8 @@ static int ndsv5_init_option_reg(struct target *target)
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MSECCFGH].exist = false;
 
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MCACHE_CTL2].exist = false;
+
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MMSC_CFG4].exist = false;
 	}
 
 	reg_name = ndsv5_get_CSR_name(target, CSR_MISA);
@@ -2693,8 +2783,15 @@ static int ndsv5_init_option_reg(struct target *target)
 
 		/* mmsc_cfg3.SHADOW == 1 */
 		if ((reg_mmsc_cfg3_value & 0x100) == 0) {
+			NDS_INFO("Disable CSR_SHADOW_CFG/CTL/DBG");
 			for (i = GDB_REGNO_COUNT+CSR_SHADOW_CFG; i <= GDB_REGNO_COUNT+CSR_SHADOW_DBG; i++)
 				target->reg_cache->reg_list[i].exist = false;
+		}
+
+		/* mmsc_cfg3.MSC_EXT4 == 1 */
+		if ((reg_mmsc_cfg3_value & 0x80000000) == 0) {
+			NDS_INFO("Disable CSR_MMSC_CFG4");
+			target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_UMISC_CTL].exist = true;
 		}
 	} else {
 		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MHVM_CFG].exist = false;
@@ -2702,8 +2799,10 @@ static int ndsv5_init_option_reg(struct target *target)
 
 		for (i = GDB_REGNO_COUNT+CSR_SHADOW_CFG; i <= GDB_REGNO_COUNT+CSR_SHADOW_DBG; i++)
 			target->reg_cache->reg_list[i].exist = false;
-	}
 
+
+		target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_MMSC_CFG4].exist = false;
+	}
 
 	/* mmsc_cfg.PMNDS == 1 */
 	if ((reg_mmsc_cfg_value & 0x8000) == 0) {
@@ -4675,7 +4774,7 @@ int ndsv5_hit_watchpoint(struct target *target,
 	uint64_t watched_addr = nds32->watched_address;
 	uint32_t watched_length = nds32->watched_length;
 
-	LOG_DEBUG("watch_addr = 0x%lx, watched_length = %d", watched_addr, watched_length);
+	LOG_DEBUG("watch_addr = 0x%" PRIx64 ", watched_length = %" PRIx32, watched_addr, watched_length);
 	if (watched_addr == 0xFFFFFFFF)
 		return ERROR_FAIL;
 
@@ -5233,6 +5332,11 @@ __COMMAND_HANDLER(handle_ndsv5_tracer_command)
 		COMMAND_PARSE_NUMBER(u64, CMD_ARGV[1], ndsv5_trace_ram_size);
 		ndsv5_trace_ram_size &= ~(0xf); /* For 16-bytes align */
 		LOG_DEBUG("trace ram-size 0x%" PRIx64, ndsv5_trace_ram_size);
+	} else if ((strcmp(CMD_ARGV[0], "trTeInstExtendAddrMSB") == 0) && (CMD_ARGC > 1)) {
+		uint32_t config = 0;
+		COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], config);
+		LOG_DEBUG("trTeInstExtendAddrMSB 0x%x", config);
+		nds_trTeInstExtendAddrMSB = config;
 	} else {
 		command_print(CMD, "NDS tracer command ERROR");
 	}

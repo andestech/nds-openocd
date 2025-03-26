@@ -1813,14 +1813,8 @@ static int set_group(struct target *target, bool *supported, unsigned group, gro
 	uint32_t read_val;
 	if (dmi_read(target, &read_val, DM_DMCS2) != ERROR_OK)
 		return ERROR_FAIL;
-#if _NDS_V5_ONLY_
-	if (grouptype == HALTGROUP)
-		*supported = get_field(read_val, DM_DMCS2_GROUP) == group;
-	else
-		*supported = get_field(read_val, DM_DMCS2_GROUPTYPE) == 1;
-#else
 	*supported = get_field(read_val, DM_DMCS2_GROUP) == group;
-#endif
+
 	return ERROR_OK;
 }
 
@@ -2091,8 +2085,19 @@ static int examine(struct target *target)
 	bool halted = riscv_is_halted(target);
 	if (!halted) {
 		if (riscv013_halt_go(target) != ERROR_OK) {
+#if _NDS_V5_ONLY_
+			/* Force skip examine */
+			if (nds_no_halt_detect) {
+				LOG_INFO("[%s] Fatal: Hart %d failed to halt during examine()",
+						target_name(target), r->current_hartid);
+			} else {
+				LOG_ERROR("[%s] Fatal: Hart %d failed to halt during examine()",
+						target_name(target), r->current_hartid);
+			}
+#else
 			LOG_ERROR("[%s] Fatal: Hart %d failed to halt during examine()",
 					target_name(target), r->current_hartid);
+#endif
 			return ERROR_FAIL;
 		}
 	}
@@ -2177,11 +2182,11 @@ static int examine(struct target *target)
 		LOG_DEBUG("target is rv32e");
 	}
 
-	if (nds32->reset_halt_as_examine) {
-		LOG_DEBUG("reset_halt_as_examine, target->state: 0x%08x", target->state);
+	if (nds32->reset_halt_as_examine || ndsv5_target_keep_halt_as_examine) {
+		LOG_DEBUG("reset_halt_as_examine / keep_halt, target->state: 0x%08x", target->state);
 		target->debug_reason = DBG_REASON_DBGRQ;
 		target->state = TARGET_HALTED;
-		LOG_DEBUG("reset_halt_as_examine, target->state: 0x%08x", target->state);
+		LOG_DEBUG("reset_halt_as_examine / keep_halt, target->state: 0x%08x", target->state);
 	} else {
 		riscv013_step_or_resume_current_hart(target, false, false);
 		target->state = TARGET_RUNNING;
@@ -5063,7 +5068,11 @@ static int riscv013_halt_go(struct target *target)
 		if (riscv_is_halted(target))
 			break;
 
-		alive_sleep(500);
+		/* Force skip */
+		if (nds_no_halt_detect)
+			break;
+
+		alive_sleep(50);
 	}
 #else
 	for (size_t i = 0; i < 256; ++i)
@@ -6124,6 +6133,7 @@ int ndsv5_reset_halt_as_examine(struct target *target)
 				continue;
 			}
 
+
 			dtmcontrol = dtmcontrol_scan(curr_target, 0);
 			LOG_DEBUG("dtmcontrol=0x%x", dtmcontrol);
 
@@ -6840,7 +6850,9 @@ read_memory_bus_v1_opt_retry:
 	while (next_address < end_address) {
 		uint32_t sbcs = set_field(0, DM_SBCS_SBREADONADDR, 1);
 		sbcs |= sb_sbaccess(size);
-		sbcs = set_field(sbcs, DM_SBCS_SBAUTOINCREMENT, 1);
+
+		if (count > 1)
+			sbcs = set_field(sbcs, DM_SBCS_SBAUTOINCREMENT, 1);
 		sbcs = set_field(sbcs, DM_SBCS_SBREADONDATA, count > 1);
 		dmi_write(target, DM_SBCS, sbcs);
 
@@ -6939,7 +6951,7 @@ read_memory_bus_v1_opt_retry:
 			/* Some error indicating the bus access failed, but not because of
 			 * something we did wrong. */
 			unsigned sb_error = get_field(sbcs, DM_SBCS_SBERROR);
-			NDS32_LOG("<-- DM_SBCS_SBERROR = 0x%x, address = 0x%lx -->", sb_error, (long unsigned int)address);
+			LOG_DEBUG("<-- DM_SBCS_SBERROR = 0x%x, address = 0x%lx -->", sb_error, (long unsigned int)address);
 			dmi_write(target, DM_SBCS, DM_SBCS_SBERROR);
 			return ERROR_FAIL;
 			/*
@@ -7137,7 +7149,7 @@ write_memory_bus_v1_opt_retry:
 			/* Some error indicating the bus access failed, but not because of
 			 * something we did wrong. */
 			unsigned sb_error = get_field(sbcs, DM_SBCS_SBERROR);
-			NDS32_LOG("<-- DM_SBCS_SBERROR = 0x%x, address = 0x%lx -->", sb_error, (long unsigned int)address);
+			LOG_DEBUG("<-- DM_SBCS_SBERROR = 0x%x, address = 0x%lx -->", sb_error, (long unsigned int)address);
 			dmi_write(target, DM_SBCS, DM_SBCS_SBERROR);
 			return ERROR_FAIL;
 			/*
@@ -7538,6 +7550,18 @@ int nds_indirect_get_reg(struct reg *reg)
 		return ERROR_FAIL;
 	}
 
+	/* For custom CSRs, set [XLEN - 1] to 1 */
+	if (ndsv5_indirect_csrs[csr_number].custom) {
+		unsigned int xlen = riscv_xlen(target);
+		if (xlen == 32 || xlen == 64) {
+			ndsv5_indirect_csrs[csr_number].groupid |= 1ULL << (xlen - 1);
+		} else {
+			LOG_ERROR("Unsupported xlen: %d", xlen);
+			return ERROR_FAIL;
+		}
+	}
+
+
 	/* Write group id to $siselect */
 	if (register_write_direct(target, csr_iselect, ndsv5_indirect_csrs[csr_number].groupid) !=
 			ERROR_OK) {
@@ -7675,5 +7699,70 @@ int ndsv5013_hart_count(struct target *target)
 	return dm->ndsv5_hart_count;
 }
 
+int ndsv5_set_group(struct target *target, int coreid, int grouptype, int groupid)
+{
+	int retval = ERROR_OK;
+	RISCV_INFO(r);
+	int coreid_bak = r->current_hartid;
+	r->current_hartid = coreid;
+	if (riscv013_select_current_hart(target) != ERROR_OK)
+		return ERROR_FAIL;
+
+	bool haltgroup_supported;
+	if (set_group(target, &haltgroup_supported, groupid, grouptype) != ERROR_OK)
+		return ERROR_FAIL;
+
+	/* Check group result */
+	char *group_type_str;
+	group_type_str = (grouptype ? "resume" : "halt");
+	if (haltgroup_supported)
+		LOG_DEBUG("Core %d made part of %s group %d.", coreid, group_type_str, groupid);
+	else {
+		LOG_ERROR("Core %d could not be made part of %s group %d.", coreid, group_type_str, groupid);
+		retval = ERROR_FAIL;
+	}
+
+	r->current_hartid = coreid_bak;
+	if (riscv013_select_current_hart(target) != ERROR_OK)
+		return ERROR_FAIL;
+
+	return retval;
+}
+
+int ndsv5_013_query_group(struct target *target)
+{
+	/* Not ndsv5 target */
+	if (!is_ndsv5(target)) {
+		LOG_DEBUG("Current target is not ndsv5");
+		target->haltgroup = 0;
+		target->resumegroup = 0;
+		return ERROR_FAIL;
+	}
+
+	if (riscv013_select_current_hart(target) != ERROR_OK)
+		return ERROR_FAIL;
+
+	uint32_t val;
+	if (dmi_read(target, &val, DM_DMCS2) != ERROR_OK)
+		return ERROR_FAIL;
+
+	val = set_field(val, DM_DMCS2_GROUPTYPE, 0);
+	if (dmi_write(target, DM_DMCS2, val) != ERROR_OK)
+		return ERROR_FAIL;
+	if (dmi_read(target, &val, DM_DMCS2) != ERROR_OK)
+		return ERROR_FAIL;
+	target->haltgroup = get_field(val, DM_DMCS2_GROUP);
+
+	val = set_field(val, DM_DMCS2_GROUPTYPE, 1);
+	if (dmi_write(target, DM_DMCS2, val) != ERROR_OK)
+		return ERROR_FAIL;
+	if (dmi_read(target, &val, DM_DMCS2) != ERROR_OK)
+		return ERROR_FAIL;
+	target->resumegroup = get_field(val, DM_DMCS2_GROUP);
+
+	return ERROR_OK;
+}
+
 #endif /* _NDS_V5_ONLY_ */
 /********************************************************************/
+

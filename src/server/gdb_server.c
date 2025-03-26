@@ -2321,6 +2321,8 @@ static const char *gdb_get_reg_type_name(enum reg_type type)
 			return "ieee_double";
 		case REG_TYPE_ARCH_DEFINED:
 			return "int"; /* return arbitrary string to avoid compile warning. */
+		case REG_TYPE_IEEE_HALF:
+			return "ieee_halt";
 	}
 
 	return "int"; /* "int" as default value */
@@ -3597,8 +3599,7 @@ static bool gdb_handle_vcont_packet(struct connection *connection, const char *p
 {
 	struct gdb_connection *gdb_connection = connection->priv;
 	struct target *target = get_target_from_connection(connection);
-	const char *parse;
-	parse = packet;
+	const char *parse = packet;
 	int retval;
 
 	/* query for vCont supported */
@@ -3617,7 +3618,7 @@ static bool gdb_handle_vcont_packet(struct connection *connection, const char *p
 	}
 
 	if ((parse[0] == 'C') || (parse[0] == 'S')) {
-		char packet_buf[GDB_BUFFER_SIZE] = {0};
+		char packet_buf[GDB_BUFFER_SIZE];
 		strncpy(packet_buf, parse, packet_size);
 		/* C sig[;addr] Continue with signal, vCont;C1e:0;c , Step with signal , vCont;S1e:0;c */
 		if (packet_buf[0] == 'C')
@@ -4885,6 +4886,7 @@ static int gdb_target_add_one(struct target *target)
 			}
 		}
 		if (retval == ERROR_OK) {
+			target->targetid = target_number;
 			printf("The core #%d listens on %d.\n", target_number++, (int)portnumber);
 			break;
 		} else if ((portnumber+1) >= (int) 65535) {

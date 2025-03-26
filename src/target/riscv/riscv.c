@@ -4945,11 +4945,13 @@ int riscv_init_registers(struct target *target)
 	/* These types are built into gdb. */
 	static struct reg_data_type type_ieee_single = { .type = REG_TYPE_IEEE_SINGLE, .id = "ieee_single" };
 	static struct reg_data_type type_ieee_double = { .type = REG_TYPE_IEEE_DOUBLE, .id = "ieee_double" };
-	static struct reg_data_type type_bloat16 = { .type = REG_TYPE_FLOAT, .id = "bfloat16" };
+	static struct reg_data_type type_ieee_half   = { .type = REG_TYPE_IEEE_HALF, .id = "ieee_half" };
+	static struct reg_data_type type_bfloat16    = { .type = REG_TYPE_FLOAT, .id = "bfloat16" };
 	static struct reg_data_type_union_field single_double_fields[] = {
 		{"float", &type_ieee_single, single_double_fields + 1},
 		{"double", &type_ieee_double, single_double_fields + 2},
-		{"bfloat16", &type_bloat16, NULL},
+		{"bfloat16", &type_bfloat16, single_double_fields + 3},
+		{"half", &type_ieee_half, NULL},
 	};
 	static struct reg_data_type_union single_double_union = {
 		.fields = single_double_fields
@@ -4986,6 +4988,11 @@ int riscv_init_registers(struct target *target)
 		.type = REG_TYPE_ARCH_DEFINED,
 		.type_class = REG_TYPE_CLASS_VENDOR_DEF,
 		.id = "vec1024"
+	};
+	static struct reg_data_type type_vec2048 = {
+		.type = REG_TYPE_ARCH_DEFINED,
+		.type_class = REG_TYPE_CLASS_VENDOR_DEF,
+		.id = "vec2048"
 	};
 #endif /* _NDS_V5_ONLY_ */
 
@@ -5568,7 +5575,6 @@ int riscv_init_registers(struct target *target)
 			r->reg_data_type = &info->type_vector;
 
 #if _NDS_V5_ONLY_
-			/* TODO: Check we still have this?! */
 			struct nds32_v5 *nds32 = target_to_nds32_v5(target);
 
 			nds32->nds_vector_length = info->vlenb * 8;
@@ -5581,6 +5587,9 @@ int riscv_init_registers(struct target *target)
 			} else if (nds32->nds_vector_length == 1024) {
 				r->reg_data_type = &type_vec1024;
 				r->size = 1024;
+			} else if (nds32->nds_vector_length == 2048) {
+				r->reg_data_type = &type_vec2048;
+				r->size = 2048;
 			} else {
 				/* if (nds32->nds_vector_length == 512) { */
 				r->reg_data_type = &type_vec512;

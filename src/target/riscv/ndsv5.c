@@ -46,6 +46,7 @@ uint32_t ndsv5_system_bus_access;
 uint32_t ndsv5_without_announce;
 uint32_t ndsv5_dmi_abstractcs;
 uint32_t ndsv5_byte_access_from_burn;
+uint32_t ndsv5_target_keep_halt_as_examine;
 
 #if _NDS_MEM_Q_ACCESS_
 uint32_t nds_dmi_quick_access;
@@ -77,13 +78,12 @@ char *ndsv5_script_custom_reset;
 char *ndsv5_script_custom_reset_halt;
 char *ndsv5_script_custom_initial;
 
-#define DMI_TEADDRESSBASE   (0x8000) /* Trace Encoder Base Address */
-#define DMI_TMUXADDRESSBASE (0x4000) /* Trace Multiplexer Base Address */
-#define DMI_TBADDRESSBASE   (0x2000) /* Trace Buffer Base Address */
 struct ndsv5_component ndsv5_comps[] = {
 	NDSV5_COMPONENT("ncetenc", NDSV5_COMP_ADDR_DMI, DMI_TEADDRESSBASE),
 	NDSV5_COMPONENT("ncetmux", NDSV5_COMP_ADDR_DMI, DMI_TMUXADDRESSBASE),
 	NDSV5_COMPONENT("ncetbuf", NDSV5_COMP_ADDR_DMI, DMI_TBADDRESSBASE),
+	NDSV5_COMPONENT("ncetaxi", NDSV5_COMP_ADDR_DMI, APB_TAADDRESSBASE),
+	NDSV5_COMPONENT("ncetmux2", NDSV5_COMP_ADDR_DMI, APB_TRACEADDRESSUNKNOWN),
 
 	NDSV5_COMPONENT(NULL, 0, 0),
 };
@@ -591,8 +591,9 @@ int ndsv5_virtual_to_physical(struct target *target, target_addr_t address, targ
 {
 	struct nds32_v5 *nds32 = target_to_nds32_v5(target);
 	struct nds32_v5_memory *memory = &(nds32->memory);
-	uint64_t mstatus = 0;
-	uint64_t dcsr = 0;
+	uint64_t mstatus;
+	uint64_t dcsr;
+	uint64_t satp = 0;
 
 	LOG_DEBUG("va: 0x%" TARGET_PRIxADDR ", va_mode: %s", address,
 			(nds32->nds_va_to_pa_off == 1) ? "OFF" : "ON");
@@ -613,6 +614,39 @@ int ndsv5_virtual_to_physical(struct target *target, target_addr_t address, targ
 
 	/* Check prv */
 	if ((dcsr & 0x3) == 0x3) {		/* M-mode => VA=PA */
+		*physical = address;
+		return ERROR_OK;
+	}
+
+	/* Check satp */
+	if ((nds_dmi_quick_access) && (!riscv_is_halted(target))) {
+		if (riscv_debug_buffer_size(target) < 6) {
+			LOG_DEBUG("Unable to execute qmode to access satp");
+			*physical = address;
+			return ERROR_OK;
+		}
+		ndsv5_get_csr_reg_quick_access(target, GDB_REGNO_SATP, &satp);
+		NDS_INFO("qmode get satp: 0x%" PRIx64, satp);
+	} else {
+		if (riscv_get_register(target, &satp, GDB_REGNO_SATP) != ERROR_OK) {
+			LOG_DEBUG("Access satp failed");
+			*physical = address;
+			return ERROR_OK;
+		}
+
+		LOG_DEBUG("get satp 0x%" PRIx64, satp);
+	}
+
+	/* Check satp mode */
+	int satp_mode;
+	if (riscv_xlen(target) == 64)
+		satp_mode = ((satp & SATP64_MODE) >> 60);
+	else
+		satp_mode = ((satp & SATP32_MODE) >> 31);
+
+	LOG_DEBUG("satp.mode 0x%x", satp_mode);
+	if (satp_mode == SATP_MODE_OFF) {
+		LOG_DEBUG("Access satp off");
 		*physical = address;
 		return ERROR_OK;
 	}
@@ -1138,8 +1172,8 @@ static struct cache_element ce[CACHE_SET_NUM][CACHE_WAY_NUM];
 
 enum CACHE_TAG_FORMAT {
 	CACHE_TAG_FORMAT_25 = 0x25, /* 25/27 series */
-	CACHE_TAG_FORMAT_45 = 0x45, /* 45 series */
-	CACHE_TAG_FORMAT_65 = 0x65, /* 65 series */
+	CACHE_TAG_FORMAT_40 = 0x40, /* 45, 46 series */
+	CACHE_TAG_FORMAT_60 = 0x60, /* 65 series */
 };
 
 int ndsv5_init_cache(struct target *target)
@@ -1219,12 +1253,12 @@ static inline uint32_t ndsv5_get_cache_tag_format(struct target *target)
 
 	/* check cpu id == 0x45 and dcache, tag no used bit = shift_bit, shift bit = log2 line_size + log2 set;
 	 * others, shift bit = 10 */
-	switch ((reg_marchid_value & 0xff)) {
-		case CACHE_TAG_FORMAT_45:
-			tagformat = CACHE_TAG_FORMAT_45;
+	switch ((reg_marchid_value & 0xf0)) {
+		case CACHE_TAG_FORMAT_40:
+			tagformat = CACHE_TAG_FORMAT_40;
 			break;
-		case CACHE_TAG_FORMAT_65:
-			tagformat = CACHE_TAG_FORMAT_65;
+		case CACHE_TAG_FORMAT_60:
+			tagformat = CACHE_TAG_FORMAT_60;
 			break;
 		default:
 			tagformat = CACHE_TAG_FORMAT_25;
@@ -1277,10 +1311,10 @@ static void ndsv5_parse_tag_idx(struct target *target, uint64_t idx, uint64_t ta
 				ce[idx][way].exclusive = (mesi == 3);
 				ce[idx][way].modified = (mesi == 7);
 
-				if (tagformat == CACHE_TAG_FORMAT_45) {
+				if (tagformat == CACHE_TAG_FORMAT_40) {
 					ce[idx][way].lock = (uint8_t)(tag & 0x8) >> 3;
 					ce[idx][way].pa = (tag >> 4) << shift_bit;
-				} else { /* CACHE_TAG_FORMAT_65 */
+				} else { /* CACHE_TAG_FORMAT_60 */
 					ce[idx][way].lock = (uint8_t)(0);
 					ce[idx][way].pa = (tag >> 3) << shift_bit;
 				}
@@ -1302,9 +1336,9 @@ static void ndsv5_parse_tag_idx(struct target *target, uint64_t idx, uint64_t ta
 				ce[idx][way].dirty = (uint8_t)(0);
 				ce[idx][way].pa = (tag & maskTAG) << (shift_bit-2); /* Why need to -2 ?! */
 
-				if (tagformat == CACHE_TAG_FORMAT_45)
+				if (tagformat == CACHE_TAG_FORMAT_40)
 					ce[idx][way].lock =  (uint8_t)(tag >> (xlen - 2)) & 0x1UL;
-				else /* CACHE_TAG_FORMAT_65 */
+				else /* CACHE_TAG_FORMAT_60 */
 					ce[idx][way].lock = (uint8_t)(0);
 			}
 		} else {
@@ -1626,7 +1660,9 @@ int ndsv5_dump_cache_va(struct target *target, struct command_invocation *cmd,
 #define L2C_M0_CCTL_CMD (L2C_BASE + 0x40)
 #define L2C_M0_CCTL_ACC (L2C_BASE + 0x48)
 #define L2C_STATUS      (L2C_BASE + 0x80)
-#define L2C_TGT_DATA_0  (L2C_BASE + 0x90)
+target_addr_t L2C_TGT_DATA_0;
+#define L2C_TGT_DATA_0_ORI (L2C_BASE + 0x90)
+#define L2C_TGT_DATA_0_25  (L2C_BASE + 0xB0)
 
 
 
@@ -1876,6 +1912,15 @@ int ndsv5_check_l2cache_exist(struct target *target, uint64_t *config)
 	}
 	ndsv5_l2c_support = 1;
 	*config = l2c_config;
+
+	RISCV_INFO(r);
+	uint64_t marchid = r->marchid;
+	if ((marchid & 0xff) == 0x25) {
+		LOG_DEBUG("25-series L2C");
+		L2C_TGT_DATA_0 = L2C_TGT_DATA_0_25;
+	} else {
+		L2C_TGT_DATA_0 = L2C_TGT_DATA_0_ORI;
+	}
 
 	return ERROR_OK;
 }
@@ -3359,120 +3404,121 @@ struct ndsv5_indirect_csr_info ndsv5_indirect_csrs[] = {
 	/* Note: enum ndsv5_indirect_csr is defined in gdb_regs.h
 	 *
 	 * struct ndsv5_indirect_csr_info {
-	 *     uint32_t priv;
-	 *     uint32_t groupid;  --> miselect/siselect value
-	 *     uint32_t ireg;
+	 *     uint32_t   priv;
+	 *     uint32_t   groupid;  --> miselect/siselect value
+	 *     uint32_t   ireg;
 	 *     const char *name;
+	 *     uint8_t    custom
 	 * };
 	 *
 	 */
 	/* Implementation defined CSRs */
-	{CSR_PRIV_M, 0x2000, 2, "impd0"},
-	{CSR_PRIV_M, 0x2000, 3, "impd1"},
-	{CSR_PRIV_M, 0x2001, 2, "impd2"},
-	{CSR_PRIV_M, 0x2001, 3, "impd3"},
+	{CSR_PRIV_M, 0x2000, 2, "impd0", 1},
+	{CSR_PRIV_M, 0x2000, 3, "impd1", 1},
+	{CSR_PRIV_M, 0x2001, 2, "impd2", 1},
+	{CSR_PRIV_M, 0x2001, 3, "impd3", 1},
 
 	/* Shadow Register CSRs */
-	{CSR_PRIV_M, 0x1000, 1, "shadow_cfg"},
-	{CSR_PRIV_M, 0x1000, 2, "shadow_ctl"},
-	{CSR_PRIV_M, 0x1000, 3, "shadow_dbg"},
+	{CSR_PRIV_M, 0x1000, 1, "shadow_cfg", 1},
+	{CSR_PRIV_M, 0x1000, 2, "shadow_ctl", 1},
+	{CSR_PRIV_M, 0x1000, 3, "shadow_dbg", 1},
 
-	{CSR_PRIV_S, 1, 1, "spmpcfg0"},
-	{CSR_PRIV_S, 1, 2, "spmpcfg1"},
-	{CSR_PRIV_S, 1, 3, "spmpcfg2"},
-	{CSR_PRIV_S, 1, 4, "spmpcfg3"},
-	{CSR_PRIV_S, 1, 5, "spmpcfg4"},
-	{CSR_PRIV_S, 1, 6, "spmpcfg5"},
+	{CSR_PRIV_S, 1, 1, "spmpcfg0", 0},
+	{CSR_PRIV_S, 1, 2, "spmpcfg1", 0},
+	{CSR_PRIV_S, 1, 3, "spmpcfg2", 0},
+	{CSR_PRIV_S, 1, 4, "spmpcfg3", 0},
+	{CSR_PRIV_S, 1, 5, "spmpcfg4", 0},
+	{CSR_PRIV_S, 1, 6, "spmpcfg5", 0},
 
-	{CSR_PRIV_S, 2, 1, "spmpcfg6"},
-	{CSR_PRIV_S, 2, 2, "spmpcfg7"},
-	{CSR_PRIV_S, 2, 3, "spmpcfg8"},
-	{CSR_PRIV_S, 2, 4, "spmpcfg9"},
-	{CSR_PRIV_S, 2, 5, "spmpcfg10"},
-	{CSR_PRIV_S, 2, 6, "spmpcfg11"},
+	{CSR_PRIV_S, 2, 1, "spmpcfg6", 0},
+	{CSR_PRIV_S, 2, 2, "spmpcfg7", 0},
+	{CSR_PRIV_S, 2, 3, "spmpcfg8", 0},
+	{CSR_PRIV_S, 2, 4, "spmpcfg9", 0},
+	{CSR_PRIV_S, 2, 5, "spmpcfg10", 0},
+	{CSR_PRIV_S, 2, 6, "spmpcfg11", 0},
 
-	{CSR_PRIV_S, 3, 1, "spmpcfg12"},
-	{CSR_PRIV_S, 3, 2, "spmpcfg13"},
-	{CSR_PRIV_S, 3, 3, "spmpcfg14"},
-	{CSR_PRIV_S, 3, 4, "spmpcfg15"},
+	{CSR_PRIV_S, 3, 1, "spmpcfg12", 0},
+	{CSR_PRIV_S, 3, 2, "spmpcfg13", 0},
+	{CSR_PRIV_S, 3, 3, "spmpcfg14", 0},
+	{CSR_PRIV_S, 3, 4, "spmpcfg15", 0},
 
-	{CSR_PRIV_S, 4, 1, "spmpaddr0"},
-	{CSR_PRIV_S, 4, 2, "spmpaddr1"},
-	{CSR_PRIV_S, 4, 3, "spmpaddr2"},
-	{CSR_PRIV_S, 4, 4, "spmpaddr3"},
-	{CSR_PRIV_S, 4, 5, "spmpaddr4"},
-	{CSR_PRIV_S, 4, 6, "spmpaddr5"},
+	{CSR_PRIV_S, 4, 1, "spmpaddr0", 0},
+	{CSR_PRIV_S, 4, 2, "spmpaddr1", 0},
+	{CSR_PRIV_S, 4, 3, "spmpaddr2", 0},
+	{CSR_PRIV_S, 4, 4, "spmpaddr3", 0},
+	{CSR_PRIV_S, 4, 5, "spmpaddr4", 0},
+	{CSR_PRIV_S, 4, 6, "spmpaddr5", 0},
 
-	{CSR_PRIV_S, 5, 1, "spmpaddr6"},
-	{CSR_PRIV_S, 5, 2, "spmpaddr7"},
-	{CSR_PRIV_S, 5, 3, "spmpaddr8"},
-	{CSR_PRIV_S, 5, 4, "spmpaddr9"},
-	{CSR_PRIV_S, 5, 5, "spmpaddr10"},
-	{CSR_PRIV_S, 5, 6, "spmpaddr11"},
+	{CSR_PRIV_S, 5, 1, "spmpaddr6", 0},
+	{CSR_PRIV_S, 5, 2, "spmpaddr7", 0},
+	{CSR_PRIV_S, 5, 3, "spmpaddr8", 0},
+	{CSR_PRIV_S, 5, 4, "spmpaddr9", 0},
+	{CSR_PRIV_S, 5, 5, "spmpaddr10", 0},
+	{CSR_PRIV_S, 5, 6, "spmpaddr11", 0},
 
-	{CSR_PRIV_S, 6, 1, "spmpaddr12"},
-	{CSR_PRIV_S, 6, 2, "spmpaddr13"},
-	{CSR_PRIV_S, 6, 3, "spmpaddr14"},
-	{CSR_PRIV_S, 6, 4, "spmpaddr15"},
-	{CSR_PRIV_S, 6, 5, "spmpaddr16"},
-	{CSR_PRIV_S, 6, 6, "spmpaddr17"},
+	{CSR_PRIV_S, 6, 1, "spmpaddr12", 0},
+	{CSR_PRIV_S, 6, 2, "spmpaddr13", 0},
+	{CSR_PRIV_S, 6, 3, "spmpaddr14", 0},
+	{CSR_PRIV_S, 6, 4, "spmpaddr15", 0},
+	{CSR_PRIV_S, 6, 5, "spmpaddr16", 0},
+	{CSR_PRIV_S, 6, 6, "spmpaddr17", 0},
 
-	{CSR_PRIV_S, 7, 1, "spmpaddr18"},
-	{CSR_PRIV_S, 7, 2, "spmpaddr19"},
-	{CSR_PRIV_S, 7, 3, "spmpaddr20"},
-	{CSR_PRIV_S, 7, 4, "spmpaddr21"},
-	{CSR_PRIV_S, 7, 5, "spmpaddr22"},
-	{CSR_PRIV_S, 7, 6, "spmpaddr23"},
+	{CSR_PRIV_S, 7, 1, "spmpaddr18", 0},
+	{CSR_PRIV_S, 7, 2, "spmpaddr19", 0},
+	{CSR_PRIV_S, 7, 3, "spmpaddr20", 0},
+	{CSR_PRIV_S, 7, 4, "spmpaddr21", 0},
+	{CSR_PRIV_S, 7, 5, "spmpaddr22", 0},
+	{CSR_PRIV_S, 7, 6, "spmpaddr23", 0},
 
-	{CSR_PRIV_S, 8, 1, "spmpaddr24"},
-	{CSR_PRIV_S, 8, 2, "spmpaddr25"},
-	{CSR_PRIV_S, 8, 3, "spmpaddr26"},
-	{CSR_PRIV_S, 8, 4, "spmpaddr27"},
-	{CSR_PRIV_S, 8, 5, "spmpaddr28"},
-	{CSR_PRIV_S, 8, 6, "spmpaddr29"},
+	{CSR_PRIV_S, 8, 1, "spmpaddr24", 0},
+	{CSR_PRIV_S, 8, 2, "spmpaddr25", 0},
+	{CSR_PRIV_S, 8, 3, "spmpaddr26", 0},
+	{CSR_PRIV_S, 8, 4, "spmpaddr27", 0},
+	{CSR_PRIV_S, 8, 5, "spmpaddr28", 0},
+	{CSR_PRIV_S, 8, 6, "spmpaddr29", 0},
 
-	{CSR_PRIV_S, 9, 1, "spmpaddr30"},
-	{CSR_PRIV_S, 9, 2, "spmpaddr31"},
-	{CSR_PRIV_S, 9, 3, "spmpaddr32"},
-	{CSR_PRIV_S, 9, 4, "spmpaddr33"},
-	{CSR_PRIV_S, 9, 5, "spmpaddr34"},
-	{CSR_PRIV_S, 9, 6, "spmpaddr35"},
+	{CSR_PRIV_S, 9, 1, "spmpaddr30", 0},
+	{CSR_PRIV_S, 9, 2, "spmpaddr31", 0},
+	{CSR_PRIV_S, 9, 3, "spmpaddr32", 0},
+	{CSR_PRIV_S, 9, 4, "spmpaddr33", 0},
+	{CSR_PRIV_S, 9, 5, "spmpaddr34", 0},
+	{CSR_PRIV_S, 9, 6, "spmpaddr35", 0},
 
-	{CSR_PRIV_S, 10, 1, "spmpaddr36"},
-	{CSR_PRIV_S, 10, 2, "spmpaddr37"},
-	{CSR_PRIV_S, 10, 3, "spmpaddr38"},
-	{CSR_PRIV_S, 10, 4, "spmpaddr39"},
-	{CSR_PRIV_S, 10, 5, "spmpaddr40"},
-	{CSR_PRIV_S, 10, 6, "spmpaddr41"},
+	{CSR_PRIV_S, 10, 1, "spmpaddr36", 0},
+	{CSR_PRIV_S, 10, 2, "spmpaddr37", 0},
+	{CSR_PRIV_S, 10, 3, "spmpaddr38", 0},
+	{CSR_PRIV_S, 10, 4, "spmpaddr39", 0},
+	{CSR_PRIV_S, 10, 5, "spmpaddr40", 0},
+	{CSR_PRIV_S, 10, 6, "spmpaddr41", 0},
 
-	{CSR_PRIV_S, 11, 1, "spmpaddr42"},
-	{CSR_PRIV_S, 11, 2, "spmpaddr43"},
-	{CSR_PRIV_S, 11, 3, "spmpaddr44"},
-	{CSR_PRIV_S, 11, 4, "spmpaddr45"},
-	{CSR_PRIV_S, 11, 5, "spmpaddr46"},
-	{CSR_PRIV_S, 11, 6, "spmpaddr47"},
+	{CSR_PRIV_S, 11, 1, "spmpaddr42", 0},
+	{CSR_PRIV_S, 11, 2, "spmpaddr43", 0},
+	{CSR_PRIV_S, 11, 3, "spmpaddr44", 0},
+	{CSR_PRIV_S, 11, 4, "spmpaddr45", 0},
+	{CSR_PRIV_S, 11, 5, "spmpaddr46", 0},
+	{CSR_PRIV_S, 11, 6, "spmpaddr47", 0},
 
-	{CSR_PRIV_S, 12, 1, "spmpaddr48"},
-	{CSR_PRIV_S, 12, 2, "spmpaddr49"},
-	{CSR_PRIV_S, 12, 3, "spmpaddr50"},
-	{CSR_PRIV_S, 12, 4, "spmpaddr51"},
-	{CSR_PRIV_S, 12, 5, "spmpaddr52"},
-	{CSR_PRIV_S, 12, 6, "spmpaddr53"},
+	{CSR_PRIV_S, 12, 1, "spmpaddr48", 0},
+	{CSR_PRIV_S, 12, 2, "spmpaddr49", 0},
+	{CSR_PRIV_S, 12, 3, "spmpaddr50", 0},
+	{CSR_PRIV_S, 12, 4, "spmpaddr51", 0},
+	{CSR_PRIV_S, 12, 5, "spmpaddr52", 0},
+	{CSR_PRIV_S, 12, 6, "spmpaddr53", 0},
 
-	{CSR_PRIV_S, 13, 1, "spmpaddr54"},
-	{CSR_PRIV_S, 13, 2, "spmpaddr55"},
-	{CSR_PRIV_S, 13, 3, "spmpaddr56"},
-	{CSR_PRIV_S, 13, 4, "spmpaddr57"},
-	{CSR_PRIV_S, 13, 5, "spmpaddr58"},
-	{CSR_PRIV_S, 13, 6, "spmpaddr59"},
+	{CSR_PRIV_S, 13, 1, "spmpaddr54", 0},
+	{CSR_PRIV_S, 13, 2, "spmpaddr55", 0},
+	{CSR_PRIV_S, 13, 3, "spmpaddr56", 0},
+	{CSR_PRIV_S, 13, 4, "spmpaddr57", 0},
+	{CSR_PRIV_S, 13, 5, "spmpaddr58", 0},
+	{CSR_PRIV_S, 13, 6, "spmpaddr59", 0},
 
-	{CSR_PRIV_S, 14, 1, "spmpaddr60"},
-	{CSR_PRIV_S, 14, 2, "spmpaddr61"},
-	{CSR_PRIV_S, 14, 3, "spmpaddr62"},
-	{CSR_PRIV_S, 14, 4, "spmpaddr63"},
+	{CSR_PRIV_S, 14, 1, "spmpaddr60", 0},
+	{CSR_PRIV_S, 14, 2, "spmpaddr61", 0},
+	{CSR_PRIV_S, 14, 3, "spmpaddr62", 0},
+	{CSR_PRIV_S, 14, 4, "spmpaddr63", 0},
 
-	{CSR_PRIV_S, 15, 1, "spmpswitch0"},
-	{CSR_PRIV_S, 15, 2, "spmpswitch1"},
+	{CSR_PRIV_S, 15, 1, "spmpswitch0", 0},
+	{CSR_PRIV_S, 15, 2, "spmpswitch1", 0},
 
 	{0, 0, 0, NULL}
 };

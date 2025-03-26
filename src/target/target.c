@@ -2901,7 +2901,9 @@ static int find_target(struct command_invocation *cmd, const char *name)
 	return ERROR_OK;
 }
 
-
+#if _NDS_V5_ONLY_
+extern int ndsv5_013_query_group(struct target *target);
+#endif
 COMMAND_HANDLER(handle_targets_command)
 {
 	int retval = ERROR_OK;
@@ -2920,8 +2922,15 @@ COMMAND_HANDLER(handle_targets_command)
 	}
 
 	struct target *target = all_targets;
+#if _NDS_V5_ONLY_
+	command_print(CMD, \
+			"    TargetName         Type       Endian TapName            State         Coreid   Targetid Haltgroup Resumegroup");
+	command_print(CMD, \
+			"--  ------------------ ---------- ------ ------------------ ------------- -------- -------- --------- -----------");
+#else
 	command_print(CMD, "    TargetName         Type       Endian TapName            State       ");
 	command_print(CMD, "--  ------------------ ---------- ------ ------------------ ------------");
+#endif /* _NDS_V5_ONLY_ */
 	while (target) {
 		const char *state;
 		char marker = ' ';
@@ -2935,6 +2944,29 @@ COMMAND_HANDLER(handle_targets_command)
 			marker = '*';
 
 		/* keep columns lined up to match the headers above */
+#if _NDS_V5_ONLY_
+		if (target->tap->enabled) {
+			ndsv5_013_query_group(target);
+		} else {
+			LOG_DEBUG("target disabled");
+			target->haltgroup = 0;
+			target->resumegroup = 0;
+		}
+		command_print(CMD,
+				"%2d%c %-18s %-10s %-6s %-18s %-13s %-8d %-8d %-9d %-12d",
+				target->target_number,
+				marker,
+				target_name(target),
+				target_type_name(target),
+				jim_nvp_value2name_simple(nvp_target_endian,
+					target->endianness)->name,
+				target->tap->dotted_name,
+				state,
+				target->coreid,
+				target->targetid,
+				target->haltgroup,
+				target->resumegroup);
+#else
 		command_print(CMD,
 				"%2d%c %-18s %-10s %-6s %-18s %s",
 				target->target_number,
@@ -2945,6 +2977,7 @@ COMMAND_HANDLER(handle_targets_command)
 					target->endianness)->name,
 				target->tap->dotted_name,
 				state);
+#endif /* _NDS_V5_ONLY_ */
 		target = target->next;
 	}
 

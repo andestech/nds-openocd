@@ -74,6 +74,13 @@
 #define TMUX_ITTMUXCTRL (ndsv5_comps[NDSV5_COMP_NCETMUX].addr + (0x1EFC)) /* Integration Test Control Register */
 #define TMUX_DEVARCH    (ndsv5_comps[NDSV5_COMP_NCETMUX].addr + (0x1FBC)) /* DEVARCH, Device Architecture Register */
 
+/* Level-2 MUX */
+/* trFunnelControl, Control Register */
+#define DMI_TRFUNNELCONTROL2    (ndsv5_comps[NDSV5_COMP_NCETMUX2].addr + (0x000))
+/* trFunnelImpl, Implementation register */
+#define DMI_TRFUNNELIMPL2       (ndsv5_comps[NDSV5_COMP_NCETMUX2].addr + (0x004))
+/* DEVARCH, Device Architecture Register */
+#define DMI_NCETMUX200_DEVARCH2 (ndsv5_comps[NDSV5_COMP_NCETMUX2].addr + (0xFBC))
 
 
 /******************************************************************************************************************/

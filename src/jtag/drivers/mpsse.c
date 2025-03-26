@@ -1443,24 +1443,29 @@ void mpsse_ndsv5_tracer2_stop_on_wrap(struct mpsse_ctx *ctx, bool enabled)
 void mpsse_ndsv5_tracer2_set_tbuf_size(struct mpsse_ctx *ctx, unsigned int trace_size)
 {
 
-	LOG_DEBUG("Trace_size: %u", trace_size);
+	LOG_DEBUG("Trace_size: %u bytes (%u words)", trace_size, trace_size/4);
 
 	/* set trace buffer size limit for stop on wrap,
 	 * size = 2^n bytes, where n <= 29,
 	 * if n more than 29 then it will shrink to 29
 	 */
 	int n = 0;
-	while(trace_size) {
+	unsigned int remained = trace_size;
+	while (remained) {
 		n++;
-		trace_size >>= 1;
+		remained >>= 1;
 	}
 
 	if (n > 29)
 		n = 29;
 
-	LOG_DEBUG("Set n = %u (size: %u)", n, (2 << n));
+	/* Check recoding size */
+	if (trace_size > (1 << (n - 1)))
+		n++;
+
+	LOG_DEBUG("Set n = %u (size: %u)", (n - 1), (1 << (n - 1)));
 	buffer_write_byte(ctx, TRACER2_SET_TBUF_SIZE);
-	buffer_write_byte(ctx, n);
+	buffer_write_byte(ctx, n-1);
 }
 #endif /* _NDS_V5_ONLY_ */
 

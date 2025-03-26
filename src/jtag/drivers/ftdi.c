@@ -1244,40 +1244,40 @@ static void oscan1_reset_online_activate(void)
 
 #ifdef _NDS_V5_ONLY_
 /* AICE-MICRO cjtag support */
-static void ndsv5_cjtag_reset_escape()
+static void ndsv5_cjtag_reset_escape(void)
 {
 	if (!oscan1_mode)
 		return;
 	/*
 	 * From ftdi_lib.lua
-	 * function cjtag_reset_escape()
-	 *   local byte0 = 0x03 -- 0b0000_0011 jtag_oen=0 tms=0 tdi=1 tck=1
-	 *   local byte1 = 0x0b -- 0b0000_1011 jtag_oen=0 tms=1 tdi=1 tck=1
-	 *   local dir   = 0x1b -- 0b0001_1011
-	 *   local data = {}
-	 *   local short_seq = {}
-	 *   local i
+	 *  function cjtag_reset_escape()
+	 *    local byte0 = 0x03 -- 0b0000_0011 jtag_oen=0 tms=0 tdi=1 tck=1
+	 *    local byte1 = 0x0b -- 0b0000_1011 jtag_oen=0 tms=1 tdi=1 tck=1
+	 *    local dir   = 0x1b -- 0b0001_1011
+	 *    local data = {}
+	 *    local short_seq = {}
+	 *    local i
 	 *
-	 *   table.insert(data, MPSSE_SET_DATA_BITS_LOW_BYTE) -- start; posedge tck
-	 *   table.insert(data, byte1)
-	 *   table.insert(data, dir)
+	 *    table.insert(data, MPSSE_SET_DATA_BITS_LOW_BYTE) -- start; posedge tck
+	 *    table.insert(data, byte1)
+	 *    table.insert(data, dir)
 	 *
-	 *   for i=1,4 do
-	 *     table.insert(data, MPSSE_SET_DATA_BITS_LOW_BYTE)
-	 *     table.insert(data, byte0)
-	 *     table.insert(data, dir)
+	 *    for i=1,4 do
+	 *      table.insert(data, MPSSE_SET_DATA_BITS_LOW_BYTE)
+	 *      table.insert(data, byte0)
+	 *      table.insert(data, dir)
 	 *
-	 *     table.insert(data, MPSSE_SET_DATA_BITS_LOW_BYTE)
-	 *     table.insert(data, byte1)
-	 *     table.insert(data, dir)
-	 *   end
+	 *      table.insert(data, MPSSE_SET_DATA_BITS_LOW_BYTE)
+	 *      table.insert(data, byte1)
+	 *      table.insert(data, dir)
+	 *    end
 	 *
-	 *   table.insert(data, MPSSE_SET_DATA_BITS_LOW_BYTE)  -- return tck to 0 (negedge tck)
-	 *   table.insert(data, bit_and(byte1, 0xfe))
-	 *   table.insert(data, dir)
+	 *    table.insert(data, MPSSE_SET_DATA_BITS_LOW_BYTE)  -- return tck to 0 (negedge tck)
+	 *    table.insert(data, bit_and(byte1, 0xfe))
+	 *    table.insert(data, dir)
 	 *
-	 *   aice.send_raw_data(data)
-	 * end
+	 *    aice.send_raw_data(data)
+	 *  end
 	 *
 	 */
 
@@ -1308,7 +1308,7 @@ static void ndsv5_cjtag_reset_escape()
 	mpsse_flush(mpsse_ctx);
 }
 
-void ndsv5_cjtag_selection_escape()
+void ndsv5_cjtag_selection_escape(void)
 {
 	if (!oscan1_mode)
 		return;
@@ -2150,7 +2150,7 @@ static int ftdi_ndsv5_config_trace(bool enabled, enum tpiu_pin_protocol pin_prot
 		if (trace_freq) {
 			unsigned int trace_size = trace_freq[0];
 			unsigned int trace_stop_on_wrap = trace_freq[1];
-			LOG_DEBUG("trace_size: %u, stop_on_wrap: %u",
+			LOG_DEBUG("trace_size: %u bytes, stop_on_wrap: %u",
 					trace_size, trace_stop_on_wrap);
 			mpsse_ndsv5_tracer2_stop_on_wrap(mpsse_ctx, (trace_stop_on_wrap? true : false));
 			mpsse_ndsv5_tracer2_set_tbuf_size(mpsse_ctx, trace_size);

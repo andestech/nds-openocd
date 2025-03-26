@@ -45,12 +45,16 @@ uint64_t ndsv5_trace_ram_size = 4 * 1024; /* Default: 4K */
 uint32_t ndsv5_mpsse_t2 = -1;
 uint32_t TB_RAM_SIZE = 0x2000;
 enum ndsv5_trace_mem_mode ndsv5_trace_mem_mode = NDSV5_TRACE_MEM_SRAM;
+uint32_t nds_trTeInstExtendAddrMSB;
 
 int ndsv5_tracer_capability_check(struct target *target);
 int ndsv5_tracer_smem_capability_check(struct target *target);
 int ndsv5_tracer_pib_capability_check(struct target *target);
 
+extern uint32_t nds_sys_bus_supported;
+
 #define TRACER_VERSION       1         /* version number: 0~255 */
+#define get_field(reg, mask) (((reg) & (mask)) / ((mask) & ~((mask) << 1)))
 
 
 
@@ -64,7 +68,7 @@ static void tracer_tbuf_set_ram_mode(struct target *target);
 static int ndsv5_tracer_buffer_init(void);
 static uint32_t nds_tracer_multiplexer, nds_tracer_capability;
 
-static int component_read(struct target *target, enum ndsv5_component_id id, uint32_t *value, uint32_t addr)
+static int component_read(struct target *target, enum ndsv5_component_id id, uint32_t *value, uint64_t addr)
 {
 	if (ndsv5_comps[id].addr_type == NDSV5_COMP_ADDR_DMI) {
 		RISCV_INFO(r);
@@ -79,17 +83,22 @@ static int component_read(struct target *target, enum ndsv5_component_id id, uin
 		struct nds32_v5 *nds32 = target_to_nds32_v5(target);
 		struct nds32_v5_memory *memory = &(nds32->memory);
 		uint32_t bak_access_channel = (uint32_t)memory->access_channel;
-		memory->access_channel = NDS_MEMORY_ACC_CPU;
+		if (nds_sys_bus_supported)
+			memory->access_channel = NDS_MEMORY_ACC_BUS;
+		else {
+			LOG_DEBUG("nds_sys_bus_supported not support, switch to CPU mode");
+			nds32->memory.access_channel = NDS_MEMORY_ACC_CPU;
+		}
 		uint32_t bak_nds_va_to_pa_off = nds32->nds_va_to_pa_off;
 		nds32->nds_va_to_pa_off = 1;
 
 		if (target_read_memory(target, addr, 4, 1, (uint8_t *)value) != ERROR_OK) {
-			LOG_ERROR("Unable to read on 0x%" PRIx32, addr);
+			LOG_DEBUG("[ERROR] Unable to read on 0x%" PRIx64, addr);
 			return ERROR_FAIL;
 		}
 
 		*value =  *value & 0xffffffff;
-		LOG_DEBUG("Get component reg 0x%" PRIx32 " data 0x%" PRIx32, addr, *value);
+		LOG_DEBUG("Get component reg 0x%" PRIx64 " data 0x%" PRIx32, addr, *value);
 
 		memory->access_channel = bak_access_channel;
 		nds32->nds_va_to_pa_off = bak_nds_va_to_pa_off;
@@ -99,7 +108,7 @@ static int component_read(struct target *target, enum ndsv5_component_id id, uin
 	return ERROR_FAIL;
 }
 
-static int component_write(struct target *target, enum ndsv5_component_id id, uint32_t addr, uint32_t value)
+static int component_write(struct target *target, enum ndsv5_component_id id, uint64_t addr, uint32_t value)
 {
 	if (ndsv5_comps[id].addr_type == NDSV5_COMP_ADDR_DMI) {
 		RISCV_INFO(r);
@@ -114,14 +123,19 @@ static int component_write(struct target *target, enum ndsv5_component_id id, ui
 		struct nds32_v5 *nds32 = target_to_nds32_v5(target);
 		struct nds32_v5_memory *memory = &(nds32->memory);
 		uint32_t bak_access_channel = (uint32_t)memory->access_channel;
-		memory->access_channel = NDS_MEMORY_ACC_CPU;
+		if (nds_sys_bus_supported)
+			memory->access_channel = NDS_MEMORY_ACC_BUS;
+		else {
+			LOG_DEBUG("nds_sys_bus_supported not support, switch to CPU mode");
+			nds32->memory.access_channel = NDS_MEMORY_ACC_CPU;
+		}
 		uint32_t bak_nds_va_to_pa_off = nds32->nds_va_to_pa_off;
 		nds32->nds_va_to_pa_off = 1;
 
-		LOG_DEBUG("Component set reg: 0x%" PRIx32 ", data: 0x%" PRIx32, addr, value);
+		LOG_DEBUG("Component set reg: 0x%" PRIx64 ", data: 0x%" PRIx32, addr, value);
 
 		if (target_write_memory(target, addr, 4, 1, (uint8_t *)&value) != ERROR_OK) {
-			LOG_ERROR("Unable to write on 0x%" PRIx32, addr);
+			LOG_DEBUG("[ERROR] Unable to write on 0x%" PRIx64, addr);
 			return ERROR_FAIL;
 		}
 
@@ -360,7 +374,9 @@ static uint32_t tracer_set_itracing_mode(struct target *target,
 		te_inst_features_reg |= (DMI_TRTEINSTFEATURES_teInstEnCallStack);
 	if (inst_no_addr_diff)
 		te_inst_features_reg |= (DMI_TRTEINSTFEATURES_teInstNoAddrDiff);
-	te_inst_features_reg |= (DMI_TRTEINSTFEATURES_trTeInstExtendAddrMSB);  /* extended MSB to 64-bits */
+	if (nds_trTeInstExtendAddrMSB)
+		te_inst_features_reg |= (DMI_TRTEINSTFEATURES_trTeInstExtendAddrMSB);  /* extended MSB to 64-bits */
+
 
 	te_ctrl_reg &= ~(DMI_TRTECONTROL_teEnable);
 	if (inhibit_src)
@@ -705,7 +721,7 @@ static uint32_t tracer_tbuf_enable_recording(struct target *target)
 			break;
 
 		case NDSV5_TRACE_MEM_PIB:
-			TB_RAM_SIZE = ndsv5_trace_ram_size*2;
+			TB_RAM_SIZE = ndsv5_trace_ram_size * 2; /* Avoid PIB recorded a little bigger than setting */
 			break;
 
 		default:
@@ -856,7 +872,7 @@ static uint32_t tracer_tbuf_get_teWrap(struct target *target)
 		size_t nwords = 0;
 		adapter_poll_trace(NULL, &nwords);
 		LOG_DEBUG("Current nwords: 0x%zx", nwords);
-		return ((nwords*4) > ndsv5_trace_ram_size);
+		return ((nwords*4) >= (ndsv5_trace_ram_size-1));
 	}
 	return 0;
 }
@@ -864,8 +880,10 @@ static uint32_t tracer_tbuf_get_teWrap(struct target *target)
 static uint32_t tracer_enable_multiplexer(struct target *target)
 {
 	uint32_t  trFunnel_ctrl_reg, trFunnel_Impl_reg;
-	if (nds_tracer_multiplexer == 0)
+	if (nds_tracer_multiplexer == 0) {
+		LOG_DEBUG("TMUX not found, skip");
 		return 0;
+	}
 
 	component_read(target, NDSV5_COMP_NCETMUX, &trFunnel_Impl_reg, DMI_TRFUNNELIMPL);
 	LOG_DEBUG("DBG_API:tracer_enable_multiplexer, trFunnelImpl = 0x%x", trFunnel_Impl_reg);
@@ -894,6 +912,59 @@ static uint32_t tracer_enable_multiplexer(struct target *target)
 	component_read(target, NDSV5_COMP_NCETMUX, &tmux_ctrl_reg, TMUX_ITTMUXCTRL);
 	LOG_DEBUG("DBG_API: tmux_ctrl_reg 0x%x", tmux_ctrl_reg);
 	*/
+	return 0;
+}
+
+static uint32_t tracer_enable_multiplexer2(struct target *target)
+{
+	uint32_t  trFunnel_ctrl_reg, trFunnel_Impl_reg;
+	const uint32_t  timeout_limit = 50; /* magic number waiting to be tuned */
+	uint32_t  timeout_counter = 0;
+
+	/* For Level-2 Trace Multiplexer(TMUX2), check address specified */
+	if (ndsv5_comps[NDSV5_COMP_NCETMUX2].addr == APB_TRACEADDRESSUNKNOWN) {
+		LOG_DEBUG("Skip Enable Level-2 Trace Multiplexe(TMUX2), Address unspecified");
+		return 0;
+	}
+
+	/* Check system bus exist */
+	if (!nds_sys_bus_supported) {
+		LOG_ERROR("System bus non-exist!");
+		return -1;
+	}
+
+	/* For Level-2 Trace Multiplexer(TMUX2), check DEVARCH.ARCHID[15:0] */
+	uint32_t  devarch_reg;
+	component_read(target, NDSV5_COMP_NCETMUX2, &devarch_reg, DMI_NCETMUX200_DEVARCH2);
+	LOG_DEBUG("TMUX_DEVARCH = 0x%x", devarch_reg);
+	if ((devarch_reg & 0xFFFF) == 0x0000) {
+		LOG_DEBUG("Skip Enable Level-2 Trace Multiplexe(TMUX2), DEVARCH error");
+		return 0;
+	}
+
+	/* Read Trace Multiplexer Implementation Register */
+	component_read(target, NDSV5_COMP_NCETMUX2, &trFunnel_Impl_reg, DMI_TRFUNNELIMPL2);
+	LOG_DEBUG("DBG_API:tracer_enable_multiplexer2(TMUX2), trFunnelImpl = 0x%x", trFunnel_Impl_reg);
+
+	/* Active TMUX2 */
+	LOG_DEBUG("Active TMUX2");
+	component_read(target, NDSV5_COMP_NCETMUX2, &trFunnel_ctrl_reg, DMI_TRFUNNELCONTROL2);
+	trFunnel_ctrl_reg |= DMI_TRFUNNELCONTROL_trFunnelActive;
+	component_write(target, NDSV5_COMP_NCETMUX2, DMI_TRFUNNELCONTROL2, trFunnel_ctrl_reg);
+	while (timeout_counter < timeout_limit) {
+		component_read(target, NDSV5_COMP_NCETMUX2, &trFunnel_ctrl_reg, DMI_TRFUNNELCONTROL2);
+		if (trFunnel_ctrl_reg & DMI_TRFUNNELCONTROL_trFunnelActive)
+			break;
+		timeout_counter++;
+	}
+	LOG_DEBUG("Active TMUX2 Done");
+
+	/* Enable TMUX2 */
+	LOG_DEBUG("Enable TMUX2");
+	trFunnel_ctrl_reg |= DMI_TRFUNNELCONTROL_trFunnelEnable;
+	component_write(target, NDSV5_COMP_NCETMUX2, DMI_TRFUNNELCONTROL2, trFunnel_ctrl_reg);
+	LOG_DEBUG("Enable TMUX2 Done");
+
 	return 0;
 }
 
@@ -1031,6 +1102,7 @@ uint32_t ndsv5_tracer_all_cores_setting(void)
 				LOG_DEBUG("smp-coreid: %d ", coreid);
 				if (((0x01 << coreid) & nds_tracer_active_id) != 0) {
 					tracer_enable_multiplexer(t);
+					tracer_enable_multiplexer2(t);
 					ndsv5_tracer_setting(t, true);
 				}
 			}
@@ -1040,6 +1112,7 @@ uint32_t ndsv5_tracer_all_cores_setting(void)
 			LOG_DEBUG("amp-coreid: %d ", coreid);
 			if (((0x01 << coreid) & nds_tracer_active_id) != 0) {
 				tracer_enable_multiplexer(target);
+				tracer_enable_multiplexer2(target);
 				ndsv5_tracer_setting(target, true);
 			}
 		}
@@ -1065,6 +1138,7 @@ uint32_t ndsv5_tracer_setting_current(struct target *target)
 	/* First trace, enable buffer */
 	if (!nds_tracer_active_id_current) {
 		tracer_enable_multiplexer(target);
+		tracer_enable_multiplexer2(target);
 
 		/* Activate trace buffer and set its register */
 		tracer_activate_tbuf(target);
@@ -1239,11 +1313,11 @@ uint32_t ndsv5_tracer_disable_current(struct target *target)
 	return 0;
 }
 
-extern uint32_t nds_sys_bus_supported;
 static int ndsv5_tracer_read_etb(struct target *target)
 {
 	uint32_t etb_rptr, etb_wptr, etb_data;
-	uint32_t fifo_words = 0, i;
+	uint32_t fifo_words = 0;
+	uint32_t i;
 	size_t nwords = 0;
 
 	/* Disable instruction tracing */
@@ -1361,6 +1435,13 @@ int ndsv5_tracer_dumpfile(struct target *target, char *pFileName)
 	if (pPacketFile == NULL)
 		return ERROR_FAIL;
 
+	/* Read satp */
+	uint64_t satp = 0;
+	if (target->reg_cache->reg_list[GDB_REGNO_CSR0 + CSR_SATP].exist == true) {
+		if (riscv_get_register(target, &satp, GDB_REGNO_SATP) != ERROR_OK)
+			satp = 0;
+	}
+
 	/* Prepare Parameter
 	 * byte[0]: srcbits
 	 * byte[1]: teInstNoAddrDiff
@@ -1389,11 +1470,37 @@ int ndsv5_tracer_dumpfile(struct target *target, char *pFileName)
 	else
 		parameter[0] = 0;
 	parameter[1] = (unsigned char) nds_teInstNoAddrDiff;
-	parameter[2] = 57;
+
+	unsigned xlen = riscv_xlen(target);
+	int mode = get_field(satp, RISCV_SATP_MODE(xlen));
+	LOG_DEBUG("satp 0x%" PRIx64 ", xlen: %d, mode: %d", satp, xlen, mode);
+	switch (mode) {
+		case SATP_MODE_SV32:
+			parameter[2] = 32;
+			break;
+		case SATP_MODE_SV39:
+			parameter[2] = 39;
+			break;
+		case SATP_MODE_SV48:
+			parameter[2] = 48;
+			break;
+		case SATP_MODE_SV57:
+			parameter[2] = 57;
+			break;
+		case SATP_MODE_SV64:
+			parameter[2] = 64;
+			break;
+		default:
+			parameter[2] = xlen;
+			break;
+	}
+
 	parameter[3] = TRACER_VERSION;
 	/* Write parameters into file */
-	for (idx = 0; idx < 4; idx++)
+	for (idx = 0; idx < 4; idx++) {
 		fputc(parameter[idx], pPacketFile);
+		LOG_DEBUG("parameter[%d] = 0x%x", idx, parameter[idx]);
+	}
 
 	char *pbuf_start = (char *)p_etb_buf_start;
 	/* get data from ETB */
@@ -1408,8 +1515,9 @@ int ndsv5_tracer_dumpfile(struct target *target, char *pFileName)
 		p_etb_wptr, total_pkt_bytes, total_pkt_bytes);
 
 	if (total_pkt_bytes) {
-		if (ndsv5_trace_mem_mode == NDSV5_TRACE_MEM_PIB) {
+		if (0 && (ndsv5_trace_mem_mode == NDSV5_TRACE_MEM_PIB)) {
 			/* Strange HW bug!? Skip pkt first word */
+			/* ASTv540 update, temporary removed HW workaround */
 			fwrite(pbuf_start+4, 1, total_pkt_bytes-4, pPacketFile);
 		} else {
 			fwrite(pbuf_start, 1, total_pkt_bytes, pPacketFile);

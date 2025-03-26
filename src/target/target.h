@@ -238,6 +238,9 @@ struct target {
 	bool after_reset_run;
 	uint32_t hart_unavailable;
 	bool trace_on;
+
+	int haltgroup;
+	int resumegroup;
 #endif
 };
 

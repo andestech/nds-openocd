@@ -196,7 +196,6 @@ static void parse_acx_type(const char *t, size_t len)
 
 static void parse_acx_code(const char *t, size_t len)
 {
-#ifndef __MINGW32__
 	const char *p = t;
 	const char *end = t + len;
 	char *endptr;
@@ -879,8 +878,6 @@ static int32_t handle_ace_eca_file(const char *eac_file_path)
 
 	ace_gas_eca_for_gdb_client = (const char *)ace.gas_eca;
 
-	LOG_DEBUG("end of loadSharedLib");
-#endif
 	LOG_DEBUG("end of handle_ace_eca_file");
 	return 0;
 }
