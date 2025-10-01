@@ -1,4 +1,4 @@
-			/*
+/*
  * SPDX-License-Identifier: GPL-2.0+
  * Copyright (c) 2019 Andes Technology, Ya-Ting Lin <yating@andestech.com>
  * Copyright (C) 2019 Hellosun Wu <wujiheng.tw@gmail.com>
@@ -937,6 +937,8 @@ COMMAND_HANDLER(ndsv5_handle_l2c_command)
 	return ERROR_OK;
 }
 
+extern int riscv_command_timeout_sec;
+extern int riscv_reset_timeout_sec;
 COMMAND_HANDLER(nds32_handle_count_to_check_dm_command)
 {
 	char c;
@@ -954,6 +956,8 @@ COMMAND_HANDLER(nds32_handle_count_to_check_dm_command)
 		LOG_ERROR("expected exactly one argument to nds count_to_check_dm "
 				"<count_of_checking>");
 
+	riscv_command_timeout_sec = v5_count_to_check_dm / 1000;
+	riscv_reset_timeout_sec = v5_count_to_check_dm / 1000;
 	return ERROR_OK;
 }
 

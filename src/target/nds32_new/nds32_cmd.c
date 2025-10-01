@@ -2162,7 +2162,7 @@ COMMAND_HANDLER(handle_nds32_no_halt_detect_command)
 		COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], aice_no_halt_detect);
 	else
 		LOG_ERROR("expected exactly one argument to aice no_halt_detect");
-	nds_no_reset_detect = aice_no_halt_detect;
+	nds_no_halt_detect = aice_no_halt_detect;
 	return ERROR_OK;
 }
 

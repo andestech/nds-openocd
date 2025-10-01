@@ -2119,8 +2119,19 @@ static int examine(struct target *target)
 	bool halted = riscv_is_halted(target);
 	if (!halted) {
 		if (riscv013_halt_go(target) != ERROR_OK) {
+#if _NDS_V5_ONLY_
+			/* Force skip examine */
+			if (nds_no_halt_detect) {
+				LOG_INFO("[%s] Fatal: Hart %d failed to halt during examine()",
+						target_name(target), r->current_hartid);
+			} else {
+				LOG_ERROR("[%s] Fatal: Hart %d failed to halt during examine()",
+						target_name(target), r->current_hartid);
+			}
+#else
 			LOG_ERROR("[%s] Fatal: Hart %d failed to halt during examine()",
 					target_name(target), r->current_hartid);
+#endif
 			return ERROR_FAIL;
 		}
 	}
@@ -5085,9 +5096,16 @@ static int riscv013_halt_go(struct target *target)
 		dmcontrol |= DM_DMCONTROL_HASEL;
 	dmcontrol = set_hartsel(dmcontrol, r->current_hartid);
 	dmi_write(target, DM_DMCONTROL, dmcontrol);
-	for (size_t i = 0; i < 256; ++i)
+	for (size_t i = 0; i < 256; ++i) {
 		if (riscv_is_halted(target))
 			break;
+
+		/* Force skip */
+		if (nds_no_halt_detect)
+			break;
+
+		alive_sleep(50);
+	}
 
 	if (!riscv_is_halted(target)) {
 		uint32_t dmstatus;
