@@ -1318,7 +1318,7 @@ static void mpsse_ndsv5_aice_version(struct mpsse_ctx *ctx)
 	};
 
 
-	NDS32_LOG("%s v%" PRIx8 ".%" PRIx8 ".%" PRIx8, aice_str, hw_ver & 0xFF, fpga_ver & 0xFF, fw_ver & 0xFF);
+	NDS32_LOG("%s v%" PRIx8 ".%" PRIx8 ".%" PRIx8, aice_str, hw_ver & 0xFF, fw_ver & 0xFF, fpga_ver & 0xFF);
 
 	if (aice_str)
 		free(aice_str);
@@ -1440,6 +1440,7 @@ void mpsse_ndsv5_tracer2_stop_on_wrap(struct mpsse_ctx *ctx, bool enabled)
 	ctx->retval = mpsse_flush(ctx);
 }
 
+extern uint32_t nds_tracer_stop_on_wrap;
 void mpsse_ndsv5_tracer2_set_tbuf_size(struct mpsse_ctx *ctx, unsigned int trace_size)
 {
 
@@ -1449,7 +1450,7 @@ void mpsse_ndsv5_tracer2_set_tbuf_size(struct mpsse_ctx *ctx, unsigned int trace
 	 * size = 2^n bytes, where n <= 29,
 	 * if n more than 29 then it will shrink to 29
 	 */
-	int n = 0;
+	unsigned int n = 0;
 	unsigned int remained = trace_size;
 	while (remained) {
 		n++;
@@ -1460,12 +1461,19 @@ void mpsse_ndsv5_tracer2_set_tbuf_size(struct mpsse_ctx *ctx, unsigned int trace
 		n = 29;
 
 	/* Check recoding size */
-	if (trace_size > (1 << (n - 1)))
+	if (trace_size > (1U << (n - 1)))
 		n++;
+
+	/* HACKED: FW issue? */
+	if (nds_tracer_stop_on_wrap == 0) {
+		LOG_DEBUG("Trace to mode, set n = n - 1");
+		n--;
+	}
 
 	LOG_DEBUG("Set n = %u (size: %u)", (n - 1), (1 << (n - 1)));
 	buffer_write_byte(ctx, TRACER2_SET_TBUF_SIZE);
-	buffer_write_byte(ctx, n-1);
+	buffer_write_byte(ctx, n);
+	ctx->retval = mpsse_flush(ctx);
 }
 #endif /* _NDS_V5_ONLY_ */
 

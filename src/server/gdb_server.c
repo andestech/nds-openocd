@@ -852,12 +852,14 @@ static int gdb_output(struct command_context *context, const char *line)
 	LOG_USER_N("%s", line);
 	return ERROR_OK;
 }
+extern struct watchpoint nds_watched_address[32];
+extern uint32_t nds_watched_hit_cnt, nds_gdb_support_multi_wp_addr;
 
 static void gdb_signal_reply(struct target *target, struct connection *connection)
 {
 	struct gdb_connection *gdb_connection = connection->priv;
 	char sig_reply[65];
-	char stop_reason[32];
+	char stop_reason[512];
 	char current_thread[25];
 	int sig_reply_len;
 	int signal_var;
@@ -899,7 +901,27 @@ static void gdb_signal_reply(struct target *target, struct connection *connectio
 			target_addr_t hit_wp_address;
 
 			if (watchpoint_hit(ct, &hit_wp_type, &hit_wp_address) == ERROR_OK) {
-
+				if ((nds_watched_hit_cnt > 1) && (nds_gdb_support_multi_wp_addr == 1)) {
+					int j = 0;
+					char *p_append = stop_reason;
+					for (uint32_t i = 0; i < nds_watched_hit_cnt; i++) {
+							switch (nds_watched_address[i].rw) {
+								case WPT_WRITE:
+									j = snprintf(p_append, sizeof(stop_reason),
+										"watch:%016" TARGET_PRIxADDR ";", nds_watched_address[i].address);
+									break;
+								case WPT_READ:
+									j = snprintf(p_append, sizeof(stop_reason),
+										"rwatch:%016" TARGET_PRIxADDR ";", nds_watched_address[i].address);
+									break;
+								case WPT_ACCESS:
+									j = snprintf(p_append, sizeof(stop_reason),
+										"awatch:%016" TARGET_PRIxADDR ";", nds_watched_address[i].address);
+									break;
+							}
+							p_append += j;
+					}
+				} else {
 				switch (hit_wp_type) {
 #if _NDS32_ONLY_
 					case WPT_WRITE:
@@ -930,6 +952,7 @@ static void gdb_signal_reply(struct target *target, struct connection *connectio
 #endif /* _NDS32_ONLY_ */
 					default:
 						break;
+				}
 				}
 			}
 		}
@@ -3409,6 +3432,13 @@ static int gdb_query_packet(struct connection *connection,
 		}
 
 #if _NDS32_ONLY_
+		char *result = strstr(packet, "multi-wp-addr+");
+		if (result)
+			nds_gdb_support_multi_wp_addr = 1;
+		else
+			nds_gdb_support_multi_wp_addr = 0;
+		LOG_INFO("nds_gdb_support_multi_wp_addr = %d", nds_gdb_support_multi_wp_addr);
+
 		char *curr_str = strstr(packet, "xmlRegisters=nds32");
 		if (curr_str != NULL) {
 			/* older version gdb7.7 (NOT support bit-field) */
@@ -3619,6 +3649,7 @@ static bool gdb_handle_vcont_packet(struct connection *connection, const char *p
 
 	if ((parse[0] == 'C') || (parse[0] == 'S')) {
 		char packet_buf[GDB_BUFFER_SIZE];
+		memset(packet_buf, 0, GDB_BUFFER_SIZE);
 		strncpy(packet_buf, parse, packet_size);
 		/* C sig[;addr] Continue with signal, vCont;C1e:0;c , Step with signal , vCont;S1e:0;c */
 		if (packet_buf[0] == 'C')
@@ -3629,6 +3660,9 @@ static bool gdb_handle_vcont_packet(struct connection *connection, const char *p
 		packet_size -= 2;
 		parse = &packet_buf[2];
 	}
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
 
 	/* simple case, a continue packet */
 	if (parse[0] == 'c') {
@@ -3660,6 +3694,9 @@ static bool gdb_handle_vcont_packet(struct connection *connection, const char *p
 
 		return true;
 	}
+
+#pragma GCC diagnostic pop
+
 
 	/* single-step or step-over-breakpoint */
 	if (parse[0] == 's') {
@@ -3902,7 +3939,11 @@ static bool gdb_handle_vrun_packet(struct connection *connection, const char *pa
 #if _NDS32_ONLY_
 static int gdb_file_io_host_flag(int flags)
 {
-	int host_flags = GDB_FILE_IO_O_RDONLY;
+#if IS_WIN32 == 0
+	int host_flags = O_RDONLY;
+#else
+	int host_flags = O_RDONLY | O_BINARY;
+#endif
 
 	if (flags & GDB_FILE_IO_O_WRONLY)
 		host_flags |= O_WRONLY;
@@ -4069,7 +4110,8 @@ static int gdb_vfile_packet(struct connection *connection,
 		ret = read(fd, read_buffer, count);
 #endif
 
-		char *reply = malloc(16 + ret * 2); /* payload and escape characters */
+		int alloc_size = 16 + ((ret > 0) ? ret * 2 : 0);
+		char *reply = malloc(alloc_size); /* payload and escape characters */
 		int reply_len;
 		if (ret == -1) {
 			snprintf(reply, 16, "F-1,%x", errno);

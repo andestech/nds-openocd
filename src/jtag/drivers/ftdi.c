@@ -1248,39 +1248,6 @@ static void ndsv5_cjtag_reset_escape(void)
 {
 	if (!oscan1_mode)
 		return;
-	/*
-	 * From ftdi_lib.lua
-	 *  function cjtag_reset_escape()
-	 *    local byte0 = 0x03 -- 0b0000_0011 jtag_oen=0 tms=0 tdi=1 tck=1
-	 *    local byte1 = 0x0b -- 0b0000_1011 jtag_oen=0 tms=1 tdi=1 tck=1
-	 *    local dir   = 0x1b -- 0b0001_1011
-	 *    local data = {}
-	 *    local short_seq = {}
-	 *    local i
-	 *
-	 *    table.insert(data, MPSSE_SET_DATA_BITS_LOW_BYTE) -- start; posedge tck
-	 *    table.insert(data, byte1)
-	 *    table.insert(data, dir)
-	 *
-	 *    for i=1,4 do
-	 *      table.insert(data, MPSSE_SET_DATA_BITS_LOW_BYTE)
-	 *      table.insert(data, byte0)
-	 *      table.insert(data, dir)
-	 *
-	 *      table.insert(data, MPSSE_SET_DATA_BITS_LOW_BYTE)
-	 *      table.insert(data, byte1)
-	 *      table.insert(data, dir)
-	 *    end
-	 *
-	 *    table.insert(data, MPSSE_SET_DATA_BITS_LOW_BYTE)  -- return tck to 0 (negedge tck)
-	 *    table.insert(data, bit_and(byte1, 0xfe))
-	 *    table.insert(data, dir)
-	 *
-	 *    aice.send_raw_data(data)
-	 *  end
-	 *
-	 */
-
 	LOG_DEBUG("ndsv5_cjtag_reset_escape");
 	uint8_t byte0 = 0x03;
 	uint8_t byte1 = 0x0b;
@@ -2144,6 +2111,8 @@ static int ftdi_ndsv5_config_trace(bool enabled, enum tpiu_pin_protocol pin_prot
 	if (enabled) {
 		/* enable recording and reset write ptr */
 		LOG_DEBUG("Enable tracer2");
+		mpsse_ndsv5_tracer2_set_recording(mpsse_ctx, false);
+		mpsse_ndsv5_tracer2_reset_tbuf_ptr(mpsse_ctx);
 		mpsse_ndsv5_tracer2_set_recording(mpsse_ctx, true);
 		mpsse_ndsv5_tracer2_reset_tbuf_ptr(mpsse_ctx);
 
@@ -2158,6 +2127,7 @@ static int ftdi_ndsv5_config_trace(bool enabled, enum tpiu_pin_protocol pin_prot
 	} else {
 		LOG_DEBUG("Disable tracer2");
 		mpsse_ndsv5_tracer2_set_recording(mpsse_ctx, false);
+		mpsse_ndsv5_tracer2_reset_tbuf_ptr(mpsse_ctx);
 	}
 	return ERROR_OK;
 }

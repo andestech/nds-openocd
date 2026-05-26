@@ -32,6 +32,8 @@ extern uint32_t nds_ftdi_jtag_opt;
 typedef int (*read_mem_func_t)(struct target *target, uint32_t address, uint32_t *data);
 typedef int (*write_mem_func_t)(struct target *target, uint32_t address, uint32_t data);
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wcast-align"
 static int aice_usb_fastread_mem(struct target *target, uint32_t addr,
 		unsigned char *pReadData, unsigned int num_of_words)
 {
@@ -43,6 +45,7 @@ static int aice_usb_fastwrite_mem(struct target *target, uint32_t addr,
 {
 	return aice_write_edm(target, JDP_W_FAST_MEM, addr, (uint32_t *)pWriteData, num_of_words);
 }
+#pragma GCC diagnostic pop
 
 static int aice_usb_set_address_dim(struct target *target, uint32_t address)
 {

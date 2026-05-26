@@ -44,6 +44,7 @@ uint64_t nds_trRamStart;
 uint64_t ndsv5_trace_ram_size = 4 * 1024; /* Default: 4K */
 uint32_t ndsv5_mpsse_t2 = -1;
 uint32_t TB_RAM_SIZE = 0x2000;
+uint32_t ndsv5_TsCompMode;
 enum ndsv5_trace_mem_mode ndsv5_trace_mem_mode = NDSV5_TRACE_MEM_SRAM;
 uint32_t nds_trTeInstExtendAddrMSB;
 
@@ -53,8 +54,209 @@ int ndsv5_tracer_pib_capability_check(struct target *target);
 
 extern uint32_t nds_sys_bus_supported;
 
-#define TRACER_VERSION       1         /* version number: 0~255 */
+#define TRACER_VERSION       2         /* version number: 0~255 */
 #define get_field(reg, mask) (((reg) & (mask)) / ((mask) & ~((mask) << 1)))
+#define TRACER_HEADER_VERSION_V1              1
+#define TRACER_HEADER_PREFIX_BYTES            4
+#define TRACER_HEADER_V1_BYTES                4
+#define TRACER_HEADER_LEN24_MAX               0xFFFFFFu
+#define TRACER_HEADER_V2_LEGACY_PAYLOAD_LEN   4
+#define TRACER_HEADER_V2_LEGACY_TOTAL_BYTES   7
+#define TRACER_TLV_TAG_SRCBITS                1
+#define TRACER_TLV_TAG_INST_NO_ADDR_DIFF      2
+#define TRACER_TLV_TAG_VALEN                  3
+#define TRACER_TLV_TAG_TS_COMP_MODE           4
+#define TRACER_TLV_TAG_PADDING                0xFE
+#define TRACER_TLV_U8_LEN                     1
+
+struct ndsv5_tracer_header {
+	unsigned char version;
+	unsigned char srcbits;
+	unsigned char inst_no_addr_diff;
+	unsigned char valen;
+	unsigned char ts_comp_mode;
+};
+
+static int ndsv5_tracer_header_write_tlv_u8(unsigned char *buf, size_t buf_size,
+	size_t *offset, unsigned char tag, unsigned char value)
+{
+	if (!buf || !offset || (*offset + 3) > buf_size)
+		return ERROR_FAIL;
+
+	buf[*offset] = tag;
+	buf[*offset + 1] = TRACER_TLV_U8_LEN;
+	buf[*offset + 2] = value;
+	*offset += 3;
+
+	return ERROR_OK;
+}
+
+static int ndsv5_tracer_build_header_v2(const struct ndsv5_tracer_header *header,
+	unsigned char *buf, size_t buf_size, size_t *header_bytes)
+{
+	size_t offset = TRACER_HEADER_PREFIX_BYTES;
+	uint32_t header_length;
+
+	if (!header || !buf || !header_bytes || buf_size < TRACER_HEADER_PREFIX_BYTES)
+		return ERROR_FAIL;
+
+	buf[3] = header->version;
+
+	if (ndsv5_tracer_header_write_tlv_u8(buf, buf_size, &offset,
+		TRACER_TLV_TAG_SRCBITS, header->srcbits) != ERROR_OK)
+		return ERROR_FAIL;
+
+	if (ndsv5_tracer_header_write_tlv_u8(buf, buf_size, &offset,
+		TRACER_TLV_TAG_INST_NO_ADDR_DIFF, header->inst_no_addr_diff) != ERROR_OK)
+		return ERROR_FAIL;
+
+	if (ndsv5_tracer_header_write_tlv_u8(buf, buf_size, &offset,
+		TRACER_TLV_TAG_VALEN, header->valen) != ERROR_OK)
+		return ERROR_FAIL;
+
+	if (ndsv5_tracer_header_write_tlv_u8(buf, buf_size, &offset,
+		TRACER_TLV_TAG_TS_COMP_MODE, header->ts_comp_mode) != ERROR_OK)
+		return ERROR_FAIL;
+
+	/*
+	 * Keep v2 header 4-byte aligned so current .log word-based dump/read
+	 * path keeps correct packet boundary.
+	 */
+	while ((offset & 0x3) != 0) {
+		if (ndsv5_tracer_header_write_tlv_u8(buf, buf_size, &offset,
+			TRACER_TLV_TAG_PADDING, 0) != ERROR_OK)
+			return ERROR_FAIL;
+	}
+
+	if (offset <= 3 || (offset - 3) > TRACER_HEADER_LEN24_MAX)
+		return ERROR_FAIL;
+
+	header_length = (uint32_t)(offset - 3); /* counted from byte[3] */
+	buf[0] = (unsigned char)(header_length & 0xFF);
+	buf[1] = (unsigned char)((header_length >> 8) & 0xFF);
+	buf[2] = (unsigned char)((header_length >> 16) & 0xFF);
+	*header_bytes = offset;
+
+	return ERROR_OK;
+}
+
+static int ndsv5_tracer_parse_header_v2_tlv_payload(const unsigned char *payload,
+	size_t payload_bytes, struct ndsv5_tracer_header *header)
+{
+	unsigned int have_srcbits = 0;
+	unsigned int have_inst_no_addr_diff = 0;
+	unsigned int have_valen = 0;
+
+	header->ts_comp_mode = 0;
+
+	while (payload_bytes) {
+		unsigned char tag, tlv_len;
+
+		if (payload_bytes < 2)
+			return ERROR_FAIL;
+
+		tag = payload[0];
+		tlv_len = payload[1];
+		payload += 2;
+		payload_bytes -= 2;
+
+		if (tlv_len > payload_bytes)
+			return ERROR_FAIL;
+
+		switch (tag) {
+		case TRACER_TLV_TAG_SRCBITS:
+			if (tlv_len != TRACER_TLV_U8_LEN)
+				return ERROR_FAIL;
+			header->srcbits = payload[0];
+			have_srcbits = 1;
+			break;
+		case TRACER_TLV_TAG_INST_NO_ADDR_DIFF:
+			if (tlv_len != TRACER_TLV_U8_LEN)
+				return ERROR_FAIL;
+			header->inst_no_addr_diff = payload[0];
+			have_inst_no_addr_diff = 1;
+			break;
+		case TRACER_TLV_TAG_VALEN:
+			if (tlv_len != TRACER_TLV_U8_LEN)
+				return ERROR_FAIL;
+			header->valen = payload[0];
+			have_valen = 1;
+			break;
+		case TRACER_TLV_TAG_TS_COMP_MODE:
+			if (tlv_len != TRACER_TLV_U8_LEN)
+				return ERROR_FAIL;
+			header->ts_comp_mode = payload[0];
+			break;
+		default:
+			/* Skip unknown TLV for forward compatibility. */
+			break;
+		}
+
+		payload += tlv_len;
+		payload_bytes -= tlv_len;
+	}
+
+	if (!have_srcbits || !have_inst_no_addr_diff || !have_valen)
+		return ERROR_FAIL;
+
+	return ERROR_OK;
+}
+
+static int ndsv5_tracer_parse_header(const unsigned char *buf, size_t buf_size,
+	struct ndsv5_tracer_header *header, size_t *header_bytes)
+{
+	uint32_t header_length;
+	size_t total_header_bytes;
+	size_t payload_bytes;
+
+	if (!buf || !header || !header_bytes || buf_size < TRACER_HEADER_V1_BYTES)
+		return ERROR_FAIL;
+
+	header->version = buf[3];
+
+	if (header->version == TRACER_HEADER_VERSION_V1) {
+		header->srcbits = buf[0];
+		header->inst_no_addr_diff = buf[1];
+		header->valen = buf[2];
+		header->ts_comp_mode = 0;
+		*header_bytes = TRACER_HEADER_V1_BYTES;
+		return ERROR_OK;
+	}
+
+	if (header->version != TRACER_VERSION)
+		return ERROR_FAIL;
+
+	header_length = (uint32_t)buf[0] |
+		((uint32_t)buf[1] << 8) |
+		((uint32_t)buf[2] << 16);
+
+	if (header_length < 1)
+		return ERROR_FAIL;
+
+	total_header_bytes = (size_t)header_length + 3;
+	if (total_header_bytes > buf_size)
+		return ERROR_FAIL;
+
+	/* Transitional compatibility: old v2 positional payload. */
+	if (header_length == TRACER_HEADER_V2_LEGACY_PAYLOAD_LEN) {
+		if (total_header_bytes < TRACER_HEADER_V2_LEGACY_TOTAL_BYTES)
+			return ERROR_FAIL;
+		header->srcbits = buf[4];
+		header->inst_no_addr_diff = buf[5];
+		header->valen = buf[6];
+		header->ts_comp_mode = 0;
+		*header_bytes = total_header_bytes;
+		return ERROR_OK;
+	}
+
+	payload_bytes = (size_t)header_length - 1; /* exclude version byte */
+	if (ndsv5_tracer_parse_header_v2_tlv_payload(buf + TRACER_HEADER_PREFIX_BYTES,
+		payload_bytes, header) != ERROR_OK)
+		return ERROR_FAIL;
+
+	*header_bytes = total_header_bytes;
+	return ERROR_OK;
+}
 
 
 
@@ -151,8 +353,14 @@ static int component_write(struct target *target, enum ndsv5_component_id id, ui
 static uint32_t trace_sel;
 static uint32_t selected_encoder(uint32_t offset)
 {
-	uint32_t encoder_addr = ndsv5_comps[NDSV5_COMP_NCETENC].addr + (trace_sel * (0x2000)) + offset;
-	return encoder_addr;
+	if (ndsv5_comps[NDSV5_COMP_NCETENC].addr_type == NDSV5_COMP_ADDR_DMI)
+		return ndsv5_comps[NDSV5_COMP_NCETENC].addr + (trace_sel * (0x2000)) + offset;
+	else {
+		if (nds_trace_new_bitmap)
+			return ndsv5_comps[NDSV5_COMP_NCETENC].addr + (trace_sel * (0x1000)) + offset;
+		else
+			return ndsv5_comps[NDSV5_COMP_NCETENC].addr + (trace_sel * (0x2000)) + offset;
+	}
 }
 
 static uint32_t selected_tbuf_sink(struct target *target, uint32_t offset)
@@ -241,8 +449,16 @@ static uint32_t tracer_activate_encoder(struct target *target)
 	component_read(target, NDSV5_COMP_NCETENC, &ts_ctrl_reg, selected_encoder(DMI_TRTSCONTROL));
 	component_read(target, NDSV5_COMP_NCETENC, &xtrigger_in_ctrl_reg, selected_encoder(DMI_TRTETRIGEXTINCONT));
 	component_read(target, NDSV5_COMP_NCETENC, &xtrigger_out_ctrl_reg, selected_encoder(DMI_TRTETRIGEXTOUTCONT));
-	component_read(target, NDSV5_COMP_NCETENC, &atb_ctrl_reg, selected_encoder(DMI_ATBCONTROL));
+	if (nds_trace_new_bitmap)
+		LOG_DEBUG("DMI_ATBCONTROL Obsoleted!");
+	else
+		component_read(target, NDSV5_COMP_NCETENC, &atb_ctrl_reg, selected_encoder(DMI_ATBCONTROL));
 	component_read(target, NDSV5_COMP_NCETENC, &te_info_reg, selected_encoder(DMI_TRTEIMPL));
+	if (te_info_reg & DMI_TRTEIMPL_TsCompMode) {
+		LOG_DEBUG("DMI_TRTEIMPL_TsCompMode: %d", (te_info_reg & DMI_TRTEIMPL_TsCompMode));
+		ndsv5_TsCompMode = 1;
+	}
+
 	component_read(target, NDSV5_COMP_NCETBUF, &tf_info_reg, DMI_TRRAMIMPL);
 	LOG_DEBUG("DBG_API:te_info_reg = 0x%x, tf_info_reg = 0x%x", te_info_reg, tf_info_reg);
 	LOG_DEBUG("DBG_API:te_ctrl_reg = 0x%x, te_inst_features_reg = 0x%x", te_ctrl_reg, te_inst_features_reg);
@@ -1050,7 +1266,8 @@ uint32_t ndsv5_tracer_setting(struct target *target, bool setbuffer)
 	}
 
 	/* WARNING: For old trace subsystem, we need setting this!! */
-	tracer_set_atbid(target, 1);
+	if (!nds_trace_new_bitmap)
+		tracer_set_atbid(target, 1);
 
 	if (setbuffer == true) {
 		/* Activate trace buffer and set its register */
@@ -1442,64 +1659,56 @@ int ndsv5_tracer_dumpfile(struct target *target, char *pFileName)
 			satp = 0;
 	}
 
-	/* Prepare Parameter
-	 * byte[0]: srcbits
-	 * byte[1]: teInstNoAddrDiff
-	 * byte[2]: VALEN
-	 * byte[3]: version
-
-	 (1) srcbits 6
-	 SRC Source of Message. Field Width(4)
-	 Hart index or trace ID. This field is used for multi-hart/core trace
-
-	 (2) teInstNoAddrDiff = 0
-	 UADDR Unique Portion of Branch Target Address
-	 This field is produced by XOR-ing the branch target address with the most recent FADDR/UADDR/PC.
-	 When trTeInstNoAddrDiff is set, no XOR is performed and this field becomes FADDR.
-
-	 (3) VALEN, RISC-V ISA defines 3 different virtual memory addressing modes: Sv39, Sv48 and Sv57.
-	 In each of these modes the most significant bit (38, 47 or 56) is extended on all higher bits.
-	 It means that there is no need to send full 64-bit addresses and only report 39/48 or 57 bits of an address.
+	/* Header format:
+	 * v1 (legacy): [srcbits][teInstNoAddrDiff][VALEN][version]
+	 * v2 (current): [len0][len1][len2][version][TLVs...]
 	 */
+	struct ndsv5_tracer_header header;
+	unsigned char header_buf[64];
+	size_t header_bytes = 0, idx;
 
-	unsigned char parameter[4];
-	uint32_t idx;
-
+	header.version = TRACER_VERSION;
 	if (nds_teInhibitSrc == 0)
-		parameter[0] = 6;
+		header.srcbits = 6;
 	else
-		parameter[0] = 0;
-	parameter[1] = (unsigned char) nds_teInstNoAddrDiff;
+		header.srcbits = 0;
+	header.inst_no_addr_diff = (unsigned char)nds_teInstNoAddrDiff;
+	header.ts_comp_mode = (unsigned char)ndsv5_TsCompMode;
 
 	unsigned xlen = riscv_xlen(target);
 	int mode = get_field(satp, RISCV_SATP_MODE(xlen));
 	LOG_DEBUG("satp 0x%" PRIx64 ", xlen: %d, mode: %d", satp, xlen, mode);
 	switch (mode) {
-		case SATP_MODE_SV32:
-			parameter[2] = 32;
-			break;
-		case SATP_MODE_SV39:
-			parameter[2] = 39;
-			break;
-		case SATP_MODE_SV48:
-			parameter[2] = 48;
-			break;
-		case SATP_MODE_SV57:
-			parameter[2] = 57;
-			break;
-		case SATP_MODE_SV64:
-			parameter[2] = 64;
-			break;
-		default:
-			parameter[2] = xlen;
-			break;
+	case SATP_MODE_SV32:
+		header.valen = 32;
+		break;
+	case SATP_MODE_SV39:
+		header.valen = 39;
+		break;
+	case SATP_MODE_SV48:
+		header.valen = 48;
+		break;
+	case SATP_MODE_SV57:
+		header.valen = 57;
+		break;
+	case SATP_MODE_SV64:
+		header.valen = 64;
+		break;
+	default:
+		header.valen = (unsigned char)xlen;
+		break;
 	}
 
-	parameter[3] = TRACER_VERSION;
+	if (ndsv5_tracer_build_header_v2(&header, header_buf, sizeof(header_buf), &header_bytes) != ERROR_OK) {
+		LOG_ERROR("Failed to build tracer header");
+		fclose(pPacketFile);
+		return ERROR_FAIL;
+	}
+
 	/* Write parameters into file */
-	for (idx = 0; idx < 4; idx++) {
-		fputc(parameter[idx], pPacketFile);
-		LOG_DEBUG("parameter[%d] = 0x%x", idx, parameter[idx]);
+	for (idx = 0; idx < header_bytes; idx++) {
+		fputc(header_buf[idx], pPacketFile);
+		LOG_DEBUG("header[%lu] = 0x%x", (unsigned long)idx, header_buf[idx]);
 	}
 
 	char *pbuf_start = (char *)p_etb_buf_start;
@@ -1534,17 +1743,20 @@ int ndsv5_tracer_dumpfile(struct target *target, char *pFileName)
 	memcpy(&log_filename[strlen((char *)pFileName)], ".log", 5);
 	pPacketFile = fopen(pLogName, "wb");
 
-	uint32_t i, *pData;
-	/* Write parameters into file */
-	pData = (uint32_t *)&parameter[0];
-	sprintf(&write_line[0], "%08x\n", *pData++);
-	fwrite(&write_line[0], 1, strlen(&write_line[0]), pPacketFile);
+	uint32_t value;
+	/* Write header into file (word by word). */
+	for (idx = 0; idx < header_bytes; idx += sizeof(uint32_t)) {
+		memcpy(&value, &header_buf[idx], sizeof(uint32_t));
+		sprintf(write_line, "%08x\n", value);
+		fwrite(write_line, 1, sizeof(write_line), pPacketFile);
+	}
 
 	/* Write packets into file */
-	pData = (uint32_t *)pbuf_start;
-	for (i = 0; i < total_pkt_bytes/4; i++) {
-		sprintf(&write_line[0], "%08x\n", *pData++);
-		fwrite(&write_line[0], 1, strlen(&write_line[0]), pPacketFile);
+	uint32_t i;
+	for (i = 0; i < total_pkt_bytes; i += 4) {
+		memcpy(&value, pbuf_start + i, sizeof(uint32_t));
+		sprintf(write_line, "%08x\n", value);
+		fwrite(write_line, 1, sizeof(write_line), pPacketFile);
 	}
 	fclose(pPacketFile);
 	/* reset to buffer start */
@@ -1600,37 +1812,47 @@ int ndsv5_tracer_capability_check(struct target *target)
 	 * */
 
 	uint32_t trace_sel_bak = trace_sel;
-	trace_sel = 0;
-
-	uint32_t  devarch_reg;
-	component_read(target, NDSV5_COMP_NCETENC, &devarch_reg, selected_encoder(DMI_DEVARCH));
-	LOG_DEBUG("DMI_DEVARCH = 0x%x", devarch_reg);
-
+	uint32_t devarch_reg = 0x0;
 	nds_trace_new_bitmap = false;
-	if (devarch_reg == 0x0) {
-		component_read(target, NDSV5_COMP_NCETENC, &devarch_reg, selected_encoder(DMI_DEVARCH_NEW));
-		nds_trace_new_bitmap = true;
-		LOG_DEBUG("Maybe new bitmap");
+	trace_sel = 0; /* Examine Encoder#0 only */
+
+	/* Check OLD VERSION bitmap if use DMI bus */
+	if (ndsv5_comps[NDSV5_COMP_NCETENC].addr_type == NDSV5_COMP_ADDR_DMI) {
+		component_read(target, NDSV5_COMP_NCETENC, &devarch_reg, selected_encoder(DMI_DEVARCH));
+		LOG_DEBUG("DMI_DEVARCH = 0x%x", devarch_reg);
 	}
 
-	if ((devarch_reg & 0xFFFF) == 0x4500) {
-		if (nds_trace_new_bitmap)
-			component_read(target, NDSV5_COMP_NCETMUX, &devarch_reg, DMI_NCETMUX200_DEVARCH);
-		else
-			component_read(target, NDSV5_COMP_NCETMUX, &devarch_reg, TMUX_DEVARCH);
+	/* Read on NEW bitmap */
+	if (devarch_reg == 0x0) {
+		nds_trace_new_bitmap = true;
+		LOG_DEBUG("Maybe new bitmap");
 
+		component_read(target, NDSV5_COMP_NCETENC, &devarch_reg, selected_encoder(DMI_DEVARCH_NEW));
+		LOG_DEBUG("TENC_DEVARCH = 0x%x", devarch_reg);
+	}
+
+	/* Restore trace_sel */
+	trace_sel = trace_sel_bak;
+
+	if ((devarch_reg & 0xFFFF) != 0x4500) {
+		LOG_DEBUG("TENC Failed in detection, abort");
+		nds_tracer_capability = 0xFF;
+		return ERROR_FAIL;
+	} else {
+		nds_tracer_capability = 1;
+
+		/* Detect TMUX */
+		component_read(target, NDSV5_COMP_NCETMUX, &devarch_reg, DMI_NCETMUX200_DEVARCH);
 		LOG_DEBUG("TMUX_DEVARCH = 0x%x", devarch_reg);
 		if ((devarch_reg & 0xFFFF) == 0x4D00)
 			nds_tracer_multiplexer = 1;
+		else
+			LOG_DEBUG("Maybe TMUX not exist, abort");
 
-		trace_sel = trace_sel_bak;
-		nds_tracer_capability = 1;
 		return ERROR_OK;
 	}
 
-	nds_trace_new_bitmap = false;
 	nds_tracer_capability = 0xFF;
-	trace_sel = trace_sel_bak;
 	return ERROR_FAIL;
 }
 
@@ -1980,6 +2202,9 @@ int ndsv5_tracer_decode_pktfile(char *pPktFileName)
 	char *p_text = &pkt_decoded_data[0];
 	char tmp_text[256];
 	char *p_tmp_text = &tmp_text[0];
+	int ret_code = 0;
+	size_t header_bytes = 0;
+	struct ndsv5_tracer_header header;
 
 	memcpy(&pkt_decoded_filename[0], pPktFileName, strlen((char *)pPktFileName));
 	memcpy(&pkt_decoded_filename[strlen((char *)pPktFileName)], "-de", 4);
@@ -1993,8 +2218,7 @@ int ndsv5_tracer_decode_pktfile(char *pPktFileName)
 
 	curr_buf = pPktBuf;
 	if (pPacketFile) {
-		char *ret;
-		ret = strstr(pPktFileName, ".log");
+		char *ret = strstr(pPktFileName, ".log");
 		if (ret)
 			/* get data from .log file */
 			read_size = ndsv5_tracer_read_logfile(curr_buf, pPacketFile);
@@ -2002,15 +2226,27 @@ int ndsv5_tracer_decode_pktfile(char *pPktFileName)
 			/* get data from raw-pkt file */
 			read_size = fread(curr_buf, 1, buffer_size, pPacketFile);
 
-		/* decode Parameter
-		* byte[0]: srcbits
-		* byte[1]: teInstNoAddrDiff
-		* byte[2]: VALEN
-		* byte[3]: version
-		*/
-		teSrcBits = curr_buf[0];
-		teInstNoAddrDiff  = curr_buf[1];
-		curr_buf += 4;
+		/* Header format:
+		 * v1: [srcbits][teInstNoAddrDiff][VALEN][version]
+		 * v2: [len0][len1][len2][version][TLVs...]
+		 */
+		if (ndsv5_tracer_parse_header(curr_buf, read_size, &header, &header_bytes) != ERROR_OK) {
+			LOG_ERROR("Failed to parse tracer header");
+			ret_code = -1;
+			goto out;
+		}
+
+		teSrcBits = header.srcbits;
+		teInstNoAddrDiff = header.inst_no_addr_diff;
+		ndsv5_TsCompMode = header.ts_comp_mode;
+
+		LOG_DEBUG("Tracer header version=%u header_bytes=%lu srcbits=%u teInstNoAddrDiff=%u VALEN=%u TsCompMode=%u",
+			header.version, (unsigned long)header_bytes,
+			header.srcbits, header.inst_no_addr_diff, header.valen,
+			header.ts_comp_mode);
+
+		curr_buf += header_bytes;
+		read_size -= (unsigned long)header_bytes;
 
 		/* TRACER_DECODE_MSG(("read_size = 0x%lx, curr_buf[0] = 0x%x\n", read_size, curr_buf[0])); */
 		while (read_size) {
@@ -2034,6 +2270,7 @@ int ndsv5_tracer_decode_pktfile(char *pPktFileName)
 
 			} else {
 				TRACER_DECODE_MSG(("ERROR!! packet decode ERROR !!"));
+				ret_code = -1;
 				break;
 			}
 			/* TRACER_DECODE_MSG(("read_size=0x%lx, decoded_bytes=0x%lx", read_size, decoded_bytes)); */
@@ -2049,12 +2286,12 @@ int ndsv5_tracer_decode_pktfile(char *pPktFileName)
 
 	}
 
+out:
 	if (pPacketFile)
 		fclose(pPacketFile);
 	if (gpPktDecodedFile)
 		fclose(gpPktDecodedFile);
 	free(pPktBuf);
 
-	return 0;
+	return ret_code;
 }
-

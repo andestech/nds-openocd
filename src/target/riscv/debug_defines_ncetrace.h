@@ -113,6 +113,9 @@ When 0, the Trace Funnel may have clocks gated off or be powered down */
 #define DMI_TRTECONTROL_teEnable         (0x01 << 1)
 #define DMI_TRTECONTROL_teActive         (0x01 << 0)
 
+/* trTeImpl, Trace Encoder Implementation Register */
+#define DMI_TRTEIMPL_TsCompMode          (0x01 << 26)
+
 /* teInstFeatures, Extra Instruction Trace Encoder Features */
 #define	DMI_TRTEINSTFEATURES_trTeInstExtendAddrMSB      (0x01 << 10)
 #define	DMI_TRTEINSTFEATURES_teInstEnJumpTargetCache    (0x01 << 5)

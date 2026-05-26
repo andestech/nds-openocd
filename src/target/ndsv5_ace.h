@@ -7,6 +7,8 @@
 #ifndef __NDS32_ACE_V5_H__
 #define __NDS32_ACE_V5_H__
 
+#include <stdint.h>
+
 #define MAX_COP_COUNT	4
 #define ACE_INDEX	MAX_COP_COUNT
 
@@ -42,5 +44,6 @@ typedef struct Insn_Code {
 
 int32_t nds32_ace_init_v5(const char *aceconf);
 int32_t get_ace_file_name_for_gdb_v5(const char *aceconf, const char *platform, char **name);
+void ndsv5_ace_set_key_hex(const char *hex_key);
 
 #endif

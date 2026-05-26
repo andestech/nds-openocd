@@ -3520,7 +3520,7 @@ struct ndsv5_indirect_csr_info ndsv5_indirect_csrs[] = {
 	{CSR_PRIV_S, 15, 1, "spmpswitch0", 0},
 	{CSR_PRIV_S, 15, 2, "spmpswitch1", 0},
 
-	{0, 0, 0, NULL}
+	{0, 0, 0, NULL, 0}
 };
 
 void ndsv5_print_components(struct command_invocation *cmd)

@@ -7164,30 +7164,229 @@ write_memory_bus_v1_opt_retry:
 extern INSN_CODE_T_V5 *(*gen_get_value_code) (char *name, unsigned index);
 extern INSN_CODE_T_V5 *(*gen_set_value_code) (char *name, unsigned index);
 
+/* Batched program buffer for ACE operations */
+#define ACE_MAX_INSN_BUFFER 32
+typedef struct {
+	riscv_insn_t instructions[ACE_MAX_INSN_BUFFER];
+	unsigned int count;
+	struct target *target;
+} ace_program_buffer_t;
+
+/**
+ * Initialize ACE program buffer for batched execution.
+ * This buffer can hold instructions beyond the physical program buffer size.
+ */
+static void ace_program_init(ace_program_buffer_t *prog, struct target *target)
+{
+	prog->count = 0;
+	prog->target = target;
+}
+
+/**
+ * Insert instruction into ACE program buffer.
+ * Does not check physical program buffer size - will batch execute automatically.
+ */
+static int ace_program_insert(ace_program_buffer_t *prog, riscv_insn_t insn)
+{
+	if (prog->count >= ACE_MAX_INSN_BUFFER) {
+		LOG_ERROR("ACE program buffer overflow (max %d instructions)", ACE_MAX_INSN_BUFFER);
+		return ERROR_FAIL;
+	}
+	prog->instructions[prog->count++] = insn;
+	return ERROR_OK;
+}
+
+/**
+ * Execute ACE program buffer with automatic batching.
+ * Splits instructions into batches based on physical program buffer size.
+ * Each batch is executed separately to accommodate small program buffers.
+ */
+static int ace_program_exec(ace_program_buffer_t *prog)
+{
+	struct target *target = prog->target;
+	RISCV013_INFO(info);
+	RISCV_INFO(r);
+	unsigned int available_size = info->progbufsize;
+	unsigned int batch_start = 0;
+
+	LOG_DEBUG("ACE program exec: %u instructions, progbufsize=%u, impebreak=%u",
+			prog->count, info->progbufsize, r->impebreak);
+
+	while (batch_start < prog->count) {
+		struct riscv_program program;
+		riscv_program_init(&program, target);
+
+		/* Calculate how many instructions we can fit in this batch
+		 * Reserve 1 slot for ebreak if impebreak is not supported */
+		unsigned int batch_size = (available_size > 0) ? available_size : 1;
+		unsigned int remaining = prog->count - batch_start;
+		if (batch_size > remaining)
+			batch_size = remaining;
+
+		/* Insert instructions for this batch */
+		for (unsigned int i = 0; i < batch_size; i++) {
+			if (riscv_program_insert(&program, prog->instructions[batch_start + i]) != ERROR_OK) {
+				LOG_ERROR("Failed to insert instruction %u into program buffer", batch_start + i);
+				return ERROR_FAIL;
+			}
+		}
+
+		/* Execute this batch */
+		int result = riscv_program_exec(&program, target);
+		if (result != ERROR_OK) {
+			LOG_ERROR("Failed to execute batch starting at instruction %u", batch_start);
+			return result;
+		}
+
+		LOG_DEBUG("Executed batch: instructions %u-%u", batch_start, batch_start + batch_size - 1);
+		batch_start += batch_size;
+	}
+
+	return ERROR_OK;
+}
+
+/**
+ * Load immediate value into register using ACE program buffer.
+ * Directly generates LUI + ADDI instructions without size checking.
+ *
+ * @param prog ACE program buffer
+ * @param dest Destination register
+ * @param value Immediate value to load
+ * @return ERROR_OK on success, ERROR_FAIL on failure
+ */
+static int ace_program_li(ace_program_buffer_t *prog, enum gdb_regno dest, riscv_reg_t value)
+{
+	/* Calculate sign extension for proper immediate encoding */
+	riscv_reg_t sign_ext = (value & 0x800) ? (-1 - 0xFFF) : 0;
+
+	/* Generate LUI instruction (load upper 20 bits) */
+	riscv_insn_t lui_insn = lui(dest, (value - sign_ext) >> 12);
+	if (ace_program_insert(prog, lui_insn) != ERROR_OK) {
+		LOG_ERROR("Failed to insert LUI instruction into ACE program buffer");
+		return ERROR_FAIL;
+	}
+
+	/* Generate ADDI instruction (add lower 12 bits) */
+	riscv_insn_t addi_insn = addi(dest, dest, value & 0xFFF);
+	if (ace_program_insert(prog, addi_insn) != ERROR_OK) {
+		LOG_ERROR("Failed to insert ADDI instruction into ACE program buffer");
+		return ERROR_FAIL;
+	}
+
+	LOG_DEBUG("ace_program_li: loaded 0x%" PRIx64 " into %s (2 instructions: LUI + ADDI)",
+			(uint64_t)value, gdb_regno_name(dest));
+
+	return ERROR_OK;
+}
+
+/**
+ * Load 64-bit immediate value into register using ACE program buffer.
+ * Directly generates instruction sequence without size checking.
+ *
+ * Instruction sequence:
+ *   1. LUI  temp, upper_bits(low32)
+ *   2. ADDI temp, temp, lower_bits(low32)
+ *   3. BFOZ64 temp, temp, 31, 0  (zero extend to 64-bit)
+ *   4. LUI  dest, upper_bits(high32)
+ *   5. ADDI dest, dest, lower_bits(high32)
+ *   6. SLLI dest, dest, 32  (shift high to upper 32 bits)
+ *   7. OR   dest, dest, temp  (combine high and low)
+ *
+ * @param prog ACE program buffer
+ * @param dest Destination register
+ * @param temp Temporary register for intermediate operations
+ * @param value 64-bit immediate value to load
+ * @return ERROR_OK on success, ERROR_FAIL on failure
+ */
+static int ace_program_li64(ace_program_buffer_t *prog, enum gdb_regno dest,
+		enum gdb_regno temp, riscv_reg_t value)
+{
+	/* Process low 32 bits */
+	riscv_reg_t low32 = value & 0xFFFFFFFF;
+	riscv_reg_t sign_ext = (low32 & 0x800) ? (-1 - 0xFFF) : 0;
+
+	/* 1. LUI temp, upper_bits(low32) */
+	if (ace_program_insert(prog, lui(temp, (low32 - sign_ext) >> 12)) != ERROR_OK)
+		return ERROR_FAIL;
+
+	/* 2. ADDI temp, temp, lower_bits(low32) */
+	if (ace_program_insert(prog, addi(temp, temp, low32 & 0xFFF)) != ERROR_OK)
+		return ERROR_FAIL;
+
+	/* 3. Zero-extend to 64-bit using standard RV64 instructions */
+	/* SLLI temp, temp, 32 (shift left to clear upper 32 bits) */
+	if (ace_program_insert(prog, slli(temp, temp, 32)) != ERROR_OK)
+		return ERROR_FAIL;
+	/* SRLI temp, temp, 32 (shift right to zero-extend) */
+	if (ace_program_insert(prog, srli(temp, temp, 32)) != ERROR_OK)
+		return ERROR_FAIL;
+
+	/* Process high 32 bits */
+	riscv_reg_t high32 = value >> 32;
+	sign_ext = (high32 & 0x800) ? (-1 - 0xFFF) : 0;
+
+	/* 4. LUI dest, upper_bits(high32) */
+	if (ace_program_insert(prog, lui(dest, (high32 - sign_ext) >> 12)) != ERROR_OK)
+		return ERROR_FAIL;
+
+	/* 5. ADDI dest, dest, lower_bits(high32) */
+	if (ace_program_insert(prog, addi(dest, dest, high32 & 0xFFF)) != ERROR_OK)
+		return ERROR_FAIL;
+
+	/* 6. SLLI dest, dest, 32 (shift high value to upper 32 bits) */
+	if (ace_program_insert(prog, slli(dest, dest, 32)) != ERROR_OK)
+		return ERROR_FAIL;
+
+	/* 7. OR dest, dest, temp (combine high and low) */
+	if (ace_program_insert(prog, or_r(dest, dest, temp)) != ERROR_OK)
+		return ERROR_FAIL;
+
+	LOG_DEBUG("ace_program_li64: loaded 0x%" PRIx64 " into %s (7 instructions)",
+			(uint64_t)value, gdb_regno_name(dest));
+
+	return ERROR_OK;
+}
+
 int nds_ace_enable(struct target *target)
 {
-	struct riscv_program program;
-	riscv_program_init(&program, target);
+	riscv_reg_t mmisc_ctl_value;
+	int result;
 
-	/* Assembly code used to enable ACE
-	 *  7d0022f3 csrr t0,mmisc_ctl
-	 *  0012c293 xori t0,t0,1
-	 *  0102e293 ori  t0,t0,16
-	 *  7d029073 csrw mmisc_ctl,t0
-	 */
-	riscv_program_insert(&program, 0x7d0022f3);
-	riscv_program_insert(&program, 0x0012c293);
-	riscv_program_insert(&program, 0x0102e293);
-	riscv_program_insert(&program, 0x7d029073);
+	/* Read current mmisc_ctl CSR (0x7D0) value */
+	result = register_read_direct(target, &mmisc_ctl_value,
+			GDB_REGNO_CSR0 + CSR_MMISC_CTL);
+	if (result != ERROR_OK) {
+		LOG_ERROR("Failed to read mmisc_ctl CSR (0x7D0)");
+		return result;
+	}
 
-	/* run the program */
-	int exec_out = riscv_program_exec(&program, target);
+	LOG_DEBUG("mmisc_ctl before ACE enable: 0x%" PRIx64, mmisc_ctl_value);
 
-	if (exec_out != ERROR_OK) {
-		LOG_ERROR("Unable to execute the program to enable ACR's CSR");
-		return exec_out;
-	} else
-		return ERROR_OK;
+	/* Modify value to enable ACE */
+	mmisc_ctl_value |= 0x10;  /* ori t0, t0, 16 */
+
+	LOG_DEBUG("mmisc_ctl after modification: 0x%" PRIx64, mmisc_ctl_value);
+
+	/* Write back modified value */
+	result = register_write_direct(target, GDB_REGNO_CSR0 + CSR_MMISC_CTL,
+			mmisc_ctl_value);
+	if (result != ERROR_OK) {
+		LOG_ERROR("Failed to write mmisc_ctl CSR to enable ACE");
+		return result;
+	}
+
+	/* Read current mmisc_ctl CSR (0x7D0) value */
+	result = register_read_direct(target, &mmisc_ctl_value,
+			GDB_REGNO_CSR0 + CSR_MMISC_CTL);
+	if (result != ERROR_OK) {
+		LOG_ERROR("Failed to read mmisc_ctl CSR (0x7D0)");
+		return result;
+	}
+	LOG_DEBUG("mmisc_ctl after modification (check): 0x%" PRIx64, mmisc_ctl_value);
+
+
+	LOG_DEBUG("ACE enabled successfully");
+	return ERROR_OK;
 };
 
 int nds_ace_get_reg(struct reg *reg)
@@ -7242,62 +7441,71 @@ int nds_ace_get_reg(struct reg *reg)
 	/* Execute the code generated by gen_get_value_code() iteratively */
 	int exec_out = ERROR_OK;
 	for (unsigned i = 0; i < insn_code->num; i++) {
-		/* Initialize */
-		struct riscv_program program;
-		riscv_program_init(&program, target);
+		/* Build instruction batch using ACE program buffer for auto-batching */
+		ace_program_buffer_t ace_prog;
+		ace_program_init(&ace_prog, target);
 
-		/* For ACM utility instruction, write memory address to GDB_REGNO_XPR0 + 7 */
+		/* For ACM utility instruction, write memory address to GDB_REGNO_T2 */
 		if (init_acm_addr == false &&
 				((insn_code->code + i)->version == acm_io1 ||
 				 (insn_code->code + i)->version == acm_io2)) {
-			riscv_program_li(&program, GDB_REGNO_T2, reg_idx);
+			/* Use ace_program_li which doesn't check progbufsize */
+			if (ace_program_li(&ace_prog, GDB_REGNO_T2, reg_idx) != ERROR_OK) {
+				LOG_ERROR("Failed to load ACM address into T2");
+				exec_out = ERROR_FAIL;
+				break;
+			}
 			init_acm_addr = true;
 			if (is_rv64)
 				LOG_DEBUG("acm_addr = 0x%016" PRIx64 " feed into $t2", (uint64_t) reg_idx);
 			else
-				LOG_DEBUG("acm_addr= 0x%08" PRIx32 " feed into $t2", (uint32_t) reg_idx);
+				LOG_DEBUG("acm_addr = 0x%08" PRIx32 " feed into $t2", (uint32_t) reg_idx);
 		}
 
-		/* insert utility instruction to program buffer */
+		/* Insert utility instruction to ACE program buffer */
 		unsigned insn = (insn_code->code + i)->insn;
-		riscv_program_insert(&program, insn);
+		if (ace_program_insert(&ace_prog, insn) != ERROR_OK) {
+			LOG_ERROR("Failed to insert utility instruction into ACE program buffer");
+			exec_out = ERROR_FAIL;
+			break;
+		}
 		LOG_DEBUG("read utility instruction (offset: %d) = 0x%08" PRIx32, i, insn);
 		LOG_DEBUG("read utility instruction version %d", (insn_code->code + i)->version);
 
-		/* determine the number of GPRs used to read/write data from/to ACR/ACM */
+		/* Determine the number of GPRs used to read data from ACR/ACM */
 		bool isTwoGPR = false;
 		if ((insn_code->code + i)->version == acr_io2 ||
 				(insn_code->code + i)->version == acm_io2) {
 			isTwoGPR = true;
 		}
 
-		/* execute the code stored in program buffer */
-		exec_out = riscv_program_exec(&program, target);
+		/* Execute this batch with auto-batching */
+		exec_out = ace_program_exec(&ace_prog);
 		if (exec_out != ERROR_OK) {
 			LOG_ERROR("Unable to execute ACE utility program");
 			break;
 		}
 
-		/* read value from program buffer */
+		/* Read value from registers after execution */
 		if (isTwoGPR == false) {
 			riscv_reg_t reg_value;
 			riscv_get_register(target, &reg_value, GDB_REGNO_T0);
 			memcpy(value, &reg_value, reg_bytes);
 			value += reg_bytes;
 			if (is_rv64)
-				LOG_DEBUG("reg_value = 0x%016" PRIx64 " read from program buffer", (uint64_t) reg_value);
+				LOG_DEBUG("reg_value = 0x%016" PRIx64 " read from register", (uint64_t) reg_value);
 			else
-				LOG_DEBUG("reg_value = 0x%08" PRIx32 " read from program buffer", (uint32_t) reg_value);
+				LOG_DEBUG("reg_value = 0x%08" PRIx32 " read from register", (uint32_t) reg_value);
 		} else {
 			riscv_reg_t high = 0, low = 0;
 			riscv_get_register(target, &high, GDB_REGNO_T0);
 			riscv_get_register(target, &low,  GDB_REGNO_T1);
 			if (is_rv64) {
-				LOG_DEBUG("reg_value (high) = 0x%016" PRIx64 " read from program buffer", (uint64_t) high);
-				LOG_DEBUG("reg_value (low)  = 0x%016" PRIx64 " read from program buffer", (uint64_t) low);
+				LOG_DEBUG("reg_value (high) = 0x%016" PRIx64 " read from register", (uint64_t) high);
+				LOG_DEBUG("reg_value (low)  = 0x%016" PRIx64 " read from register", (uint64_t) low);
 			} else {
-				LOG_DEBUG("reg_value (high) = 0x%08" PRIx32 " read from program buffer", (uint32_t) high);
-				LOG_DEBUG("reg_value (low)  = 0x%08" PRIx32 " read from program buffer", (uint32_t) low);
+				LOG_DEBUG("reg_value (high) = 0x%08" PRIx32 " read from register", (uint32_t) high);
+				LOG_DEBUG("reg_value (low)  = 0x%08" PRIx32 " read from register", (uint32_t) low);
 			}
 			memcpy(value, &low, reg_bytes);
 			value += reg_bytes;
@@ -7319,7 +7527,6 @@ int nds_ace_get_reg(struct reg *reg)
 
 int nds_ace_set_reg(struct reg *reg, unsigned char *val)
 {
-	int exec_out;
 	riscv_reg_info_t *reg_info = reg->arch_info;
 	struct target *target = reg_info->target;
 	bool is_rv64 = (64 == riscv_xlen(target)) ? true : false;
@@ -7331,10 +7538,10 @@ int nds_ace_set_reg(struct reg *reg, unsigned char *val)
 	}
 
 	/* Backup temp register (x5, x6, x7, x28)
-	 * x5: high part
-	 * x6: low part
-	 * x7: ACM's address
-	 * x28(t3): temp reg to write to xlen(64) gpr
+	 * x5 (T0): high part
+	 * x6 (T1): low part
+	 * x7 (T2): ACM's address
+	 * x28 (T3): temp reg for li64 operations
 	 */
 	riscv_reg_t s0, s1, s2, t3;
 	riscv_get_register(target, &s0, GDB_REGNO_T0);
@@ -7343,7 +7550,7 @@ int nds_ace_set_reg(struct reg *reg, unsigned char *val)
 	if (is_rv64)
 		riscv_get_register(target, &t3, GDB_REGNO_T3);
 
-	/* Get acr_name and register index */
+	/* Get type_name and register index */
 	char *type_name = (char *) reg->reg_data_type->id;
 	/* Format : "%s_%d", type_name, idx */
 	char *reg_name = (char *) reg->name;
@@ -7362,63 +7569,66 @@ int nds_ace_set_reg(struct reg *reg, unsigned char *val)
 
 	/* Generate code to write value to ACR/ACM */
 	INSN_CODE_T_V5 *insn_code = gen_set_value_code(type_name, reg_idx);
+	if (!insn_code) {
+		LOG_ERROR("Unable to get ACR/ACM set code");
+		goto error_no_code;
+	}
 
 	bool init_acm_addr = false;
-	/* Execute the code generated by gen_get_value_code() iteratively */
+	int exec_out = ERROR_OK;
+
+	/* Execute the code generated by gen_set_value_code() iteratively */
 	for (unsigned i = 0; i < insn_code->num; i++) {
-		/* Initialize */
-		struct riscv_program program;
-		riscv_program_init(&program, target);
+		/* Build instruction batch using ACE program buffer for auto-batching */
+		ace_program_buffer_t ace_prog;
+		ace_program_init(&ace_prog, target);
 
 		LOG_DEBUG("write utility instruction version %d", (insn_code->code + i)->version);
-		/* determine the number of GPRs used to read/write data from/to ACR/ACM */
+
+		/* Determine the number of GPRs used to read/write data from/to ACR/ACM */
 		bool isTwoGPR = false;
 		if ((insn_code->code + i)->version == acr_io2 ||
 				(insn_code->code + i)->version == acm_io2) {
 			isTwoGPR = true;
 		}
 
-		/* For ACM utility instruction, write memory address to GDB_REGNO_XPR0 + 7 */
+		/* For ACM utility instruction, write memory address to T2 */
 		if (init_acm_addr == false &&
 				((insn_code->code + i)->version == acm_io1 ||
 				 (insn_code->code + i)->version == acm_io2)) {
-			riscv_program_li(&program, GDB_REGNO_T2, reg_idx);	/* 2 entry */
-			init_acm_addr = true;
-			if (is_rv64) {
-				/* 7 insn entry + ebreak entry fills up program buffer */
-				exec_out = riscv_program_exec(&program, target);
-				if (exec_out != ERROR_OK) {
-					LOG_ERROR("Unable to execute program");
-					goto error;
-				}
-				riscv_program_init(&program, target);
-				LOG_DEBUG("acm_addr = 0x%016" PRIx64 " feed into $t2", (uint64_t) reg_idx);
-			} else {
-				LOG_DEBUG("acm_addr = 0x%08" PRIx32 " feed into $t2", (uint32_t) reg_idx);
+			if (ace_program_li(&ace_prog, GDB_REGNO_T2, reg_idx) != ERROR_OK) {
+				LOG_ERROR("Failed to load ACM address into T2");
+				exec_out = ERROR_FAIL;
+				goto error;
 			}
+			init_acm_addr = true;
+			if (is_rv64)
+				LOG_DEBUG("acm_addr = 0x%016" PRIx64 " will be loaded into $t2", (uint64_t) reg_idx);
+			else
+				LOG_DEBUG("acm_addr = 0x%08" PRIx32 " will be loaded into $t2", (uint32_t) reg_idx);
 		}
 
-		/* write given value string to S0/1 */
+		/* Write given value to T0/T1 */
 		if (isTwoGPR == false) {
 			/* Extract part of value from given value string */
 			riscv_reg_t reg_value = 0;
 			memcpy(&reg_value, value, reg_bytes);
 			value += reg_bytes;
-			/* riscv_program_write_ram(&program, output + 4, 0); */
-			if (is_rv64) {
-				riscv_program_li64(&program, GDB_REGNO_T0, GDB_REGNO_T3, reg_value);	/* 7 entry */
 
-				/* 7 insn entry + ebreak entry fills up program buffer */
-				exec_out = riscv_program_exec(&program, target);
-				if (exec_out != ERROR_OK) {
-					LOG_ERROR("Unable to execute program");
+			if (is_rv64) {
+				if (ace_program_li64(&ace_prog, GDB_REGNO_T0, GDB_REGNO_T3, reg_value) != ERROR_OK) {
+					LOG_ERROR("Failed to load value into T0 (RV64)");
+					exec_out = ERROR_FAIL;
 					goto error;
 				}
-				riscv_program_init(&program, target);
-				LOG_DEBUG("reg_value = 0x%016" PRIx64 " feed into $t0", (uint64_t) reg_value);
+				LOG_DEBUG("reg_value = 0x%016" PRIx64 " will be loaded into $t0", (uint64_t) reg_value);
 			} else {
-				riscv_program_li(&program, GDB_REGNO_T0, reg_value);	/* 2 entry */
-				LOG_DEBUG("reg_value = 0x%08" PRIx32 " feed into $t0", (uint32_t) reg_value);
+				if (ace_program_li(&ace_prog, GDB_REGNO_T0, reg_value) != ERROR_OK) {
+					LOG_ERROR("Failed to load value into T0 (RV32)");
+					exec_out = ERROR_FAIL;
+					goto error;
+				}
+				LOG_DEBUG("reg_value = 0x%08" PRIx32 " will be loaded into $t0", (uint32_t) reg_value);
 			}
 		} else {
 			/* Extract part of value from given value string
@@ -7433,55 +7643,60 @@ int nds_ace_set_reg(struct reg *reg, unsigned char *val)
 			value += reg_bytes;
 
 			if (is_rv64) {
-				riscv_program_li64(&program, GDB_REGNO_T0, GDB_REGNO_T3, high);	/* 7 entry */
-				/* 7 insn entry + ebreak entry fills up program buffer */
-				exec_out = riscv_program_exec(&program, target);
-				if (exec_out != ERROR_OK) {
-					LOG_ERROR("Unable to execute program");
+				if (ace_program_li64(&ace_prog, GDB_REGNO_T0, GDB_REGNO_T3, high) != ERROR_OK) {
+					LOG_ERROR("Failed to load high value into T0 (RV64)");
+					exec_out = ERROR_FAIL;
 					goto error;
 				}
-				riscv_program_init(&program, target);
-
-				riscv_program_li64(&program, GDB_REGNO_T1, GDB_REGNO_T3, low);	/* 7 entry */
-				/* 7 insn entry + ebreak entry fills up program buffer */
-				exec_out = riscv_program_exec(&program, target);
-				if (exec_out != ERROR_OK) {
-					LOG_ERROR("Unable to execute program");
+				if (ace_program_li64(&ace_prog, GDB_REGNO_T1, GDB_REGNO_T3, low) != ERROR_OK) {
+					LOG_ERROR("Failed to load low value into T1 (RV64)");
+					exec_out = ERROR_FAIL;
 					goto error;
 				}
-				riscv_program_init(&program, target);
-
-				LOG_DEBUG("reg_value = 0x%016" PRIx64 " feed into $t0", (uint64_t) high);
-				LOG_DEBUG("reg_value = 0x%016" PRIx64 " feed into $t1", (uint64_t) low);
+				LOG_DEBUG("reg_value (high) = 0x%016" PRIx64 " will be loaded into $t0", (uint64_t) high);
+				LOG_DEBUG("reg_value (low)  = 0x%016" PRIx64 " will be loaded into $t1", (uint64_t) low);
 			} else {
-				riscv_program_li(&program, GDB_REGNO_T0, high);	/* 2 entry */
-				riscv_program_li(&program, GDB_REGNO_T1, low);	/* 2 entry */
-				LOG_DEBUG("reg_value = 0x%08" PRIx32 " feed into $t0", (uint32_t) high);
-				LOG_DEBUG("reg_value = 0x%08" PRIx32 " feed into $t1", (uint32_t) low);
+				if (ace_program_li(&ace_prog, GDB_REGNO_T0, high) != ERROR_OK) {
+					LOG_ERROR("Failed to load high value into T0 (RV32)");
+					exec_out = ERROR_FAIL;
+					goto error;
+				}
+				if (ace_program_li(&ace_prog, GDB_REGNO_T1, low) != ERROR_OK) {
+					LOG_ERROR("Failed to load low value into T1 (RV32)");
+					exec_out = ERROR_FAIL;
+					goto error;
+				}
+				LOG_DEBUG("reg_value (high) = 0x%08" PRIx32 " will be loaded into $t0", (uint32_t) high);
+				LOG_DEBUG("reg_value (low)  = 0x%08" PRIx32 " will be loaded into $t1", (uint32_t) low);
 			}
 		}
 
-		/* riscv_program_fence(&program); */
+		/* Insert utility instruction to ACE program buffer */
 		unsigned insn = (insn_code->code + i)->insn;
-		riscv_program_insert(&program, insn);
-		LOG_DEBUG("write utility instruction (offset:%d) = %x", i, insn);
+		if (ace_program_insert(&ace_prog, insn) != ERROR_OK) {
+			LOG_ERROR("Failed to insert utility instruction into ACE program buffer");
+			exec_out = ERROR_FAIL;
+			goto error;
+		}
+		LOG_DEBUG("write utility instruction (offset:%d) = 0x%08x", i, insn);
 
-		/* execute the code stored in program buffer */
-		exec_out = riscv_program_exec(&program, target);
+		/* Execute this batch with auto-batching */
+		exec_out = ace_program_exec(&ace_prog);
 		if (exec_out != ERROR_OK) {
-			LOG_ERROR("Unable to execute program");
+			LOG_ERROR("Unable to execute ACE utility program");
 			goto error;
 		}
 
-		riscv_reg_t high_s0, low_s1;
-		riscv_get_register(target, &high_s0, GDB_REGNO_T0);
-		riscv_get_register(target, &low_s1,  GDB_REGNO_T1);
+		/* Verify register values after execution (for debugging) */
+		riscv_reg_t verify_t0, verify_t1;
+		riscv_get_register(target, &verify_t0, GDB_REGNO_T0);
+		riscv_get_register(target, &verify_t1, GDB_REGNO_T1);
 		if (is_rv64) {
-			LOG_DEBUG("(confirm)reg_value = 0x%016" PRIx64 " feed into $t0", (uint64_t) high_s0);
-			LOG_DEBUG("(confirm)reg_value = 0x%016" PRIx64 " feed into $t1", (uint64_t) low_s1);
+			LOG_DEBUG("(confirm) $t0 = 0x%016" PRIx64, (uint64_t) verify_t0);
+			LOG_DEBUG("(confirm) $t1 = 0x%016" PRIx64, (uint64_t) verify_t1);
 		} else {
-			LOG_DEBUG("(confirm)reg_value = 0x%08" PRIx32 " feed into $t0", (uint32_t) high_s0);
-			LOG_DEBUG("(confirm)reg_value = 0x%08" PRIx32 " feed into $t1", (uint32_t) low_s1);
+			LOG_DEBUG("(confirm) $t0 = 0x%08" PRIx32, (uint32_t) verify_t0);
+			LOG_DEBUG("(confirm) $t1 = 0x%08" PRIx32, (uint32_t) verify_t1);
 		}
 	}
 
@@ -7494,9 +7709,16 @@ int nds_ace_set_reg(struct reg *reg, unsigned char *val)
 	if (is_rv64)
 		riscv_set_register(target, GDB_REGNO_T3, t3);
 
+	if (insn_code)
+		free(insn_code);
+
 	return ERROR_OK;
 
 error:
+	if (insn_code)
+		free(insn_code);
+
+error_no_code:
 	/* Restore temp register */
 	riscv_set_register(target, GDB_REGNO_T0, s0);
 	riscv_set_register(target, GDB_REGNO_T1, s1);
@@ -7504,7 +7726,7 @@ error:
 	if (is_rv64)
 		riscv_set_register(target, GDB_REGNO_T3, t3);
 
-	return exec_out;
+	return ERROR_FAIL;
 }
 
 struct reg_arch_type nds_ace_reg_access_type = {
@@ -7522,7 +7744,7 @@ int nds_indirect_get_reg(struct reg *reg)
 	uint32_t csr_iselect;
 	uint32_t csr_ireg;
 
-	LOG_DEBUG("[indirect] priv = %d, group = %d, ireg = %d, reg_idx = %d, indirect_idx = %d, name = %s",
+	LOG_DEBUG("[indirect] priv = %d, group = %" PRId64 ", ireg = %d, reg_idx = %d, indirect_idx = %d, name = %s",
 		 ndsv5_indirect_csrs[csr_number].priv,
 		 ndsv5_indirect_csrs[csr_number].groupid,
 		 ndsv5_indirect_csrs[csr_number].ireg,
@@ -7592,7 +7814,7 @@ int nds_indirect_set_reg(struct reg *reg, unsigned char *val)
 	uint32_t csr_iselect;
 	uint32_t csr_ireg;
 
-	LOG_DEBUG("[indirect] priv = %d, group = %d, ireg = %d, reg_idx = %d, indirect_idx = %d, name = %s",
+	LOG_DEBUG("[indirect] priv = %d, group = %" PRId64 ", ireg = %d, reg_idx = %d, indirect_idx = %d, name = %s",
 		 ndsv5_indirect_csrs[csr_number].priv,
 		 ndsv5_indirect_csrs[csr_number].groupid,
 		 ndsv5_indirect_csrs[csr_number].ireg,

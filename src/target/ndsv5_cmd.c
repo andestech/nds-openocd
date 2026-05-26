@@ -14,6 +14,7 @@
 
 #include "target.h"
 #include <target/smp.h>
+#include <rtos/rtos.h>
 #include <helper/log.h>
 #include <helper/binarybuffer.h>
 #include <helper/jim-nvp.h>
@@ -2319,7 +2320,6 @@ struct reg_arch_type ndsv5_reg_arch_type = {
 	.set = ndsv5_register_set
 };
 
-/* WARNING: vector support up to 4096 bits */
 char gNDSVectorRegBuf[32][4096/8];
 static int ndsv5_register_vector_get(struct reg *reg)
 {
@@ -3410,6 +3410,10 @@ static int ndsv5_gdb_detach(struct target *target)
 			nds32->suppressed_hsp_exception = false;
 		}
 
+		if (target->rtos) {
+			NDS_INFO("reset rtos->current_threadid");
+			target->rtos->current_threadid = -1;
+		}
 		/* Set attached to false before resume */
 		nds32->attached = false;
 
@@ -3907,29 +3911,10 @@ int ndsv5_hit_watchpoint_check(struct target *target)
 	return ERROR_FAIL;
 }
 
-/*
-Register-Based Loads and Stores
-(C.LW/C.LD/..)
-15-13    12-10   9-7   6-5  4-2  1-0
-funct3    imm    rs1   imm  rd   op
-
-(C.SW/C.SD/..)
-15-13    12-10   9-7   6-5  4-2  1-0
-funct3    imm    rs1   imm  rs2  op
-
-Stack-Pointer-Based Loads and Stores
-(C.LWSP/C.LDSP/..)
-15-13    12   11-7  6-2  1-0
-funct3   imm   rd   imm  op
-
-(C.SWSP/C.SDSP/..)
-15-13    12-7  6-2  1-0
-funct3   imm   rs2  op
-*/
-
 #define MASK_C_LOAD_STORE   0xE003
-#define MASK_ZCB_LOAD_STORE 0xFC00
+#define MASK_ZCB_LOAD_STORE 0xFC03
 
+/* 32 Bit AndeStar V5 extension (RV32 and RV64) */
 #define MATCH_LBGP    0x000B
 #define MATCH_LBUGP   0x200B
 #define MATCH_LHGP    0x102B
@@ -3937,642 +3922,506 @@ funct3   imm   rs2  op
 #define MATCH_LWGP    0x202B
 #define MATCH_LWUGP   0x602B
 #define MATCH_LDGP    0x302B
-
 #define MATCH_SBGP    0x300B
 #define MATCH_SHGP    0x002B
 #define MATCH_SWGP    0x402B
 #define MATCH_SDGP    0x702B
 
-/*
-imm[11:0] rs1 000 rd 0000011 LB
-imm[11:0] rs1 001 rd 0000011 LH
-imm[11:0] rs1 010 rd 0000011 LW
-imm[11:0] rs1 100 rd 0000011 LBU
-imm[11:0] rs1 101 rd 0000011 LHU
+#define MATCH_C_LQ    0x2000
+#define MASK_C_LQ     0xe003
+#define MATCH_C_LQSP  0x2002
+#define MASK_C_LQSP   0xe003
+#define MATCH_C_SQ    0xA000
+#define MASK_C_SQ     0xe003
+#define MATCH_C_SQSP  0xA002
+#define MASK_C_SQSP   0xe003
 
-imm[11:5] rs2 rs1 000 imm[4:0] 0100011 SB
-imm[11:5] rs2 rs1 001 imm[4:0] 0100011 SH
-imm[11:5] rs2 rs1 010 imm[4:0] 0100011 SW
+#define INSN_RV32     0x10000000
+#define INSN_RV64     0x20000000
+#define INSN_RV128    0x40000000
+#define INSN_RV_MASK  0x70000000
 
-8201a783:	lw	a5,-2016(gp)
-		imm[11:0]        rs1(3->gp)       rd(15->a5)  opcode
-		1000 0010 0000   00011       010  01111       0000011
-
-00412c83:	lw	s9,4(sp)
-		imm[11:0]        rs1(2->sp)       rd(25->s9)  opcode
-		0000 0000 0100   00010       010  11001       0000011
-
-02042823:	sw	zero,48(s0)
-		imm[11:5]  rs2(0->zero) rs1(8->s0)       imm[4:0]   opcode
-		0000001    00000        01000       010  10000      0100011
-
-
-00f59623:	sh	a5,12(a1)
-		imm[11:5]  rs2(15->a5)  rs1(11->a1)      imm[4:0]   opcode
-		0000000    01111        01011       001  01100      0100011
-*/
-#define MATCH_ID_LOAD       0
-#define MATCH_NUMS_LOAD_32  (10 + 7 + 2)
-
-#define MATCH_ID_LOADGP     10
-#define MATCH_ID_LBGP       (MATCH_ID_LOADGP + 0)
-#define MATCH_ID_LBUGP      (MATCH_ID_LOADGP + 1)
-#define MATCH_ID_LHGP       (MATCH_ID_LOADGP + 2)
-#define MATCH_ID_LHUGP      (MATCH_ID_LOADGP + 3)
-#define MATCH_ID_LWGP       (MATCH_ID_LOADGP + 4)
-#define MATCH_ID_LWUGP      (MATCH_ID_LOADGP + 5)
-#define MATCH_ID_LDGP       (MATCH_ID_LOADGP + 6)
-#define MATCH_ID_LR         (MATCH_ID_LOADGP + 7)
-#define MATCH_ID_LR_D       (MATCH_ID_LR + 0)
-#define MATCH_ID_LR_W       (MATCH_ID_LR + 1)
-
-#define MATCH_ID_C_LOAD     (MATCH_NUMS_LOAD_32)
-#define MATCH_ID_C_LQ       (MATCH_ID_C_LOAD + 0)
-#define MATCH_ID_C_LW       (MATCH_ID_C_LOAD + 1)
-#define MATCH_ID_C_LD       (MATCH_ID_C_LOAD + 2)
-#define MATCH_ID_C_FLW      (MATCH_ID_C_LOAD + 3)
-#define MATCH_ID_C_FLD      (MATCH_ID_C_LOAD + 4)
-#define MATCH_ID_C_LOADSP   (MATCH_ID_C_LOAD + 5)
-#define MATCH_ID_C_LQSP     (MATCH_ID_C_LOADSP + 0)
-#define MATCH_ID_C_LWSP     (MATCH_ID_C_LOADSP + 1)
-#define MATCH_ID_C_LDSP     (MATCH_ID_C_LOADSP + 2)
-#define MATCH_ID_C_FLWSP    (MATCH_ID_C_LOADSP + 3)
-#define MATCH_ID_C_FLDSP    (MATCH_ID_C_LOADSP + 4)
-#define MATCH_ID_C_ZCB_LOAD (MATCH_ID_C_LOADSP + 5)
-#define MATCH_ID_C_LBU	    (MATCH_ID_C_ZCB_LOAD + 0)
-#define MATCH_ID_C_LHU	    (MATCH_ID_C_ZCB_LOAD + 1)
-#define MATCH_ID_C_LH	    (MATCH_ID_C_ZCB_LOAD + 2)
-
-#define MATCH_ID_LOAD_NUMS  (MATCH_ID_C_ZCB_LOAD + 3)
-
-#define MATCH_ID_STORE      0
-#define MATCH_NUMS_STORE_32 (7 + 4 + 2)
-
-#define MATCH_ID_STOREGP    7
-#define MATCH_ID_SBGP       (MATCH_ID_STOREGP + 0)
-#define MATCH_ID_SHGP       (MATCH_ID_STOREGP + 1)
-#define MATCH_ID_SWGP       (MATCH_ID_STOREGP + 2)
-#define MATCH_ID_SDGP       (MATCH_ID_STOREGP + 3)
-#define MATCH_ID_SC         (MATCH_ID_STOREGP + 4)
-#define MATCH_ID_SC_D       (MATCH_ID_SC + 0)
-#define MATCH_ID_SC_W       (MATCH_ID_SC + 1)
-
-#define MATCH_ID_C_STORE    (MATCH_NUMS_STORE_32)
-#define MATCH_ID_C_SQ       (MATCH_ID_C_STORE + 0)
-#define MATCH_ID_C_SW       (MATCH_ID_C_STORE + 1)
-#define MATCH_ID_C_SD       (MATCH_ID_C_STORE + 2)
-#define MATCH_ID_C_FSW      (MATCH_ID_C_STORE + 3)
-#define MATCH_ID_C_FSD      (MATCH_ID_C_STORE + 4)
-#define MATCH_ID_C_STORESP  (MATCH_ID_C_STORE + 5)
-#define MATCH_ID_C_SQSP     (MATCH_ID_C_STORESP + 0)
-#define MATCH_ID_C_SWSP     (MATCH_ID_C_STORESP + 1)
-#define MATCH_ID_C_SDSP     (MATCH_ID_C_STORESP + 2)
-#define MATCH_ID_C_FSWSP    (MATCH_ID_C_STORESP + 3)
-#define MATCH_ID_C_FSDSP    (MATCH_ID_C_STORESP + 4)
-#define MATCH_ID_C_ZCB_STORE (MATCH_ID_C_STORESP + 5)
-#define MATCH_ID_C_SB       (MATCH_ID_ZCB_STORE + 0)
-#define MATCH_ID_C_SH       (MATCH_ID_ZCB_STORE + 1)
-
-#define MATCH_ID_STORE_NUMS (MATCH_ID_C_ZCB_STORE + 2)
-
-unsigned int g_insn_load_match[] = {
-	MATCH_LB,
-	MATCH_LH,
-	MATCH_LW,
-	MATCH_LD,
-	MATCH_LBU,
-	MATCH_LHU,
-	MATCH_LWU,
-	MATCH_FLW,
-	MATCH_FLD,
-	MATCH_FLQ,
-	/* GP-implied load insn. */
-	MATCH_LBGP,
-	MATCH_LBUGP,
-	MATCH_LHGP,
-	MATCH_LHUGP,
-	MATCH_LWGP,
-	MATCH_LWUGP,
-	MATCH_LDGP,
-	/* Atomic Memory Operations */
-	(MATCH_LR_D & MASK_LW),
-	(MATCH_LR_W & MASK_LW),
-
-	/* Compressed Instruction Formats */
-	MATCH_C_FLD, /* MATCH_C_LQ, */
-	MATCH_C_LW,
-	MATCH_C_LD,
-	MATCH_C_FLW,
-	MATCH_C_FLD,
-	MATCH_C_FLDSP, /* MATCH_C_LQSP, */
-	MATCH_C_LWSP,
-	MATCH_C_LDSP,
-	MATCH_C_FLWSP,
-	MATCH_C_FLDSP,
-	MATCH_C_LBU,
-	MATCH_C_LHU,	/* Zcb */
-	MATCH_C_LH,
-};
-
-unsigned int g_insn_store_match[] = {
-	MATCH_SB,
-	MATCH_SH,
-	MATCH_SW,
-	MATCH_SD,
-	MATCH_FSW,
-	MATCH_FSD,
-	MATCH_FSQ,
-	/* GP-implied store insn. */
-	MATCH_SBGP,
-	MATCH_SHGP,
-	MATCH_SWGP,
-	MATCH_SDGP,
-	/* Atomic Memory Operations */
-	(MATCH_SC_D & MASK_SW),
-	(MATCH_SC_W & MASK_SW),
-	/* Compressed Instruction Formats */
-	MATCH_C_FSD, /* MATCH_C_SQ, */
-	MATCH_C_SW,
-	MATCH_C_SD,
-	MATCH_C_FSW,
-	MATCH_C_FSD,
-	MATCH_C_FSDSP, /* MATCH_C_SQSP, */
-	MATCH_C_SWSP,
-	MATCH_C_SDSP,
-	MATCH_C_FSWSP,
-	MATCH_C_FSDSP,
-	MATCH_C_SB, /* Zcb */
-	MATCH_C_SH,
-};
+#define INSN_FORMAT_MASK           0x0003FFFF
+#define INSN_FORMAT_LOAD           0x00010000
+#define INSN_FORMAT_STORE          0x00020000
+#define INSN_FORMAT_ITYPE         (0x00000001|INSN_FORMAT_LOAD)   /* Loads are encoded in the I-type format */
+#define INSN_FORMAT_STYPE         (0x00000002|INSN_FORMAT_STORE)  /* Stores are encoded in the S-type format */
+#define INSN_FORMAT_STACK_LOAD    (0x00000004|INSN_FORMAT_LOAD)   /* Stack-Pointer-Based Loads, use the CI */
+#define INSN_FORMAT_STACK_STORE   (0x00000008|INSN_FORMAT_STORE)  /* Stack-Pointer-Based Stores, use the CSS */
+#define INSN_FORMAT_CL            (0x00000010|INSN_FORMAT_LOAD)   /* Register-Based Loads format */
+#define INSN_FORMAT_CS            (0x00000020|INSN_FORMAT_STORE)  /* Register-Based Stores format */
+#define INSN_FORMAT_ANDES_LOAD    (0x00000040|INSN_FORMAT_LOAD)   /* AndeStar V5 extension load */
+#define INSN_FORMAT_ANDES_STORE   (0x00000080|INSN_FORMAT_STORE)  /* AndeStar V5 extension store */
+#define INSN_FORMAT_ZC_LOAD       (0x00000100|INSN_FORMAT_LOAD)
+#define INSN_FORMAT_ZC_STORE      (0x00000200|INSN_FORMAT_STORE)
+#define INSN_FORMAT_ZC_POP        (0x00000400|INSN_FORMAT_LOAD)
+#define INSN_FORMAT_ZC_PUSH       (0x00000800|INSN_FORMAT_STORE)
+#define INSN_FORMAT_AMO_LOAD      (0x00001000|INSN_FORMAT_LOAD)   /* Atomic Memory Operations load */
+#define INSN_FORMAT_AMO_STORE     (0x00002000|INSN_FORMAT_STORE)  /* Atomic Memory Operations store */
 
 struct nds_insn_loadstore {
 	const char *name;
 	uint32_t length;
+	uint32_t mask;
+	uint32_t match;
+	uint32_t misa;
+	uint32_t attr;
 };
 
-static struct nds_insn_loadstore nds_insn_load[] = {
-	{ "lb", 1 },
-	{ "lh", 2 },
-	{ "lw", 4 },
-	{ "ld", 8 },
-	{ "lbu", 1 },
-	{ "lhu", 2 },
-	{ "lwu", 4 },
-	{ "flw", 4 },
-	{ "fld", 8 },
-	{ "flq", 16 },
-	{ "lbgp", 1 },
-	{ "lbugp", 1 },
-	{ "lhgp", 2 },
-	{ "lhugp", 2 },
-	{ "lwgp", 4 },
-	{ "lwugp", 4 },
-	{ "ldgp", 8 },
-	{ "lr.d", 8 },
-	{ "lr.w", 4 },
+static struct nds_insn_loadstore nds_insn_all[] = {
+	/* Load */
+	{ "lb",    1,  MASK_LB, MATCH_LB,  0x0, INSN_RV_MASK|INSN_FORMAT_ITYPE },
+	{ "lh",    2,  MASK_LH, MATCH_LH,  0x0, INSN_RV_MASK|INSN_FORMAT_ITYPE },
+	{ "lw",    4,  MASK_LW, MATCH_LW,  0x0, INSN_RV_MASK|INSN_FORMAT_ITYPE },
+	{ "ld",    8,  MASK_LD, MATCH_LD,  0x0, INSN_RV64|INSN_RV128|INSN_FORMAT_ITYPE }, /*RV64/128*/
+	{ "lbu",   1, MASK_LBU, MATCH_LBU, 0x0, INSN_RV_MASK|INSN_FORMAT_ITYPE },
+	{ "lhu",   2, MASK_LHU, MATCH_LHU, 0x0, INSN_RV_MASK|INSN_FORMAT_ITYPE },
+	{ "lwu",   4, MASK_LWU, MATCH_LWU, 0x0, INSN_RV_MASK|INSN_FORMAT_ITYPE },
+	{ "flw",   4, MASK_FLW, MATCH_FLW, 0x0, INSN_RV32|INSN_FORMAT_ITYPE },            /*RV32-only*/
+	{ "fld",   8, MASK_FLD, MATCH_FLD, 0x0, INSN_RV32|INSN_RV64|INSN_FORMAT_ITYPE },  /*RV32/64*/
+	{ "flq",  16, MASK_FLQ, MATCH_FLQ, 0x0, INSN_RV128|INSN_FORMAT_ITYPE },           /*RV128-only*/
+	/* Store */
+	{ "sb",    1,  MASK_SB, MATCH_SB,  0x0, INSN_RV_MASK|INSN_FORMAT_STYPE },
+	{ "sh",    2,  MASK_SH, MATCH_SH,  0x0, INSN_RV_MASK|INSN_FORMAT_STYPE },
+	{ "sw",    4,  MASK_SW, MATCH_SW,  0x0, INSN_RV_MASK|INSN_FORMAT_STYPE },
+	{ "sd",    8,  MASK_SD, MATCH_SD,  0x0, INSN_RV_MASK|INSN_FORMAT_STYPE },
+	{ "fsw",   4, MASK_FSW, MATCH_FSW, 0x0, INSN_RV32|INSN_FORMAT_STYPE }, /*RV32-only*/
+	{ "fsd",   8, MASK_FSD, MATCH_FSD, 0x0, INSN_RV_MASK|INSN_FORMAT_STYPE },
+	{ "fsq",  16, MASK_FSQ, MATCH_FSQ, 0x0, INSN_RV_MASK|INSN_FORMAT_STYPE },
 
-	{ "c.lq", 16 },
-	{ "c.lw", 4 },
-	{ "c.ld", 8 },
-	{ "c.flw", 4 },
-	{ "c.fld", 8 },
-	{ "c.lqsp", 16 },
-	{ "c.lwsp", 4 },
-	{ "c.ldsp", 8 },
-	{ "c.flwsp", 4 },
-	{ "c.fldsp", 8 },
-	{ "c.lbu", 1 },
-	{ "c.lhu", 2 },
-	{ "c.lh", 2 },
+	/* Compressed Instruction Formats */
+	{ "c.lq",   16, MASK_C_LQ, MATCH_C_LQ, 0x0, INSN_RV128|INSN_FORMAT_CL },                /*RV128C-only*/
+	{ "c.lw",    4, MASK_C_LW, MATCH_C_LW, 0x0, INSN_RV_MASK|INSN_FORMAT_CL },
+	{ "c.ld",    8, MASK_C_LD, MATCH_C_LD, 0x0, INSN_RV64|INSN_RV128|INSN_FORMAT_CL },      /*RV64C/RV128C-only*/
+	{ "c.flw",   4, MASK_C_FLW, MATCH_C_FLW, 0x24, INSN_RV32|INSN_FORMAT_CL },               /*RV32FC-only*/
+	{ "c.fld",   8, MASK_C_FLD, MATCH_C_FLD, 0x0c, INSN_RV32|INSN_RV64|INSN_FORMAT_CL },     /*RV32DC/RV64DC-only*/
+	{ "c.lqsp", 16, MASK_C_LQSP, MATCH_C_LQSP, 0x0, INSN_RV128|INSN_FORMAT_STACK_LOAD},           /*RV128C-only*/
+	{ "c.lwsp",  4, MASK_C_LWSP, MATCH_C_LWSP, 0x0, INSN_RV_MASK|INSN_FORMAT_STACK_LOAD },
+	{ "c.ldsp",  8, MASK_C_LDSP, MATCH_C_LDSP, 0x0, INSN_RV64|INSN_RV128|INSN_FORMAT_STACK_LOAD },/*RV64C/RV128C*/
+	{ "c.flwsp", 4, MASK_C_FLWSP, MATCH_C_FLWSP, 0x24, INSN_RV32|INSN_FORMAT_STACK_LOAD },         /*RV32FC-only*/
+	{ "c.fldsp", 8, MASK_C_FLDSP, MATCH_C_FLDSP, 0x0c, INSN_RV32|INSN_RV64|INSN_FORMAT_STACK_LOAD }, /*RV32DC/RV64DC*/
 
-	{ "unknown", 0 },
+	{ "c.sq",   16, MASK_C_SQ, MATCH_C_SQ, 0x0, INSN_RV128|INSN_FORMAT_CS },                 /*RV128C-only*/
+	{ "c.sw",    4, MASK_C_SW, MATCH_C_SW, 0x0, INSN_RV_MASK|INSN_FORMAT_CS },
+	{ "c.sd",    8, MASK_C_SD, MATCH_C_SD, 0x0, INSN_RV64|INSN_RV128|INSN_FORMAT_CS },       /*RV64C/RV128C-only*/
+	{ "c.fsw",   4, MASK_C_FSW, MATCH_C_FSW, 0x24, INSN_RV32|INSN_FORMAT_CS },                /*RV32FC-only*/
+	{ "c.fsd",   8, MASK_C_FSD, MATCH_C_FSD, 0x0c, INSN_RV32|INSN_RV64|INSN_FORMAT_CS },      /*RV32DC/RV64DC-only*/
+	{ "c.sqsp", 16, MASK_C_SQSP, MATCH_C_SQSP, 0x0, INSN_RV128|INSN_FORMAT_STACK_STORE },            /*RV128C-only*/
+	{ "c.swsp",  4, MASK_C_SWSP, MATCH_C_SWSP, 0x0, INSN_RV_MASK|INSN_FORMAT_STACK_STORE },
+	{ "c.sdsp",  8, MASK_C_SDSP, MATCH_C_SDSP, 0x0, INSN_RV64|INSN_RV128|INSN_FORMAT_STACK_STORE },  /*RV64C/RV128C*/
+	{ "c.fswsp", 4, MASK_C_FSWSP, MATCH_C_FSWSP, 0x24, INSN_RV32|INSN_FORMAT_STACK_STORE },           /*RV32FC-only*/
+	{ "c.fsdsp", 8, MASK_C_FSDSP, MATCH_C_FSDSP, 0x0c, INSN_RV32|INSN_RV64|INSN_FORMAT_STACK_STORE }, /*RV32DC/RV64DC*/
+	/* Zc Extension */
+	{ "c.lbu",   1, MASK_C_LBU, MATCH_C_LBU, 0x0, INSN_RV_MASK|INSN_FORMAT_ZC_LOAD },
+	{ "c.lhu",   2, MASK_C_LHU, MATCH_C_LHU, 0x0, INSN_RV_MASK|INSN_FORMAT_ZC_LOAD },
+	{ "c.lh",    2, MASK_C_LH, MATCH_C_LH, 0x0, INSN_RV_MASK|INSN_FORMAT_ZC_LOAD },
+	{ "c.sb", 1, MASK_C_SB, MATCH_C_SB, 0x0, INSN_RV_MASK|INSN_FORMAT_ZC_STORE },
+	{ "c.sh", 2, MASK_C_SH, MATCH_C_SH, 0x0, INSN_RV_MASK|INSN_FORMAT_ZC_STORE },
+	{ "cm.pop",     4, MASK_CM_POP, MATCH_CM_POP, 0x0, INSN_RV_MASK|INSN_FORMAT_ZC_POP },
+	{ "cm.popretz", 4, MASK_CM_POPRETZ, MATCH_CM_POPRETZ, 0x0, INSN_RV_MASK|INSN_FORMAT_ZC_POP },
+	{ "cm.popret",  4, MASK_CM_POPRET, MATCH_CM_POPRET, 0x0, INSN_RV_MASK|INSN_FORMAT_ZC_POP },
+	{ "cm.push",    4, MASK_CM_PUSH, MATCH_CM_PUSH, 0x0, INSN_RV_MASK|INSN_FORMAT_ZC_PUSH },
+	/* Atomic Memory Operations */
+	{ "lr.d",  8, MASK_LR_D, MATCH_LR_D, 0x01, INSN_RV64|INSN_FORMAT_AMO_LOAD },            /*RV64A*/
+	{ "lr.w",  4, MASK_LR_W, MATCH_LR_W, 0x01, INSN_RV32|INSN_RV64|INSN_FORMAT_AMO_LOAD },  /*RV32A/RV64A*/
+	{ "sc.d",  8, MASK_SC_D, MATCH_SC_D, 0x01, INSN_RV64|INSN_FORMAT_AMO_STORE },           /*RV64A*/
+	{ "sc.w",  4, MASK_SC_W, MATCH_SC_W, 0x01, INSN_RV32|INSN_RV64|INSN_FORMAT_AMO_STORE }, /*RV32A/RV64A*/
+	{ "amoadd.w",  4, MASK_AMOADD_W,  MATCH_AMOADD_W, 0x01, INSN_RV32|INSN_RV64|INSN_FORMAT_AMO_LOAD },
+	{ "amoxor.w",  4, MASK_AMOXOR_W,  MATCH_AMOXOR_W, 0x01, INSN_RV32|INSN_RV64|INSN_FORMAT_AMO_LOAD },
+	{ "amoand.w",  4, MASK_AMOAND_W,  MATCH_AMOAND_W, 0x01, INSN_RV32|INSN_RV64|INSN_FORMAT_AMO_LOAD },
+	{ "amoor.w",   4, MASK_AMOOR_W,   MATCH_AMOOR_W,  0x01, INSN_RV32|INSN_RV64|INSN_FORMAT_AMO_LOAD },
+	{ "amomin.w",  4, MASK_AMOMIN_W,  MATCH_AMOMIN_W, 0x01, INSN_RV32|INSN_RV64|INSN_FORMAT_AMO_LOAD },
+	{ "amomax.w",  4, MASK_AMOMAX_W,  MATCH_AMOMAX_W, 0x01, INSN_RV32|INSN_RV64|INSN_FORMAT_AMO_LOAD },
+	{ "amominu.w", 4, MASK_AMOMINU_W, MATCH_AMOMINU_W, 0x01, INSN_RV32|INSN_RV64|INSN_FORMAT_AMO_LOAD },
+	{ "amomaxu.w", 4, MASK_AMOMAXU_W, MATCH_AMOMAXU_W, 0x01, INSN_RV32|INSN_RV64|INSN_FORMAT_AMO_LOAD },
+	{ "amoadd.d",  8, MASK_AMOADD_D,  MATCH_AMOADD_D, 0x01, INSN_RV64|INSN_FORMAT_AMO_LOAD },
+	{ "amoxor.d",  8, MASK_AMOXOR_D,  MATCH_AMOXOR_D, 0x01, INSN_RV64|INSN_FORMAT_AMO_LOAD },
+	{ "amoand.d",  8, MASK_AMOAND_D,  MATCH_AMOAND_D, 0x01, INSN_RV64|INSN_FORMAT_AMO_LOAD },
+	{ "amoor.d",   8, MASK_AMOOR_D,   MATCH_AMOOR_D,  0x01, INSN_RV64|INSN_FORMAT_AMO_LOAD },
+	{ "amomin.d",  8, MASK_AMOMIN_D,  MATCH_AMOMIN_D, 0x01, INSN_RV64|INSN_FORMAT_AMO_LOAD },
+	{ "amomax.d",  8, MASK_AMOMAX_D,  MATCH_AMOMAX_D, 0x01, INSN_RV64|INSN_FORMAT_AMO_LOAD },
+	{ "amominu.d", 8, MASK_AMOMINU_D, MATCH_AMOMINU_D, 0x01, INSN_RV64|INSN_FORMAT_AMO_LOAD },
+	{ "amomaxu.d", 8, MASK_AMOMAXU_D, MATCH_AMOMAXU_D, 0x01, INSN_RV64|INSN_FORMAT_AMO_LOAD },
+	/* GP-implied load insn. */
+	{ "nds.lbgp",  1, MASK_LW, MATCH_LBGP,  0x800000, INSN_RV_MASK|INSN_FORMAT_ANDES_LOAD },
+	{ "nds.lbugp", 1, MASK_LW, MATCH_LBUGP, 0x800000, INSN_RV_MASK|INSN_FORMAT_ANDES_LOAD },
+	{ "nds.lhgp",  2, MASK_LW, MATCH_LHGP,  0x800000, INSN_RV_MASK|INSN_FORMAT_ANDES_LOAD },
+	{ "nds.lhugp", 2, MASK_LW, MATCH_LHUGP, 0x800000, INSN_RV_MASK|INSN_FORMAT_ANDES_LOAD },
+	{ "nds.lwgp",  4, MASK_LW, MATCH_LWGP,  0x800000, INSN_RV_MASK|INSN_FORMAT_ANDES_LOAD },
+	{ "nds.lwugp", 4, MASK_LW, MATCH_LWUGP, 0x800000, INSN_RV_MASK|INSN_FORMAT_ANDES_LOAD },
+	{ "nds.ldgp",  8, MASK_LW, MATCH_LDGP,  0x800000, INSN_RV_MASK|INSN_FORMAT_ANDES_LOAD },
+	/* GP-implied store insn. */
+	{ "nds.sbgp",  1, MASK_SW, MATCH_SBGP, 0x800000, INSN_RV_MASK|INSN_FORMAT_ANDES_STORE },
+	{ "nds.shgp",  2, MASK_SW, MATCH_SHGP, 0x800000, INSN_RV_MASK|INSN_FORMAT_ANDES_STORE },
+	{ "nds.swgp",  4, MASK_SW, MATCH_SWGP, 0x800000, INSN_RV_MASK|INSN_FORMAT_ANDES_STORE },
+	{ "nds.sdgp",  8, MASK_SW, MATCH_SDGP, 0x800000, INSN_RV_MASK|INSN_FORMAT_ANDES_STORE },
+
+	{ "unknown", 0, 0x0, 0x0, 0x0, 0x0 },
 };
 
-static struct nds_insn_loadstore nds_insn_store[] = {
-	{ "sb", 1 },
-	{ "sh", 2 },
-	{ "sw", 4 },
-	{ "sd", 8 },
-	{ "fsw", 4 },
-	{ "fsd", 8 },
-	{ "fsq", 16 },
-	{ "sbgp", 1 },
-	{ "shgp", 2 },
-	{ "swgp", 4 },
-	{ "sdgp", 8 },
-	{ "sc.d", 8 },
-	{ "sc.w", 4 },
+static uint32_t get_watched_address_init;
+static uint32_t ndsv5_cur_target_misa_mxl;
 
-	{ "c.sq", 16 },
-	{ "c.sw", 4 },
-	{ "c.sd", 8 },
-	{ "c.fsw", 4 },
-	{ "c.fsd", 8 },
-	{ "c.sqsp", 16 },
-	{ "c.swsp", 4 },
-	{ "c.sdsp", 8 },
-	{ "c.fswsp", 4 },
-	{ "c.fsdsp", 8 },
-	{ "c.sb", 1 },
-	{ "c.sh", 2 },
+void ndsv5_get_watched_address_init(void)
+{
+	uint32_t misa_mxl = 0;
+	if (get_watched_address_init == 1)
+		return;
 
-	{ "unknown", 0 },
-};
+	get_watched_address_init = 1;
+	if (ndsv5_cur_target_xlen == 64) {
+		/* misa_mxl = (ndsv5_reg_misa_value & 0xc000000000000000) >> 62; */
+		misa_mxl = 2;
+	} else {
+		misa_mxl = (ndsv5_reg_misa_value & 0xc0000000) >> 30;
+	}
 
-/*char *gp_rvc_reg_name[] = {
-  REG_S0,
-  REG_S1,
-  REG_A0,
-  REG_A1,
-  REG_A2,
-  REG_A3,
-  REG_A4,
-  REG_A5,
-};*/
+	if (misa_mxl == 1)
+		ndsv5_cur_target_misa_mxl = INSN_RV32;
+	else if (misa_mxl == 2)
+		ndsv5_cur_target_misa_mxl = INSN_RV64;
+	else if (misa_mxl == 3)
+		ndsv5_cur_target_misa_mxl = INSN_RV128;
+	else
+		ndsv5_cur_target_misa_mxl = INSN_RV32;
 
-/*char *gp_reg_name[] = {
-  REG_ZERO,  // "zero",// x0	zero	Zero
-  REG_RA,    // "ra",  // x1	ra	Return address
-  REG_SP,    // "sp",  // x2	sp	Stack pointer
-  REG_GP,    // "gp",  // x3	gp	Global pointer
-  REG_TP,    // "tp",  // x4	tp	Thread pointer
-  REG_T0,    // "t0",  // x5-x7	t0-t2	Temporary registers
-  REG_T1,    // "t1",
-  REG_T2,    // "t2",
-  REG_S0,    // "s0",  // x8-x9	s0-s1	Callee-saved registers
-  REG_S1,    // "s1",
-  REG_A0,    // "a0",  // x10-x17	a0-a7	Argument registers
-  REG_A1,    // "a1",
-  REG_A2,    // "a2",
-  REG_A3,    // "a3",
-  REG_A4,    // "a4",
-  REG_A5,    // "a5",
-  REG_A6,    // "a6",
-  REG_A7,    // "a7",
-  REG_S2,    // "s2",  // x18-x27	s2-s11	Callee-saved registers
-  REG_S3,    // "s3",
-  REG_S4,    // "s4",
-  REG_S5,    // "s5",
-  REG_S6,    // "s6",
-  REG_S7,    // "s7",
-  REG_S8,    // "s8",
-  REG_S9,    // "s9",
-  REG_S10,   // "s10",
-  REG_S11,   // "s11",
-  REG_T3,    // "t3",  // x28-x31	t3-t6	Temporary registers
-  REG_T4,    // "t4",
-  REG_T5,    // "t5",
-  REG_T6,    // "t6",
-  REG_FT0,   // "f0",
-  REG_FT1,   // "f1",
-  REG_FT2,   // "f2",
-  REG_FT3,   // "f3",
-  REG_FT4,   // "f4",
-  REG_FT5,   // "f5",
-  REG_FT6,   // "f6",
-  REG_FT7,   // "f7",
-  REG_FS0,   // "f8",
-  REG_FS1,   // "f9",
-  REG_FA0,   // "f10",
-  REG_FA1,   // "f11",
-  REG_FA2,   // "f12",
-  REG_FA3,   // "f13",
-  REG_FA4,   // "f14",
-  REG_FA5,   // "f15",
-  REG_FA6,   // "f16",
-  REG_FA7,   // "f17",
-  REG_FS2,   // "f18",
-  REG_FS3,   // "f19",
-  REG_FS4,   // "f20",
-  REG_FS5,   // "f21",
-  REG_FS6,   // "f22",
-  REG_FS7,   // "f23",
-  REG_FS8,   // "f24",
-  REG_FS9,   // "f25",
-  REG_FS10,  // "f26",
-  REG_FS11,  // "f27",
-  REG_FT8,   // "f28",
-  REG_FT9,   // "f29",
-  REG_FT10,  // "f30",
-  REG_FT11,  // "f31",
-};*/
+	return;
+}
 
-int ndsv5_disassemble_c_load(unsigned int opcode, unsigned int *p_insn,
-	unsigned int *p_rd, unsigned int *p_rs1, int *p_imm) {
-	unsigned int i, chk_opcode = (opcode & MASK_C_LOAD_STORE);
-	int get_imm = 0;
+int32_t ndsv5_check_if_load_store(uint32_t opcode, uint32_t *p_insn)
+{
+	uint32_t i, chk_opcode;
 
-	for (i = MATCH_ID_C_LOAD; i < MATCH_ID_LOAD_NUMS; i++) {
-		/* For Zcb check [15-10][1-0] */
-		if ( i >= MATCH_ID_C_ZCB_LOAD)
-			chk_opcode = (opcode & MASK_ZCB_LOAD_STORE);
-		if (chk_opcode == g_insn_load_match[i])
+	uint32_t loop_cnt = sizeof(nds_insn_all)/sizeof(struct nds_insn_loadstore);
+	for (i = 0; i < loop_cnt; i++) {
+		if (nds_insn_all[i].length == 0)
+			return ERROR_FAIL;
+		chk_opcode = (opcode & nds_insn_all[i].mask);
+		if ((chk_opcode == nds_insn_all[i].match) &&
+			((ndsv5_reg_misa_value & nds_insn_all[i].misa) == nds_insn_all[i].misa) &&
+			((ndsv5_cur_target_misa_mxl & nds_insn_all[i].attr) != 0))
 			break;
 	}
-	if (i >= MATCH_ID_LOAD_NUMS) {
-		return ERROR_FAIL;
-	} else if ((i == MATCH_ID_C_LQ) && (ndsv5_cur_target_xlen != 128)) {
-		/* C.FLD is an RV32DC/RV64DC-only
-		   C.LQ is an RV128C-only */
-		i = MATCH_ID_C_FLD;
-	} else if ((i == MATCH_ID_C_LQSP) && (ndsv5_cur_target_xlen != 128)) {
-		/* C.FLDSP is an RV32DC/RV64DC-only
-		   C.LQSP is an RV128C-only */
-		i = MATCH_ID_C_FLDSP;
-	} else if ((i == MATCH_ID_C_LD) && (ndsv5_cur_target_xlen < 64)) {
-		/* C.LD is an RV64C/RV128C-only
-		   C.FLW is an RV32FC-only */
-		i = MATCH_ID_C_FLW;
-	} else if ((i == MATCH_ID_C_LDSP) && (ndsv5_cur_target_xlen < 64)) {
-		/* C.LDSP is an RV64C/RV128C-only
-		   C.FLWSP is an RV32FC-only */
-		i = MATCH_ID_C_FLWSP;
-	}
-
-	/* Stack-Pointer-Based Loads and Stores */
-	if (i >= MATCH_ID_C_LOADSP && i < MATCH_ID_C_ZCB_LOAD) {
-		*p_rd = ((opcode >> 7) & 0x1f);
-		*p_rs1 = 2; /* sp; */
-		if ((i == MATCH_ID_C_LWSP) || (i == MATCH_ID_C_FLWSP)) {
-			get_imm = (int)(((opcode >> 4) & 0x07) << 2);
-			get_imm |= (int)(((opcode >> 12) & 0x01) << 5);
-			get_imm |= (int)(((opcode >> 2) & 0x03) << 6);
-		} else if ((i == MATCH_ID_C_LDSP) || (i == MATCH_ID_C_FLDSP)) {
-			get_imm = (int)(((opcode >> 5) & 0x03) << 3);
-			get_imm |= (int)(((opcode >> 12) & 0x01) << 5);
-			get_imm |= (int)(((opcode >> 2) & 0x07) << 6);
-		} else if (i == MATCH_ID_C_LQSP) {
-			get_imm = (int)(((opcode >> 6) & 0x01) << 4);
-			get_imm |= (int)(((opcode >> 12) & 0x01) << 5);
-			get_imm |= (int)(((opcode >> 2) & 0x0f) << 6);
-		}
-	} else if (i >= MATCH_ID_C_ZCB_LOAD) {
-		*p_rd = ((opcode >> 7) & 0x7) + 0x8;  /* x8-15 */
-		*p_rs1 = ((opcode >> 2) & 0x7) + 0x8; /* x8-15 */
-		get_imm = ((opcode >> 5) & 0x3);
-	} else {
-		*p_rd = ((opcode >> 2) & 0x07);
-		*p_rs1 = ((opcode >> 7) & 0x07);
-		if ((i == MATCH_ID_C_LW) || (i == MATCH_ID_C_FLW)) {
-			get_imm = (int)(((opcode >> 10) & 0x07) << 3);
-			get_imm |= (int)(((opcode >> 6) & 0x01) << 2);
-			get_imm |= (int)(((opcode >> 5) & 0x01) << 6);
-		} else if ((i == MATCH_ID_C_LD) || (i == MATCH_ID_C_FLD)) {
-			get_imm = (int)(((opcode >> 10) & 0x07) << 3);
-			get_imm |= (int)(((opcode >> 5) & 0x03) << 6);
-		} else if (i == MATCH_ID_C_LQ) {
-			get_imm = (int)(((opcode >> 11) & 0x03) << 4);
-			get_imm |= (int)(((opcode >> 5) & 0x03) << 6);
-			get_imm |= (int)(((opcode >> 10) & 0x01) << 8);
-		}
-	}
 	*p_insn = i;
-	*p_imm = get_imm;
 	return ERROR_OK;
 }
 
-int ndsv5_disassemble_load(unsigned int opcode, unsigned int *p_insn,
-	unsigned int *p_rd, unsigned int *p_rs1, int *p_imm) {
-	unsigned int i, chk_opcode = (opcode & MASK_LW);
-	int get_imm = 0;
+int32_t ndsv5_disassemble_load(uint32_t opcode, uint32_t insn_idx,
+	uint32_t *p_rd, uint32_t *p_rs1, int32_t *p_imm)
+{
+	int32_t get_imm = 0;
 
-	for (i = MATCH_ID_LOAD; i < MATCH_ID_C_LOAD; i++) {
-		if (chk_opcode == g_insn_load_match[i])
-			break;
-	}
-	if (i == MATCH_ID_C_LOAD)
-		return ERROR_FAIL;
-
-	/* Atomic Memory Operations */
-	else if (i >= MATCH_ID_LR) {
-		/* LR loads a word from the address in rs1
-		 *      31-27    26 25  24-20 19-15  14-12   11-7  6-0
-		 *      funct5   aq rl  0      rs1   funct3   rd   opcode
-		 *        5      1  1   5       5      3      5     7        */
-		*p_insn = i;
+	uint32_t insn_format = nds_insn_all[insn_idx].attr & INSN_FORMAT_MASK;
+	uint32_t access_length = nds_insn_all[insn_idx].length;
+	/* Loads are encoded in the I-type format.
+     31-20     19-15  14-12   11-7   6-0
+    imm[11:0]   rs1   funct3   rd   opcode    I-type   */
+	if (insn_format == INSN_FORMAT_ITYPE) {
 		*p_rd = ((opcode >> 7) & 0x1f);
 		*p_rs1 = ((opcode >> 15) & 0x1f);
-		return ERROR_OK;
+		get_imm = (opcode >> 20);
+		if (get_imm & 0x800)
+			get_imm |= 0xFFFFF000;
+	}
+	/* Register-Based Loads use the CL format.
+	   15-13   12-10  9-7   6-5  4-2  1-0
+     funct3  imm    rs1   imm  rd   C0(00)        */
+	else if (insn_format == INSN_FORMAT_CL) {
+		*p_rd = ((opcode >> 2) & 0x07) + 0x8;   /* x8-15 */
+		*p_rs1 = ((opcode >> 7) & 0x07) + 0x8;  /* x8-15 */
+		if (access_length == 4) {                          /* c.lw, c.flw */
+			get_imm = (((opcode >> 10) & 0x07) << 3);
+			get_imm |= (((opcode >> 6) & 0x01) << 2);
+			get_imm |= (((opcode >> 5) & 0x01) << 6);
+		} else if (access_length == 8) {                   /* c.ld, c.fld */
+			get_imm = (((opcode >> 10) & 0x07) << 3);
+			get_imm |= (((opcode >> 5) & 0x03) << 6);
+		} else if (access_length == 16) {                  /* c.lq */
+			get_imm = (((opcode >> 11) & 0x03) << 4);
+			get_imm |= (((opcode >> 5) & 0x03) << 6);
+			get_imm |= (((opcode >> 10) & 0x01) << 8);
+		}
+	}
+	/* Stack-Pointer-Based Loads, CI format
+	   15-13    12       11-7        6-2        1-0
+	   funct3  uimm[5]  rd/rs1  uimm[4:2|7:6]   C2(10)  */
+	else if (insn_format == INSN_FORMAT_STACK_LOAD) {
+		*p_rd = ((opcode >> 7) & 0x1f);
+		*p_rs1 = 2; /* sp; */
+		if (access_length == 4) {                          /* c.lwsp, c.flwsp */
+			get_imm = (((opcode >> 4) & 0x07) << 2);
+			get_imm |= (((opcode >> 12) & 0x01) << 5);
+			get_imm |= (((opcode >> 2) & 0x03) << 6);
+		} else if (access_length == 8) {                   /* c.ldsp, c.fldsp */
+			get_imm = (((opcode >> 5) & 0x03) << 3);
+			get_imm |= (((opcode >> 12) & 0x01) << 5);
+			get_imm |= (((opcode >> 2) & 0x07) << 6);
+		} else if (access_length == 16) {                  /* c.lqsp */
+			get_imm = (((opcode >> 6) & 0x01) << 4);
+			get_imm |= (((opcode >> 12) & 0x01) << 5);
+			get_imm |= (((opcode >> 2) & 0x0f) << 6);
+		}
+	}
+	/* Atomic Memory Operations */
+	else if (insn_format == INSN_FORMAT_AMO_LOAD) {
+		/* LR loads a word from the address in rs1
+		   31-27    26 25  24-20 19-15  14-12   11-7  6-0
+		   funct5   aq rl  0      rs1   funct3   rd   opcode */
+		*p_rd = ((opcode >> 7) & 0x1f);
+		*p_rs1 = ((opcode >> 15) & 0x1f);
+	}
+	/* Zc Extension
+	   15-13  12-10  9-7   6-5      4-2  1-0
+	   funct3  000   rs1  uimm[0|1]  rd  C0(00)  */
+	else if (insn_format == INSN_FORMAT_ZC_LOAD) {
+		*p_rd = ((opcode >> 2) & 0x7) + 0x8;  /* x8-15 */
+		*p_rs1 = ((opcode >> 7) & 0x7) + 0x8; /* x8-15 */
+		if (access_length == 1) {            /* c.lbu */
+			get_imm = (((opcode >> 5) & 0x01) << 1);
+			get_imm |= ((opcode >> 6) & 0x01);
+		} else if (access_length == 8) {     /* c.lhu c.lh */
+			get_imm = (((opcode >> 5) & 0x01) << 1);
+		}
+	}
+	/* Zc Extension pop
+	   15-13   12-8   7-4    3-2     1-0
+	   funct3  11010  rlist  spimm   C2(10)  */
+	else if (insn_format == INSN_FORMAT_ZC_POP) {
+		uint32_t rlist = ((opcode >> 4) & 0xf);
+		uint32_t reg_nums;
+		uint32_t spimm = ((opcode >> 2) & 0x3);
+		uint32_t stack_adj = 0, stack_adj_base = 0;
+
+		/* note - to include s10, s11 must also be included */
+		if (rlist == 15)
+			reg_nums = 13;
+		else
+			reg_nums = (rlist - 3);
+		if (ndsv5_cur_target_misa_mxl & INSN_RV32) {
+			nds_insn_all[insn_idx].length = 4 * reg_nums;
+			if (rlist == 15)
+				stack_adj_base = 64;
+			else
+				stack_adj_base = (rlist/4) * 16;
+		} else if (ndsv5_cur_target_misa_mxl & INSN_RV64) {
+			nds_insn_all[insn_idx].length = 8 * reg_nums;
+			if (rlist == 15)
+				stack_adj_base = 112;
+			else
+				stack_adj_base = ((rlist/2)-1) * 16;
+		}
+		stack_adj = stack_adj_base + (spimm * 16);
+		if (stack_adj > nds_insn_all[insn_idx].length)
+			get_imm = (stack_adj - nds_insn_all[insn_idx].length);
+
+		*p_rd = 1; /* ra; */
+		*p_rs1 = 2; /* sp; */
 	}
 	/* GP-Based Loads */
-	else if (i >= MATCH_ID_LOADGP) {
-		*p_insn = i;
+	else if (insn_format == INSN_FORMAT_ANDES_LOAD) {
 		*p_rd = ((opcode >> 7) & 0x1f);
 		*p_rs1 = 3; /* gp; */
-		if ((i == MATCH_ID_LBGP) || (i == MATCH_ID_LBUGP)) {
+		if (access_length == 1) {            /* lbgp lbugp */
 			/*  31      30 21    20     19 17     16 15     14   13 12  11 7    6 0
 			    imm17 imm[10:1] imm11 imm[14:12] imm[16:15] imm0   LBGP   Rd   Custom-0 */
-			get_imm = (int)(((opcode >> 14) & 0x01) << 0);
-			get_imm |= (int)(((opcode >> 21) & 0x3ff) << 1);
-			get_imm |= (int)(((opcode >> 20) & 0x01) << 11);
-			get_imm |= (int)(((opcode >> 17) & 0x07) << 12);
-			get_imm |= (int)(((opcode >> 15) & 0x03) << 15);
-			get_imm |= (int)(((opcode >> 31) & 0x01) << 17);
+			get_imm = (((opcode >> 14) & 0x01) << 0);
+			get_imm |= (((opcode >> 21) & 0x3ff) << 1);
+			get_imm |= (((opcode >> 20) & 0x01) << 11);
+			get_imm |= (((opcode >> 17) & 0x07) << 12);
+			get_imm |= (((opcode >> 15) & 0x03) << 15);
+			get_imm |= (((opcode >> 31) & 0x01) << 17);
 			if (get_imm & 0x20000)
 				get_imm |= 0xFFFC0000;
-		} else if ((i == MATCH_ID_LHGP) || (i == MATCH_ID_LHUGP)) {
+		} else if (access_length == 2) {     /* lhgp lhugp */
 			/*  31     30 21     20     19 17      16 15   14 12  11 7   6 0
 			    imm17 imm[10:1] imm11 imm[14:12] imm[16:15] LHGP    Rd   Custom-1 */
-			get_imm = (int)(((opcode >> 21) & 0x3ff) << 1);
-			get_imm |= (int)(((opcode >> 20) & 0x01) << 11);
-			get_imm |= (int)(((opcode >> 17) & 0x07) << 12);
-			get_imm |= (int)(((opcode >> 15) & 0x03) << 15);
-			get_imm |= (int)(((opcode >> 31) & 0x01) << 17);
+			get_imm = (((opcode >> 21) & 0x3ff) << 1);
+			get_imm |= (((opcode >> 20) & 0x01) << 11);
+			get_imm |= (((opcode >> 17) & 0x07) << 12);
+			get_imm |= (((opcode >> 15) & 0x03) << 15);
+			get_imm |= (((opcode >> 31) & 0x01) << 17);
 			if (get_imm & 0x20000)
 				get_imm |= 0xFFFC0000;
-		} else if ((i == MATCH_ID_LWGP) || (i == MATCH_ID_LWUGP)) {
+		} else if (access_length == 4) {     /* lwgp lwugp */
 			/*  31     30 22    21     20   19 17     16 15      14 12   11 7    6 0
 			    imm18 imm[10:2] imm17 imm11 imm[14:12] imm[16:15] LWGP     Rd    Custom-1 */
-			get_imm = (int)(((opcode >> 22) & 0x1ff) << 2);
-			get_imm |= (int)(((opcode >> 20) & 0x01) << 11);
-			get_imm |= (int)(((opcode >> 17) & 0x07) << 12);
-			get_imm |= (int)(((opcode >> 15) & 0x03) << 15);
-			get_imm |= (int)(((opcode >> 21) & 0x01) << 17);
-			get_imm |= (int)(((opcode >> 31) & 0x01) << 18);
+			get_imm = (((opcode >> 22) & 0x1ff) << 2);
+			get_imm |= (((opcode >> 20) & 0x01) << 11);
+			get_imm |= (((opcode >> 17) & 0x07) << 12);
+			get_imm |= (((opcode >> 15) & 0x03) << 15);
+			get_imm |= (((opcode >> 21) & 0x01) << 17);
+			get_imm |= (((opcode >> 31) & 0x01) << 18);
 			if (get_imm & 0x40000)
 				get_imm |= 0xFFF80000;
-		} else if (i == MATCH_ID_LDGP) {
+		} else if (access_length == 8) {     /* ldgp */
 			/*  31     30 23     22 21      20    19 17      16 15     14 12    11 7   6 0
 			    imm19 imm[10:3] imm[18:17] imm11 imm[14:12] imm[16:15]   LDGP     Rd   Custom-1 */
-			get_imm = (int)(((opcode >> 23) & 0xff) << 3);
-			get_imm |= (int)(((opcode >> 20) & 0x01) << 11);
-			get_imm |= (int)(((opcode >> 17) & 0x07) << 12);
-			get_imm |= (int)(((opcode >> 15) & 0x03) << 15);
-			get_imm |= (int)(((opcode >> 21) & 0x03) << 17);
-			get_imm |= (int)(((opcode >> 31) & 0x01) << 18);
+			get_imm = (((opcode >> 23) & 0xff) << 3);
+			get_imm |= (((opcode >> 20) & 0x01) << 11);
+			get_imm |= (((opcode >> 17) & 0x07) << 12);
+			get_imm |= (((opcode >> 15) & 0x03) << 15);
+			get_imm |= (((opcode >> 21) & 0x03) << 17);
+			get_imm |= (((opcode >> 31) & 0x01) << 18);
 			if (get_imm & 0x80000)
 				get_imm |= 0xFFF00000;
 		}
-		*p_imm = get_imm;
-		return ERROR_OK;
 	}
-	*p_insn = i;
-	*p_rd = ((opcode >> 7) & 0x1f);
-	*p_rs1 = ((opcode >> 15) & 0x1f);
-	get_imm = (int)(opcode >> 20);
-	if (get_imm & 0x800)
-		get_imm |= 0xFFFFF000;
+
 	*p_imm = get_imm;
 	return ERROR_OK;
 }
 
-int ndsv5_disassemble_c_store(unsigned int opcode, unsigned int *p_insn,
-	unsigned int *p_rs1, unsigned int *p_rs2, int *p_imm) {
-	unsigned int i, chk_opcode = (opcode & MASK_C_LOAD_STORE);
-	int get_imm = 0;
+int32_t ndsv5_disassemble_store(uint32_t opcode, uint32_t insn_idx,
+	uint32_t *p_rs1, uint32_t *p_rs2, int32_t *p_imm)
+{
+	int32_t get_imm = 0;
 
-	for (i = MATCH_ID_C_STORE; i < MATCH_ID_STORE_NUMS; i++) {
-		if (i >= MATCH_ID_C_ZCB_STORE)
-			chk_opcode = (opcode & MASK_ZCB_LOAD_STORE);
-		if (chk_opcode == g_insn_store_match[i])
-			break;
+	uint32_t insn_format = nds_insn_all[insn_idx].attr & INSN_FORMAT_MASK;
+	uint32_t access_length = nds_insn_all[insn_idx].length;
+	/* Loads are encoded in the S-type format.
+     31-25    24-20 19-15  14-12    11-7     6-0
+    imm[11:5]  rs2   rs1   funct3  imm[4:0]  opcode    S-type   */
+	if (insn_format == INSN_FORMAT_STYPE) {
+		*p_rs1 = ((opcode >> 15) & 0x1f);
+		*p_rs2 = ((opcode >> 20) & 0x1f);
+		get_imm = ((opcode >> 25) << 5);
+		get_imm |= ((opcode >> 7) & 0x1f);
+		if (get_imm & 0x800)
+			get_imm |= 0xFFFFF000;
 	}
-	if (i >= MATCH_ID_STORE_NUMS) {
-		return ERROR_FAIL;
-	} else if ((i == MATCH_ID_C_SQ) && (ndsv5_cur_target_xlen != 128)) {
-		/* C.FSD is an RV32DC/RV64DC-only instruction
-		   C.SQ is an RV128C-only */
-		i = MATCH_ID_C_FSD;
-	} else if ((i == MATCH_ID_C_SQSP) && (ndsv5_cur_target_xlen != 128)) {
-		/* C.FSDSP is an RV32DC/RV64DC-only instruction
-		   C.SQSP is an RV128C-only */
-		i = MATCH_ID_C_FSDSP;
-	} else if ((i == MATCH_ID_C_SD) && (ndsv5_cur_target_xlen < 64)) {
-		/* C.FSW is an RV32FC-only
-		   C.SD is an RV64C/RV128C-only */
-		i = MATCH_ID_C_FSW;
-	} else if ((i == MATCH_ID_C_SDSP) && (ndsv5_cur_target_xlen < 64)) {
-		/* C.SDSP is an RV64C/RV128C
-		   C.FSWSP is an RV32FC-only */
-		i = MATCH_ID_C_FSWSP;
+	/* Register-Based Stores use the CS format.
+	   15-13   12-10  9-7   6-5  4-2  1-0
+     funct3  imm    rs1   imm  rs2   C0(00)        */
+	else if (insn_format == INSN_FORMAT_CS) {
+		*p_rs2 = ((opcode >> 2) & 0x07) + 0x8;  /* x8-15 */
+		*p_rs1 = ((opcode >> 7) & 0x07) + 0x8;  /* x8-15 */
+		if (access_length == 4) {            /* c.sw, c.fsw */
+			get_imm = (((opcode >> 10) & 0x07) << 3);
+			get_imm |= (((opcode >> 6) & 0x01) << 2);
+			get_imm |= (((opcode >> 5) & 0x01) << 6);
+		} else if (access_length == 8) {     /* c.sd, c.fsd */
+			get_imm = (((opcode >> 10) & 0x07) << 3);
+			get_imm |= (((opcode >> 5) & 0x03) << 6);
+		} else if (access_length == 16) {    /* c.sq */
+			get_imm = (((opcode >> 11) & 0x03) << 4);
+			get_imm |= (((opcode >> 5) & 0x03) << 6);
+			get_imm |= (((opcode >> 10) & 0x01) << 8);
+		}
 	}
-
-	/* Stack-Pointer-Based Loads and Stores */
-	if (i >= MATCH_ID_C_STORESP && i < MATCH_ID_C_ZCB_STORE) {
+	/* Stack-Pointer-Based Stores, CSS format
+	   15-13    12-7   6-2  1-0
+	   funct3   imm    rs2  C2(10)  */
+	else if (insn_format == INSN_FORMAT_STACK_STORE) {
 		*p_rs2 = ((opcode >> 2) & 0x1f);
 		*p_rs1 = 2; /* sp */
-		if ((i == MATCH_ID_C_SWSP) || (i == MATCH_ID_C_FSWSP)) {
-			get_imm = (int)(((opcode >> 9) & 0x0f) << 2);
-			get_imm |= (int)(((opcode >> 7) & 0x03) << 6);
-		} else if ((i == MATCH_ID_C_SDSP) || (i == MATCH_ID_C_FSDSP)) {
-			get_imm = (int)(((opcode >> 10) & 0x07) << 3);
-			get_imm |= (int)(((opcode >> 7) & 0x07) << 6);
-		} else if (i == MATCH_ID_C_SQSP) {
-			get_imm = (int)(((opcode >> 11) & 0x03) << 4);
-			get_imm |= (int)(((opcode >> 7) & 0x0f) << 6);
-		}
-	} else if (i >= MATCH_ID_C_ZCB_STORE) {
-		*p_rs1 = ((opcode >> 7) & 0x7) + 0x8; /* x8-15 */
-		*p_rs2 = ((opcode >> 2) & 0x7) + 0x8; /* x8-15 */
-		get_imm = ((opcode >> 5) & 0x3);
-	} else {
-		*p_rs2 = ((opcode >> 2) & 0x07);
-		*p_rs1 = ((opcode >> 7) & 0x07);
-		if ((i == MATCH_ID_C_SW) || (i == MATCH_ID_C_FSW)) {
-			get_imm = (int)(((opcode >> 10) & 0x07) << 3);
-			get_imm |= (int)(((opcode >> 6) & 0x01) << 2);
-			get_imm |= (int)(((opcode >> 5) & 0x01) << 6);
-		} else if ((i == MATCH_ID_C_SD) || (i == MATCH_ID_C_FSD)) {
-			get_imm = (int)(((opcode >> 10) & 0x07) << 3);
-			get_imm |= (int)(((opcode >> 5) & 0x03) << 6);
-		} else if (i == MATCH_ID_C_SQ) {
-			get_imm = (int)(((opcode >> 11) & 0x03) << 4);
-			get_imm |= (int)(((opcode >> 5) & 0x03) << 6);
-			get_imm |= (int)(((opcode >> 10) & 0x01) << 8);
+		if (access_length == 4) {            /* c.swsp, c.fswsp */
+			get_imm = (((opcode >> 9) & 0x0f) << 2);
+			get_imm |= (((opcode >> 7) & 0x03) << 6);
+		} else if (access_length == 8) {     /* c.sdsp, c.fsdsp */
+			get_imm = (((opcode >> 10) & 0x07) << 3);
+			get_imm |= (((opcode >> 7) & 0x07) << 6);
+		} else if (access_length == 16) {    /* c.sqsp */
+			get_imm = (((opcode >> 11) & 0x03) << 4);
+			get_imm |= (((opcode >> 7) & 0x0f) << 6);
 		}
 	}
-	*p_insn = i;
-	*p_imm = get_imm;
-	return ERROR_OK;
-}
-
-int ndsv5_disassemble_store(unsigned int opcode, unsigned int *p_insn,
-	unsigned int *p_rs1, unsigned int *p_rs2, int *p_imm) {
-
-	unsigned int i, chk_opcode = (opcode & MASK_SW);
-	int get_imm = 0;
-
-	for (i = MATCH_ID_STORE; i < MATCH_ID_C_STORE; i++) {
-		if (chk_opcode == g_insn_store_match[i])
-			break;
-	}
-	if (i == MATCH_ID_C_STORE)
-		return ERROR_FAIL;
-
 	/* Atomic Memory Operations */
-	else if (i >= MATCH_ID_SC) {
+	else if (insn_format == INSN_FORMAT_AMO_STORE) {
 		/*  sc.d.rl    rd   rs2, (rs1)     SC writes a word in rs2 to the address in rs1,
 		    31-27    26 25  24-20 19-15  14-12   11-7  6-0
 		    funct5   aq rl  rs2    rs1   funct3   rd   opcode
 		      5      1  1   5       5      3      5     7        */
-		*p_insn = i;
 		*p_rs1 = ((opcode >> 15) & 0x1f);
 		*p_rs2 = ((opcode >> 20) & 0x1f);
-		return ERROR_OK;
+	}
+	/* Zc Extension
+	   15-13  12-10  9-7   6-5      4-2  1-0
+	   funct3  010   rs1  uimm[0|1] rs2  C0(00)  */
+	else if (insn_format == INSN_FORMAT_ZC_STORE) {
+		*p_rs1 = ((opcode >> 7) & 0x7) + 0x8; /* x8-15 */
+		*p_rs2 = ((opcode >> 2) & 0x7) + 0x8; /* x8-15 */
+		if (access_length == 1) {            /* c.sb */
+			get_imm = (((opcode >> 5) & 0x01) << 1);
+			get_imm |= ((opcode >> 6) & 0x01);
+		} else if (access_length == 2) {     /* c.sh */
+			get_imm = (((opcode >> 5) & 0x01) << 1);
+		}
+	}
+	/* Zc Extension push
+	   15-13   12-8   7-4    3-2     1-0
+	   funct3  11000  rlist  spimm   C2(10)  */
+	else if (insn_format == INSN_FORMAT_ZC_PUSH) {
+		uint32_t rlist = ((opcode >> 4) & 0xf);
+		uint32_t reg_nums;
+		/* note - to include s10, s11 must also be included */
+		if (rlist == 15)
+			reg_nums = 13;
+		else
+			reg_nums = (rlist - 3);
+
+		if (ndsv5_cur_target_misa_mxl & INSN_RV32)
+			nds_insn_all[insn_idx].length = 4 * reg_nums;
+		else if (ndsv5_cur_target_misa_mxl & INSN_RV64)
+			nds_insn_all[insn_idx].length = 8 * reg_nums;
+
+		get_imm = (0 - nds_insn_all[insn_idx].length);
+		*p_rs2 = 1; /* ra; */
+		*p_rs1 = 2; /* sp; */
 	}
 	/* GP-Based Stores */
-	else if (i >= MATCH_ID_STOREGP) {
-		*p_insn = i;
+	else if (insn_format == INSN_FORMAT_ANDES_STORE) {
 		*p_rs1 = 3; /* gp */
 		*p_rs2 = ((opcode >> 20) & 0x1f);
-		if (i == MATCH_ID_SBGP) {
+		if (access_length == 1) {            /* sbgp */
 			/*  31     30 25   24 20   19 17     16 15      14    13 12   11 8       7     6 0
 			    imm17 imm[10:5]   Rs2  imm[14:12] imm[16:15] imm0   SBGP   imm[4:1] imm11   Custom-0 */
-			get_imm = (int)(((opcode >> 14) & 0x01) << 0);
-			get_imm |= (int)(((opcode >> 8) & 0x0f) << 1);
-			get_imm |= (int)(((opcode >> 25) & 0x3f) << 5);
-			get_imm |= (int)(((opcode >> 7) & 0x01) << 11);
-			get_imm |= (int)(((opcode >> 17) & 0x07) << 12);
-			get_imm |= (int)(((opcode >> 15) & 0x03) << 15);
-			get_imm |= (int)(((opcode >> 31) & 0x01) << 17);
+			get_imm = (((opcode >> 14) & 0x01) << 0);
+			get_imm |= (((opcode >> 8) & 0x0f) << 1);
+			get_imm |= (((opcode >> 25) & 0x3f) << 5);
+			get_imm |= (((opcode >> 7) & 0x01) << 11);
+			get_imm |= (((opcode >> 17) & 0x07) << 12);
+			get_imm |= (((opcode >> 15) & 0x03) << 15);
+			get_imm |= (((opcode >> 31) & 0x01) << 17);
 			if (get_imm & 0x20000)
 				get_imm |= 0xFFFC0000;
-		} else if (i == MATCH_ID_SHGP) {
+		} else if (access_length == 2) {     /* shgp */
 			/*  31     30 25   24 20   19 17     16 15       14 12    11 8       7      6 0
 			    imm17 imm[10:5]   Rs2  imm[14:12] imm[16:15]   SHGP   imm[4:1]  imm11   Custom-1 */
-			get_imm = (int)(((opcode >> 8) & 0x0f) << 1);
-			get_imm |= (int)(((opcode >> 25) & 0x3f) << 5);
-			get_imm |= (int)(((opcode >> 7) & 0x01) << 11);
-			get_imm |= (int)(((opcode >> 17) & 0x07) << 12);
-			get_imm |= (int)(((opcode >> 15) & 0x03) << 15);
-			get_imm |= (int)(((opcode >> 31) & 0x01) << 17);
+			get_imm = (((opcode >> 8) & 0x0f) << 1);
+			get_imm |= (((opcode >> 25) & 0x3f) << 5);
+			get_imm |= (((opcode >> 7) & 0x01) << 11);
+			get_imm |= (((opcode >> 17) & 0x07) << 12);
+			get_imm |= (((opcode >> 15) & 0x03) << 15);
+			get_imm |= (((opcode >> 31) & 0x01) << 17);
 			if (get_imm & 0x20000)
 				get_imm |= 0xFFFC0000;
-		} else if (i == MATCH_ID_SWGP) {
+		} else if (access_length == 4) {     /* swgp */
 			/*  31     30 25   24 20  19 17      16 15       14 12    11 9      8     7     6 0
 			    imm18 imm[10:5]   Rs2  imm[14:12] imm[16:15]   SWGP   imm[4:2] imm17 imm11 Custom-1 */
-			get_imm = (int)(((opcode >> 9) & 0x07) << 2);
-			get_imm |= (int)(((opcode >> 25) & 0x3f) << 5);
-			get_imm |= (int)(((opcode >> 7) & 0x01) << 11);
-			get_imm |= (int)(((opcode >> 17) & 0x07) << 12);
-			get_imm |= (int)(((opcode >> 15) & 0x03) << 15);
-			get_imm |= (int)(((opcode >> 8) & 0x01) << 17);
-			get_imm |= (int)(((opcode >> 31) & 0x01) << 18);
+			get_imm = (((opcode >> 9) & 0x07) << 2);
+			get_imm |= (((opcode >> 25) & 0x3f) << 5);
+			get_imm |= (((opcode >> 7) & 0x01) << 11);
+			get_imm |= (((opcode >> 17) & 0x07) << 12);
+			get_imm |= (((opcode >> 15) & 0x03) << 15);
+			get_imm |= (((opcode >> 8) & 0x01) << 17);
+			get_imm |= (((opcode >> 31) & 0x01) << 18);
 			if (get_imm & 0x40000)
 				get_imm |= 0xFFF80000;
-		} else if (i == MATCH_ID_SDGP) {
+		} else if (access_length == 8) {     /* sdgp */
 			/*  31     30 25   24 20  19 17      16 15       14 12    11 10    9 8        7      6 0
 			    imm19 imm[10:5]   Rs2  imm[14:12] imm[16:15]   SDGP   imm[4:3] imm[18:17] imm11 Custom-1 */
-			get_imm = (int)(((opcode >> 10) & 0x03) << 3);
-			get_imm |= (int)(((opcode >> 25) & 0x3f) << 5);
-			get_imm |= (int)(((opcode >> 7) & 0x01) << 11);
-			get_imm |= (int)(((opcode >> 17) & 0x07) << 12);
-			get_imm |= (int)(((opcode >> 15) & 0x03) << 15);
-			get_imm |= (int)(((opcode >> 8) & 0x03) << 17);
-			get_imm |= (int)(((opcode >> 31) & 0x01) << 19);
+			get_imm = (((opcode >> 10) & 0x03) << 3);
+			get_imm |= (((opcode >> 25) & 0x3f) << 5);
+			get_imm |= (((opcode >> 7) & 0x01) << 11);
+			get_imm |= (((opcode >> 17) & 0x07) << 12);
+			get_imm |= (((opcode >> 15) & 0x03) << 15);
+			get_imm |= (((opcode >> 8) & 0x03) << 17);
+			get_imm |= (((opcode >> 31) & 0x01) << 19);
 			if (get_imm & 0x80000)
 				get_imm |= 0xFFF00000;
 		}
-		*p_imm = get_imm;
-		return ERROR_OK;
 	}
-	*p_insn = i;
-	*p_rs1 = ((opcode >> 15) & 0x1f);
-	*p_rs2 = ((opcode >> 20) & 0x1f);
-	get_imm = (int)((opcode >> 25) << 5);
-	get_imm |= (int)((opcode >> 7) & 0x1f);
-	if (get_imm & 0x800)
-		get_imm |= 0xFFFFF000;
+
 	*p_imm = get_imm;
 	return ERROR_OK;
 }
@@ -4586,8 +4435,8 @@ int ndsv5_get_watched_address(struct target *target)
 	uint32_t watched_length = 0;
 	struct watchpoint *wp;
 	uint32_t insn_idx, insn_rd, insn_rs1, insn_rs2;
-	int ret_value = 0, insn_imm;
-	char *p_insn, *short_insn_reg1, *short_insn_reg2;
+	int32_t ret_value = 0, insn_imm = 0;
+	char *p_insn;
 	struct reg *reg_pc = register_get_by_name(target->reg_cache, "pc", 1);
 	reg_pc->type->get(reg_pc);
 	uint64_t reg_pc_value = buf_get_u64(reg_pc->value, 0, reg_pc->size);
@@ -4605,29 +4454,31 @@ int ndsv5_get_watched_address(struct target *target)
 		return ERROR_FAIL;
 	}
 
-	if ((cur_instr & 0x03) != 0x03)
-		goto nds_disassemble_16_insn;
+	ndsv5_get_watched_address_init();
 
-	ret_value = ndsv5_disassemble_load(cur_instr, &insn_idx, &insn_rd, &insn_rs1, &insn_imm);
+	if ((cur_instr & 0x03) != 0x03) {
+		NDS_INFO("disassemble: Compressed Instruction Formats");
+		cur_instr &= 0x0000FFFF;
+	}
+	ret_value = ndsv5_check_if_load_store(cur_instr, &insn_idx);
 	if (ret_value != ERROR_OK) {
-		ret_value = ndsv5_disassemble_store(cur_instr, &insn_idx, &insn_rs1, &insn_rs2, &insn_imm);
-		if (ret_value == ERROR_OK) {
-			p_insn = (char *)nds_insn_store[insn_idx].name;
-			watched_length = nds_insn_store[insn_idx].length;
-			sprintf(pkt_decoded_data, "0x%" TARGET_PRIxADDR ": %08x   %s %s,%d(%s)\n",
-				reg_pc_value, cur_instr, p_insn, gpr_and_fpu_name[insn_rs2], insn_imm, gpr_and_fpu_name[insn_rs1]);
-		} else {
-			LOG_DEBUG("can't disassemble 32-insn: 0x%x", cur_instr);
-			return ERROR_FAIL;
-		}
-	} else {
-		p_insn = (char *)nds_insn_load[insn_idx].name;
-		watched_length = nds_insn_load[insn_idx].length;
-		sprintf(pkt_decoded_data, "0x%" TARGET_PRIxADDR ": %08x   %s %s,%d(%s)\n",
+		LOG_DEBUG("can't disassemble insn: 0x%x", cur_instr);
+		return ERROR_FAIL;
+	}
+	if (nds_insn_all[insn_idx].attr & INSN_FORMAT_LOAD) {
+		ret_value = ndsv5_disassemble_load(cur_instr, insn_idx, &insn_rd, &insn_rs1, &insn_imm);
+	} else if (nds_insn_all[insn_idx].attr & INSN_FORMAT_STORE) {
+		ret_value = ndsv5_disassemble_store(cur_instr, insn_idx, &insn_rs1, &insn_rs2, &insn_imm);
+		insn_rd = insn_rs2;
+	}
+	if (ret_value == ERROR_OK) {
+		p_insn = (char *)nds_insn_all[insn_idx].name;
+		watched_length = nds_insn_all[insn_idx].length;
+		sprintf(pkt_decoded_data, "%lx:	%08x   %s	%s,%d(%s)\n",
 			reg_pc_value, cur_instr, p_insn, gpr_and_fpu_name[insn_rd], insn_imm, gpr_and_fpu_name[insn_rs1]);
 	}
 	NDS_INFO("%s", pkt_decoded_data);
-	NDS_INFO("%s", gpr_and_fpu_name[insn_rs1]);
+
 	reg_rs1 = register_get_by_name(target->reg_cache, gpr_and_fpu_name[insn_rs1], 1);
 	if (reg_rs1 == NULL)
 		NDS_INFO("reg_rs1 == NULL");
@@ -4637,80 +4488,7 @@ int ndsv5_get_watched_address(struct target *target)
 	watched_addr = reg_rs1_value + insn_imm;
 	NDS_INFO("reg_rs1_value=0x%" TARGET_PRIxADDR ", insn_imm=%d, watched_addr=0x%" TARGET_PRIxADDR,
 			reg_rs1_value, insn_imm, watched_addr);
-goto nds_get_watched_address;
 
-nds_disassemble_16_insn:
-	/* Compressed Instruction Formats */
-	NDS_INFO("disassemble: Compressed Instruction Formats");
-	cur_instr &= 0x0000FFFF;
-	NDS_INFO("CUR_INSTR: 0x%x", cur_instr);
-	ret_value = ndsv5_disassemble_c_load(cur_instr, &insn_idx, &insn_rd, &insn_rs1, &insn_imm);
-	NDS_INFO("(load)insn_rs1: %d", insn_rs1);
-	NDS_INFO("(load)insn_rd: %d", insn_rd);
-	if (ret_value != ERROR_OK) {
-		ret_value = ndsv5_disassemble_c_store(cur_instr, &insn_idx, &insn_rs1, &insn_rs2, &insn_imm);
-		NDS_INFO("(store)insn_rs1: %d", insn_rs1);
-		NDS_INFO("(store)insn_rs2: %d", insn_rs2);
-		if (ret_value == ERROR_OK) {
-			/* short_insn_reg1 = (insn_idx >= MATCH_ID_C_STORESP ?
-			 * gpr_and_fpu_name[insn_rs1] : gp_rvc_reg_name[insn_rs1]);
-			 * short_insn_reg2 = (insn_idx >= MATCH_ID_C_STORESP ?
-			 * gpr_and_fpu_name[insn_rs2] : gp_rvc_reg_name[insn_rs2]);
-			 */
-			if (insn_idx < MATCH_ID_C_STORESP) {
-				/* range: s0-a5 or x8-x15 */
-				if (insn_rs1 > 7 || insn_rs2 > 7) {
-					NDS_INFO("insn_rs1 and insn_rs2 cannot > 7, range : s0-a5 or x8-x15");
-					NDS_INFO("insn_rs1: %d, insn_rs2: %d", insn_rs1, insn_rs2);
-					return ERROR_FAIL;
-				}
-			}
-			short_insn_reg1 = (insn_idx >= MATCH_ID_C_STORESP ?
-					gpr_and_fpu_name[insn_rs1] : gpr_and_fpu_name[insn_rs1 + 8]);
-			short_insn_reg2 = (insn_idx >= MATCH_ID_C_STORESP ?
-					gpr_and_fpu_name[insn_rs2] : gpr_and_fpu_name[insn_rs2 + 8]);
-			p_insn = (char *)nds_insn_store[insn_idx].name;
-			watched_length = nds_insn_store[insn_idx].length;
-			sprintf(pkt_decoded_data, "0x%" TARGET_PRIxADDR ": %08x   %s %s,%d(%s)\n",
-				reg_pc_value, cur_instr, p_insn, short_insn_reg2, insn_imm, short_insn_reg1);
-		}
-	} else {
-		/* short_insn_reg1 = (insn_idx >= MATCH_ID_C_LOADSP ?
-		 * gpr_and_fpu_name[insn_rs1] : gp_rvc_reg_name[insn_rs1]);
-		 * short_insn_reg2 = (insn_idx >= MATCH_ID_C_LOADSP ?
-		 * gpr_and_fpu_name[insn_rd] : gp_rvc_reg_name[insn_rd]);
-		 */
-		if (insn_idx < MATCH_ID_C_LOADSP) {
-			/* range: s0-a5 or x8-x15 */
-			if (insn_rs1 > 7 || insn_rd > 7) {
-				NDS_INFO("insn_rs1 and insn_rd cannot > 7, range : s0-a5 or x8-x15");
-				NDS_INFO("insn_rs1: %d, insn_rd: %d", insn_rs1, insn_rd);
-				return ERROR_FAIL;
-			}
-		}
-		short_insn_reg1 = (insn_idx >= MATCH_ID_C_LOADSP ?
-				gpr_and_fpu_name[insn_rs1] : gpr_and_fpu_name[insn_rs1 + 8]);
-		short_insn_reg2 = (insn_idx >= MATCH_ID_C_LOADSP ?
-				gpr_and_fpu_name[insn_rd] : gpr_and_fpu_name[insn_rd + 8]);
-		p_insn = (char *)nds_insn_load[insn_idx].name;
-		watched_length = nds_insn_load[insn_idx].length;
-		sprintf(pkt_decoded_data, "0x%" TARGET_PRIxADDR ": %08x   %s %s,%d(%s)\n",
-			reg_pc_value, cur_instr, p_insn, short_insn_reg2, insn_imm, short_insn_reg1);
-	}
-
-	if (ret_value != ERROR_OK) {
-		NDS_INFO("can't disassemble compressed-insn: 0x%x", cur_instr);
-		return ERROR_FAIL;
-	} else {
-		NDS_INFO("%s", pkt_decoded_data);
-		reg_rs1 = register_get_by_name(target->reg_cache, short_insn_reg1, 1);
-		reg_rs1->type->get(reg_rs1);
-		reg_rs1_value = buf_get_u64(reg_rs1->value, 0, reg_rs1->size);
-		watched_addr = reg_rs1_value + insn_imm;
-		NDS_INFO("reg_rs1_value=0x%" TARGET_PRIxADDR ", insn_imm=%d, watched_addr=0x%" TARGET_PRIxADDR,
-				reg_rs1_value, insn_imm, watched_addr);
-	}
-nds_get_watched_address:
 	for (wp = target->watchpoints; wp; wp = wp->next) {
 		watchpoint_start = wp->address;
 		watchpoint_end = watchpoint_start + wp->length;
@@ -4723,6 +4501,9 @@ nds_get_watched_address:
 	}
 	return ERROR_FAIL;
 }
+
+struct watchpoint nds_watched_address[32];
+uint32_t nds_watched_hit_cnt, nds_gdb_support_multi_wp_addr;
 
 /* count watchpoint number*/
 int ndsv5_watchpoint_count(struct target *target)
@@ -4740,16 +4521,19 @@ int ndsv5_watchpoint_count(struct target *target)
 	for (wp = target->watchpoints; wp; wp = wp->next) {
 		LOG_DEBUG("wp->addr: 0x%" TARGET_PRIxADDR ", wp->length: %d", wp->address, wp->length);
 		if (((wp->address >= (watched_addr + watched_length)) ||
-		    ((wp->address + wp->length) <= watched_addr)) == false)
-			watch_count++;
-
-		if (watch_count > 1) {
+		    ((wp->address + wp->length) <= watched_addr)) == false) {
+				nds_watched_address[watch_count].address = wp->address;
+				nds_watched_address[watch_count].rw = wp->rw;
+				watch_count++;
+			}
+		if ((watch_count > 1) && (nds_gdb_support_multi_wp_addr == 0)) {
 			/* hit multi_watch */
 			NDS_INFO("hit multiple watchpoints");
 			nds32->watched_address = 0;
 			break;
 		}
 	}
+	nds_watched_hit_cnt = watch_count;
 	LOG_DEBUG("watch_count = %d", watch_count);
 	return ERROR_OK;
 }
@@ -5065,7 +4849,7 @@ int ndsv5_gdb_fileio_write_memory(struct target *target, target_addr_t address,
 
 	return ERROR_OK;
 }
-
+#if 0
 #define DIM(x)		(sizeof(x)/sizeof(*x))
 void ndsv5_decode_progbuf(char *text, uint32_t cur_instr)
 {
@@ -5175,6 +4959,7 @@ void ndsv5_decode_progbuf(char *text, uint32_t cur_instr)
 	NDS_INFO("%s", text);
 	*/
 }
+#endif
 
 __COMMAND_HANDLER(handle_ndsv5_tracer_command)
 {

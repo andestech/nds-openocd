@@ -9,6 +9,7 @@
 #endif
 
 #include <assert.h>
+#include <ctype.h>
 #include <errno.h>
 #include <helper/log.h>
 #include <libgen.h>
@@ -27,7 +28,7 @@
 #include "ndsv5_ace.h"
 #include "tiny-AES-c/aes.h"
 
-// #define DEBUG_DUMP
+/* #define DEBUG_DUMP */
 
 #if defined(DEBUG_DUMP)
 #define DUMP_PAIR(k, v, indent) dump_pair((k), (v), (indent))
@@ -64,16 +65,21 @@ typedef struct Acx_Code {
 	uint32_t insn;
 } Acx_Code_t;
 
-typedef struct Acx_Patch_Tupple {
+typedef struct Acx_Patch_Tuple {
 	void *next;
-	uint8_t right;
-	uint8_t left;
-	uint8_t len;
-} Acx_Patch_tupple_t;
+	/* Patch format: (source_bit_offset, bit_length, target_bit_offset) */
+	/* This structure describes how to extract and place register index bit-fields */
+	/* within an instruction, as register indices may be split across multiple */
+	/* non-contiguous bit positions in the instruction encoding. */
+	uint8_t source_bit_offset;  /* Starting bit position to extract register index from */
+	uint8_t bit_length;         /* Number of bits to extract (since a single register index may span
+								multiple bit-fields) */
+	uint8_t target_bit_offset;  /* Starting bit position in instruction where extracted bits should be placed */
+} Acx_Patch_Tuple_t;
 
 typedef struct Acx_Patch {
 	void *next;
-	Acx_Patch_tupple_t *tupple;
+	Acx_Patch_Tuple_t *tuple;
 } Acx_Patch_t;
 
 typedef struct Acx_Access {
@@ -134,6 +140,49 @@ INSN_CODE_T_V5 *(*gen_set_value_code)(char *name, unsigned index);
 /* Andes ACE JSON helpers.  */
 static Ace_Context_t ace;
 static Json_Context_t json;
+static uint8_t ace_runtime_key[16];
+static bool ace_runtime_key_set;
+
+static int hexval(int c)
+{
+	if (c >= '0' && c <= '9')
+		return c - '0';
+	if (c >= 'a' && c <= 'f')
+		return c - 'a' + 10;
+	if (c >= 'A' && c <= 'F')
+		return c - 'A' + 10;
+	return -1;
+}
+
+void ndsv5_ace_set_key_hex(const char *hex_key)
+{
+	memset(ace_runtime_key, 0, sizeof(ace_runtime_key));
+	ace_runtime_key_set = false;
+
+	if (!hex_key || !*hex_key)
+		return;
+
+	if (hex_key[0] == '0' && (hex_key[1] == 'x' || hex_key[1] == 'X'))
+		hex_key += 2;
+
+	size_t len = strlen(hex_key);
+	if (len != 32) {
+		LOG_ERROR("ACE key must be 32 hex chars (AES-128)");
+		return;
+	}
+
+	for (size_t i = 0; i < 16; i++) {
+		int hi = hexval(hex_key[i * 2]);
+		int lo = hexval(hex_key[i * 2 + 1]);
+		if (hi < 0 || lo < 0) {
+			LOG_ERROR("ACE key contains non-hex characters");
+			return;
+		}
+		ace_runtime_key[i] = (uint8_t)((hi << 4) | lo);
+	}
+
+	ace_runtime_key_set = true;
+}
 
 static int parse_object(jsmntok_t *t, size_t count);
 
@@ -147,138 +196,373 @@ static inline void *realloc_it(void *ptrmem, size_t size)
 	return p;
 }
 
-static uint8_t *parse_gas_eca(const char *t, size_t count, size_t *bytes)
+static const char *skip_ws(const char *p, const char *end)
 {
-	/* sizing */
-	const char *p = t;
-	size_t n = count;
-	*bytes = 0;
-	while (n-- > 0)
-		if (*p++ == ',')
-			(*bytes)++;
-	if (t[count - 1] != ',')
-		*bytes += 1;
-
-	uint8_t *buf = calloc(*bytes, 1);
-	if (buf == NULL)
-		return buf;
-
-	char *ep;
-	int i = 0;
-	n = *bytes;
-	p = t;
-	while (n-- > 0) {
-		buf[i++] = (uint8_t)strtol(p, &ep, 0);
-		p = ep + 1; /* skip ',' */
-	}
-
-	return buf;
+	while (p < end && isspace((unsigned char)*p))
+		p++;
+	return p;
 }
 
-static void parse_acx_type(const char *t, size_t len)
+static int parse_long_token(const char **pp, const char *end, long *out,
+							const char *what)
+{
+	const char *p = skip_ws(*pp, end);
+	char *endptr;
+	size_t preview_len;
+
+	if (p >= end) {
+		LOG_ERROR("Unexpected end while parsing %s", what);
+		return ERROR_FAIL;
+	}
+
+	errno = 0;
+	long val = strtol(p, &endptr, 0);
+	if (endptr == p) {
+		preview_len = (size_t)(end - p);
+		if (preview_len > 24)
+			preview_len = 24;
+		LOG_ERROR("Invalid %s near '%.*s'", what, (int)preview_len, p);
+		return ERROR_FAIL;
+	}
+
+	if (errno == ERANGE) {
+		LOG_ERROR("%s out of range", what);
+		return ERROR_FAIL;
+	}
+
+	*out = val;
+	*pp = endptr;
+	return ERROR_OK;
+}
+
+static int parse_gas_eca(const char *t, size_t count, uint8_t **out, size_t *bytes)
+{
+	const char *p = t;
+	const char *end = t + count;
+	uint8_t *buf = NULL;
+	size_t cap = 0;
+	size_t nr = 0;
+
+	*out = NULL;
+	*bytes = 0;
+	while (p < end) {
+		long val;
+
+		p = skip_ws(p, end);
+		if (p >= end)
+			break;
+		if (*p == ',') {
+			p++;
+			continue;
+		}
+
+		if (parse_long_token(&p, end, &val, "gas_eca byte") != ERROR_OK) {
+			free(buf);
+			*bytes = 0;
+			return ERROR_FAIL;
+		}
+		if (val < 0 || val > 0xff) {
+			LOG_ERROR("gas_eca byte out of range: %ld", val);
+			free(buf);
+			*bytes = 0;
+			return ERROR_FAIL;
+		}
+
+		if (nr == cap) {
+			size_t new_cap = cap ? cap * 2 : 16;
+			uint8_t *tmp = realloc(buf, new_cap);
+			if (!tmp) {
+				LOG_ERROR("Out of memory");
+				free(buf);
+				*bytes = 0;
+				return ERROR_FAIL;
+			}
+			buf = tmp;
+			cap = new_cap;
+		}
+
+		buf[nr++] = (uint8_t)val;
+		*bytes = nr;
+		p = skip_ws(p, end);
+		if (p < end && *p == ',')
+			p++;
+	}
+
+	if (nr == 0) {
+		free(buf);
+		return ERROR_OK;
+	}
+
+	*out = buf;
+	return ERROR_OK;
+}
+
+static int parse_acx_type(const char *t, size_t len)
 {
 	const char *p = t;
 	const char *end = t + len;
-	char *endptr;
+	size_t parsed = 0;
+
+	if (!ace.acxs) {
+		LOG_ERROR("ACX object is missing before type list");
+		return ERROR_FAIL;
+	}
+
 	while (p < end) {
-		int val = strtol(p, &endptr, 0);
+		long val;
+
+		p = skip_ws(p, end);
+		if (p >= end)
+			break;
+		if (*p == ',') {
+			p++;
+			continue;
+		}
+
+		if (parse_long_token(&p, end, &val, "ACR type") != ERROR_OK)
+			return ERROR_FAIL;
 
 		Acx_Type_t *nu = calloc(1, sizeof(Acx_Type_t));
+		if (!nu) {
+			LOG_ERROR("Out of Memory!");
+			return ERROR_FAIL;
+		}
 		nu->type = val;
 		nu->next = ace.acxs->type;
 		ace.acxs->type = nu;
+		parsed++;
 
-		p = endptr;
-		if (*p == ',')
+		p = skip_ws(p, end);
+		if (p < end && *p == ',')
 			p++;
 	}
+
+	if (parsed == 0) {
+		LOG_ERROR("Empty ACR type list");
+		return ERROR_FAIL;
+	}
+
+	return ERROR_OK;
 }
 
-static void parse_acx_code(const char *t, size_t len)
+static int parse_acx_code(const char *t, size_t len)
 {
 	const char *p = t;
 	const char *end = t + len;
-	char *endptr;
+	size_t parsed = 0;
+
+	if (!ace.acc) {
+		LOG_ERROR("Access object is missing before code list");
+		return ERROR_FAIL;
+	}
+
 	while (p < end) {
-		uint32_t insn = strtol(p, &endptr, 0);
+		long val;
+
+		p = skip_ws(p, end);
+		if (p >= end)
+			break;
+		if (*p == ',') {
+			p++;
+			continue;
+		}
+
+		if (parse_long_token(&p, end, &val, "ACR code") != ERROR_OK)
+			return ERROR_FAIL;
+		if (val < 0 || val > UINT32_MAX) {
+			LOG_ERROR("ACR code out of range: %ld", val);
+			return ERROR_FAIL;
+		}
 
 		Acx_Code_t *nu = calloc(1, sizeof(Acx_Code_t));
+		if (!nu) {
+			LOG_ERROR("Out of Memory!");
+			return ERROR_FAIL;
+		}
 		nu->next = ace.acc->code;
-		nu->insn = insn;
+		nu->insn = (uint32_t)val;
 		ace.acc->code = nu;
 		ace.acc->code_len++;
+		parsed++;
 
-		p = endptr;
-		if (*p == ',')
+		p = skip_ws(p, end);
+		if (p < end && *p == ',')
 			p++;
 	}
-}
 
-static const char *parse_acx_tupple(const char *t, const char *end,
-									Acx_Patch_tupple_t **lst)
-{
-	const char *p = t;
-	char *endptr;
-	int succ = 0;
-	while (p < end) {
-		int a, b, c;
-		/* (a,b,c),... */
-		if (*p++ != '(')
-			break;
-		a = strtol(p, &endptr, 0);
-		p = endptr;
-		if (*p++ != ',')
-			break;
-		b = strtol(p, &endptr, 0);
-		p = endptr;
-		if (*p++ != ',')
-			break;
-		c = strtol(p, &endptr, 0);
-		p = endptr;
-		if (*p++ != ')')
-			break;
-
-		Acx_Patch_tupple_t *nu = calloc(1, sizeof(Acx_Patch_tupple_t));
-		nu->next = *lst;
-		nu->right = a;
-		nu->left = b;
-		nu->len = c;
-		*lst = nu;
-
-		if (*p++ == ',')
-			continue;
-
-		succ = 1;
-		break;
+	if (parsed == 0) {
+		LOG_ERROR("Empty ACR code list");
+		return ERROR_FAIL;
 	}
 
-	return succ ? p : t;
+	return ERROR_OK;
 }
 
-static void parse_acx_patch(const char *t, size_t len)
+static int parse_acx_tupple(const char **pp, const char *end,
+							Acx_Patch_Tuple_t **lst)
 {
-	const char *p = t;
+	const char *p = skip_ws(*pp, end);
+	long a, b, c;
+	Acx_Patch_Tuple_t *nu;
+
+	if (p >= end || *p != '(')
+		return ERROR_OK;
+
+	p++;
+	if (parse_long_token(&p, end, &a, "patch source bit offset") != ERROR_OK)
+		return ERROR_FAIL;
+	p = skip_ws(p, end);
+	if (p >= end || *p != ',') {
+		LOG_ERROR("Expected ',' in patch tuple");
+		return ERROR_FAIL;
+	}
+	p++;
+	if (parse_long_token(&p, end, &b, "patch bit length") != ERROR_OK)
+		return ERROR_FAIL;
+	p = skip_ws(p, end);
+	if (p >= end || *p != ',') {
+		LOG_ERROR("Expected ',' in patch tuple");
+		return ERROR_FAIL;
+	}
+	p++;
+	if (parse_long_token(&p, end, &c, "patch target bit offset") != ERROR_OK)
+		return ERROR_FAIL;
+	p = skip_ws(p, end);
+	if (p >= end || *p != ')') {
+		LOG_ERROR("Expected ')' in patch tuple");
+		return ERROR_FAIL;
+	}
+	p++;
+
+	nu = calloc(1, sizeof(Acx_Patch_Tuple_t));
+	if (!nu) {
+		LOG_ERROR("Out of Memory!");
+		return ERROR_FAIL;
+	}
+	if (a < 0 || b < 0 || c < 0 ||
+		a > UINT8_MAX || b > UINT8_MAX || c > UINT8_MAX || b > 63) {
+		LOG_ERROR("Patch tuple value out of range");
+		free(nu);
+		return ERROR_FAIL;
+	}
+	nu->next = *lst;
+	/* Patch format: (source_bit_offset, bit_length, target_bit_offset) */
+	nu->source_bit_offset = (uint8_t)a;
+	nu->bit_length = (uint8_t)b;
+	nu->target_bit_offset = (uint8_t)c;
+	*lst = nu;
+	*pp = p;
+	return 1;
+}
+
+static int parse_acx_patch(const char *t, size_t len)
+{
+	const char *p = skip_ws(t, t + len);
 	const char *end = t + len;
+
+	if (!ace.acc) {
+		LOG_ERROR("Access object is missing before patch list");
+		return ERROR_FAIL;
+	}
+
+	while (p < end && *p == ';') {
+		p++;
+		p = skip_ws(p, end);
+	}
+
+	if (p >= end)
+		return ERROR_OK;
+
+	if (*p != '(') {
+		size_t preview_len = (size_t)(end - p);
+		if (preview_len > 24)
+			preview_len = 24;
+		LOG_ERROR("Bad acx patch tuple near '%.*s'", (int)preview_len, p);
+		return ERROR_FAIL;
+	}
+
 	while (p < end) {
-		Acx_Patch_tupple_t *lst = NULL;
-		p = parse_acx_tupple(p, end, &lst);
-		assert(lst && "Bad acx patch tupple!");
+		Acx_Patch_Tuple_t *lst = NULL;
+		int tuple_count = 0;
+		int expect_tuple = 1;
+
+		p = skip_ws(p, end);
+		if (p >= end)
+			break;
+		if (*p == ';') {
+			p++;
+			continue;
+		}
+
+		for (;;) {
+			int rc = parse_acx_tupple(&p, end, &lst);
+			if (rc < 0)
+				return ERROR_FAIL;
+			if (rc == 0) {
+				if (tuple_count == 0)
+					break;
+				if (expect_tuple) {
+					LOG_ERROR("Trailing comma in patch segment");
+					return ERROR_FAIL;
+				}
+				break;
+			}
+
+			tuple_count++;
+			expect_tuple = 0;
+			p = skip_ws(p, end);
+			if (p >= end || *p == ';')
+				break;
+			if (*p == ',') {
+				p++;
+				expect_tuple = 1;
+				continue;
+			}
+
+			size_t preview_len = (size_t)(end - p);
+			if (preview_len > 24)
+				preview_len = 24;
+			LOG_ERROR("Unexpected character in patch near '%.*s'", (int)preview_len, p);
+			return ERROR_FAIL;
+		}
+
+		if (tuple_count == 0) {
+			size_t preview_len = (size_t)(end - p);
+			if (preview_len > 24)
+				preview_len = 24;
+			LOG_ERROR("Bad acx patch tuple near '%.*s'", (int)preview_len, p);
+			return ERROR_FAIL;
+		}
 
 		Acx_Patch_t *nu = calloc(1, sizeof(Acx_Patch_t));
+		if (!nu) {
+			LOG_ERROR("Out of Memory!");
+			return ERROR_FAIL;
+		}
 		nu->next = ace.acc->patch;
-		nu->tupple = lst;
+		nu->tuple = lst;
 		ace.acc->patch = nu;
 		ace.acc->patch_len++;
 
-		if (*p == ';')
+		p = skip_ws(p, end);
+		if (p < end && *p == ';')
 			p++;
+		else if (p < end) {
+			size_t preview_len = (size_t)(end - p);
+			if (preview_len > 24)
+				preview_len = 24;
+			LOG_ERROR("Unexpected character in patch near '%.*s'", (int)preview_len, p);
+			return ERROR_FAIL;
+		}
 	}
+
+	return ERROR_OK;
 }
 
 static Ace_Acx_t *push_acx(const char *name, size_t len)
 {
 	Ace_Acx_t *p = calloc(1, sizeof(Ace_Acx_t));
-	assert(p && "Out of Memory!");
+	/* assert(p && "Out of Memory!"); */
 	p->name = name;
 	p->len = len;
 	p->next = ace.acxs;
@@ -288,24 +572,43 @@ static Ace_Acx_t *push_acx(const char *name, size_t len)
 
 static Acx_Access_t *push_access(const char *name, size_t len)
 {
+	if (!ace.acxs) {
+		LOG_ERROR("ACX object is missing before access type");
+		ace.acc = NULL;
+		return NULL;
+	}
+
 	if (0 == strncmp(name, "get", len))
 		ace.acc = &ace.acxs->get;
 	else if (0 == strncmp(name, "set", len))
 		ace.acc = &ace.acxs->set;
-	else
-		assert(0 && "Unknown access type!");
+	else {
+		LOG_ERROR("Unknown access type: %.*s", (int)len, name);
+		ace.acc = NULL;
+	}
 	return ace.acc;
 }
 
 static size_t push_key(const char *name, size_t len)
 {
 	size_t i = json.idxstatck;
+	if (i >= SZ_KEY_STACK) {
+		LOG_ERROR("JSON key stack overflow");
+		return i;
+	}
 	json.sstack[i] = name;
 	json.lstack[i] = len;
 	return ++json.idxstatck;
 }
 
-static size_t pop_key(void) { return --json.idxstatck; }
+static size_t pop_key(void)
+{
+	if (json.idxstatck == 0) {
+		LOG_ERROR("JSON key stack underflow");
+		return 0;
+	}
+	return --json.idxstatck;
+}
 
 #ifdef DEBUG_DUMP
 static Ace_Acx_t *peek_acx(void) { return ace.acxs; }
@@ -361,7 +664,7 @@ static void dump_pair(jsmntok_t *k, jsmntok_t *v, int indent)
 static int parse_pair(jsmntok_t *t, size_t count)
 {
 	jsmntok_t *key, *value;
-	char *keyname, *valtext, *endptr;
+	char *keyname, *valtext;
 	size_t klen, vlen;
 	int j;
 	ace_pstate_t prev_pst;
@@ -370,10 +673,13 @@ static int parse_pair(jsmntok_t *t, size_t count)
 
 	/* key */
 	key = t;
-	assert(key->type == JSMN_STRING);
-	keyname = (char *)(json.stream + key->start);
-	klen = key->end - key->start;
-	++j;
+		if (key->type != JSMN_STRING) {
+			LOG_ERROR("Expected JSON string key");
+			return ERROR_FAIL;
+		}
+		keyname = (char *)(json.stream + key->start);
+		klen = key->end - key->start;
+		++j;
 
 	/* value */
 	value = t + j;
@@ -387,47 +693,55 @@ static int parse_pair(jsmntok_t *t, size_t count)
 		json.value = value;
 		++j;
 		break;
-	case JSMN_OBJECT:
-		prev_pst = ace.pst; /* save state */
-		switch (ace.pst) {
-		case ace_pst_acr: {
-			push_acx(keyname, klen);
-			ace.pst = ace_pst_acr_one;
-			break;
-		}
-		case ace_pst_acr_one: {
-			push_access(keyname, klen);
-			ace.pst = ace_pst_acr_two;
-			break;
-		}
-		case ace_pst_acr_two: {
-			assert(0);
-			break;
-		}
-		default:
-			if (0 == strncmp(keyname, "info", klen)) {
-				ace.pst = ace_pst_info;
-			} else if (0 == strncmp(keyname, "acr_acm", klen)) {
-				ace.pst = ace_pst_acr;
-			} else {
-				printf("Nonsupported JSON object '%.*s'!\n", (int)klen,
-					   keyname);
+		case JSMN_OBJECT:
+			prev_pst = ace.pst; /* save state */
+			switch (ace.pst) {
+			case ace_pst_acr: {
+				if (!push_acx(keyname, klen))
+					return ERROR_FAIL;
+				ace.pst = ace_pst_acr_one;
+				break;
 			}
+			case ace_pst_acr_one: {
+				if (!push_access(keyname, klen))
+					return ERROR_FAIL;
+				ace.pst = ace_pst_acr_two;
+				break;
+			}
+			case ace_pst_acr_two: {
+				LOG_ERROR("Unexpected nested object under ACX access");
+				return ERROR_FAIL;
+			}
+			default:
+				if (0 == strncmp(keyname, "info", klen)) {
+					ace.pst = ace_pst_info;
+				} else if (0 == strncmp(keyname, "acr_acm", klen)) {
+					ace.pst = ace_pst_acr;
+				} else {
+					LOG_ERROR("Nonsupported JSON object '%.*s'!", (int)klen,
+						   keyname);
+				}
+				break;
+			}
+			push_key(keyname, klen);
+			{
+				int consumed = parse_object(value, count - j);
+				if (consumed < 0)
+					return ERROR_FAIL;
+				j += consumed;
+			}
+			ace.pst = prev_pst; /* restore state.  */
+			pop_key();
 			break;
-		}
-		push_key(keyname, klen);
-		j += parse_object(value, count - j);
-		ace.pst = prev_pst; /* restore state.  */
-		pop_key();
-		break;
 #if 0
 	case JSMN_ARRAY:
 		j += parse_array(value, count - j);
 		break;
 #endif
-	default:
-		assert(0 && "Nonsupported JSON token type!");
-	}
+		default:
+			LOG_ERROR("Nonsupported JSON token type!");
+			return ERROR_FAIL;
+		}
 
 	/* apply */
 	switch (ace.pst) {
@@ -435,29 +749,35 @@ static int parse_pair(jsmntok_t *t, size_t count)
 		const char *value_text = json.stream + value->start;
 		if (0 == strncmp(keyname, "gas_eca", klen)) {
 			size_t bytes;
-			uint8_t *p = parse_gas_eca(value_text, vlen, &bytes);
-			assert(ace.gas_eca == NULL);
+			uint8_t *p = NULL;
+			if (parse_gas_eca(value_text, vlen, &p, &bytes) != ERROR_OK)
+				return ERROR_FAIL;
 			ace.gas_eca = p;
 			ace.gas_eca_len = bytes;
 #if defined(DEBUG_DUMP)
 			if (p) {
 				dump_key();
-				printf(".%.*s[%d] = \n", klen, keyname, bytes);
+				printf(".%.*s[%zu] =\n", (int)klen, keyname, bytes);
 				for (int i = 0; i < bytes; i += 4) {
 					if (i > 64)
 						break;
 					if ((i % 16) == 0)
 						printf("\n");
-					printf("  0x%02x 0x%02x 0x%02x 0x%02x", p[i + 0], p[i + 1],
-						   p[i + 2], p[i + 3]);
+					printf("  0x%02x", p[i + 0]);
+					if (i + 1 < bytes)
+						printf(" 0x%02x", p[i + 1]);
+					if (i + 2 < bytes)
+						printf(" 0x%02x", p[i + 2]);
+					if (i + 3 < bytes)
+						printf(" 0x%02x", p[i + 3]);
 				}
 				printf("\n");
 			}
 #endif
 		} else {
 			if (value->type != JSMN_OBJECT && strncmp(keyname, "end", klen))
-				printf("redundant pair: (%.*s, %.*s)\n", (int)klen, keyname,
-					   (int)vlen, valtext);
+				LOG_ERROR("redundant pair: (%.*s, %.*s)", (int)klen, keyname,
+					  (int)vlen, valtext);
 		}
 		break;
 	}
@@ -469,10 +789,26 @@ static int parse_pair(jsmntok_t *t, size_t count)
 	}
 	case ace_pst_acr_one: {
 		if (0 == strncmp(keyname, "width", klen)) {
-			ace.acxs->width = strtol(valtext, &endptr, 0);
+			long width;
+			const char *vp = valtext;
+			if (parse_long_token(&vp, json.stream + value->end, &width, "ACR width") != ERROR_OK)
+				return ERROR_FAIL;
+			if (width < 0 || width > UINT32_MAX) {
+				LOG_ERROR("ACR width out of range: %ld", width);
+				return ERROR_FAIL;
+			}
+			ace.acxs->width = (uint32_t)width;
 			DUMP_KV(klen, keyname, vlen, valtext);
 		} else if (0 == strncmp(keyname, "number", klen)) {
-			ace.acxs->number = strtol(valtext, &endptr, 0);
+			long number;
+			const char *vp = valtext;
+			if (parse_long_token(&vp, json.stream + value->end, &number, "ACR number") != ERROR_OK)
+				return ERROR_FAIL;
+			if (number < 0 || number > UINT32_MAX) {
+				LOG_ERROR("ACR number out of range: %ld", number);
+				return ERROR_FAIL;
+			}
+			ace.acxs->number = (uint32_t)number;
 			/* count the number of ACR and SRAM type ACM kinds */
 			ace.info.acr_type_count++;
 			/* count the number of total ACR entires + the number of
@@ -480,27 +816,30 @@ static int parse_pair(jsmntok_t *t, size_t count)
 			ace.info.acr_reg_count += ace.acxs->number;
 			DUMP_KV(klen, keyname, vlen, valtext);
 		} else if (0 == strncmp(keyname, "type", klen)) {
-			parse_acx_type(valtext, vlen);
+			if (parse_acx_type(valtext, vlen) != ERROR_OK)
+				return ERROR_FAIL;
 			DUMP_KV(klen, keyname, vlen, valtext);
 		} else {
 			if (value->type != JSMN_OBJECT && strncmp(keyname, "end", klen))
-				printf("redundant pair: (%.*s, %.*s)\n", (int)klen, keyname,
-					   (int)vlen, valtext);
+				LOG_ERROR("redundant pair: (%.*s, %.*s)", (int)klen, keyname,
+					  (int)vlen, valtext);
 		}
 		break;
 	}
 	case ace_pst_acr_two: {
 		if (0 == strncmp(keyname, "code", klen)) {
-			parse_acx_code(valtext, vlen);
+			if (parse_acx_code(valtext, vlen) != ERROR_OK)
+				return ERROR_FAIL;
 			DUMP_KV(klen, keyname, vlen, valtext);
 		} else if (0 == strncmp(keyname, "patch", klen)) {
-			parse_acx_patch(valtext, vlen);
+			if (parse_acx_patch(valtext, vlen) != ERROR_OK)
+				return ERROR_FAIL;
 			DUMP_KV(klen, keyname, vlen, valtext);
 		}
 		break;
 	}
 	default: {
-		assert(0 && "Nonsupported ACE element class!");
+		LOG_ERROR("Nonsupported ACE element class!");
 		break;
 	}
 	}
@@ -513,13 +852,24 @@ static int parse_object(jsmntok_t *t, size_t count)
 	jsmntok_t *key;
 	int i, j = 0;
 
-	assert(t->type == JSMN_OBJECT);
+	if (t->type != JSMN_OBJECT) {
+		LOG_ERROR("Expected JSON object");
+		return ERROR_FAIL;
+	}
 
 	while (count > 0) {
 		for (i = 0, j = 1; i < t->size; i++) {
 			key = t + j;
-			assert(key->type == JSMN_STRING);
-			j += parse_pair(key, count - j);
+			if (key->type != JSMN_STRING) {
+				LOG_ERROR("Expected JSON string key");
+				return ERROR_FAIL;
+			}
+			{
+				int consumed = parse_pair(key, count - j);
+				if (consumed < 0)
+					return ERROR_FAIL;
+				j += consumed;
+			}
 		}
 		count -= j;
 		break;
@@ -554,8 +904,8 @@ static int parse_json_content(char *json_content, const uint32_t json_content_le
 	/* Allocate some tokens as a start */
 	tok = malloc(sizeof(*tok) * tokcount);
 	if (!tok) {
-		fprintf(stderr, "malloc(): errno=%d\n", errno);
-		return 3;
+		LOG_ERROR("malloc(): errno=%d", errno);
+		return ERROR_FAIL;
 	}
 
 	/*
@@ -569,19 +919,23 @@ static int parse_json_content(char *json_content, const uint32_t json_content_le
 				tokcount *= 2;
 				tok = realloc_it(tok, sizeof(*tok) * tokcount);
 				if (!tok)
-					return 3;
+					return ERROR_FAIL;
 			} else {
-				return 1; /* Return error for other parsing issues */
+				LOG_ERROR("JSON parser error: %d", r);
+				return ERROR_FAIL;
 			}
 		} else {
 			break;
 		}
 	}
 
-	process_json(json_content, tok, jsmn_p.toknext);
+	if (process_json(json_content, tok, jsmn_p.toknext) < 0) {
+		free(tok);
+		return ERROR_FAIL;
+	}
 
 	free(tok);
-	return EXIT_SUCCESS;
+	return ERROR_OK;
 }
 
 
@@ -597,7 +951,7 @@ static Ace_Acx_t *lookup_acr(char *name)
 		acr = acr->next;
 	}
 	if (!acr) {
-		LOG_ERROR("%d : not found ACR : %.*s\n", (int)acr->len, (int)acr->len, acr->name);
+		LOG_ERROR("not found ACR: %s", name);
 	}
 	return acr;
 }
@@ -613,22 +967,22 @@ static INSN_CODE_T_V5 *ace_gen_access_code(Ace_Acx_t *acr, Acx_Access_t *acc,
 
 	Acx_Type_t *type = acr->type;
 	Acx_Code_t *code = acc->code;
+	Acx_Patch_t *patch = acc->patch;
 	for (int i = acc->code_len - 1; i >= 0; --i) {
-		Acx_Patch_t *patch = acc->patch;
 		unsigned int encoded_index = 0;
 		if (patch) {
-			Acx_Patch_tupple_t *tupple = patch->tupple;
-			while (tupple) {
-				unsigned int mask = (1llu << tupple->len) - 1;
-				encoded_index |= (((index >> tupple->left) << tupple->right) & mask);
-				tupple = tupple->next;
+			Acx_Patch_Tuple_t *tuple = patch->tuple;
+			while (tuple) {
+				unsigned int mask = (1llu << tuple->bit_length) - 1;
+				encoded_index |= (((index >> tuple->source_bit_offset) & mask) << tuple->target_bit_offset);
+				tuple = tuple->next;
 			}
+			patch = patch->next;
 		}
 		insn_code->code[i].insn = code->insn | encoded_index;
 		insn_code->code[i].version = type->type;
 		type = type->next;
 		code = code->next;
-		patch = patch->next;
 	}
 
 	return insn_code;
@@ -687,19 +1041,22 @@ static int32_t decrypt_ace_eca_file(const char *eca_file_name, char **plaintext,
 	uint8_t key[16] = { 0 };
 #endif
 
+	if (ace_runtime_key_set)
+		memcpy(key, ace_runtime_key, sizeof(key));
+
 	const char *suffix = ".eca";
 	const size_t suffix_len = strlen(suffix);
 	const size_t eca_file_name_len = strlen(eca_file_name);
 
 	/* Check whether file extension is ".eca", if not, log error message and return -1 */
 	if (suffix_len >= strlen(eca_file_name) || strcmp(eca_file_name + eca_file_name_len - suffix_len, suffix) != 0) {
-		LOG_DEBUG("The file extension must be .eca");
+		LOG_ERROR("The file extension must be .eca");
 		return -1;
 	}
 
-	FILE *file = fopen(eca_file_name, "r");
+	FILE *file = fopen(eca_file_name, "rb");
 	if (file == NULL) {
-		LOG_DEBUG("Error opening ACE ECA file");
+		LOG_ERROR("Error opening ACE ECA file");
 		return -1;
 	}
 
@@ -709,7 +1066,7 @@ static int32_t decrypt_ace_eca_file(const char *eca_file_name, char **plaintext,
 	rewind(file); /* Go back to the start of the file */
 
 	if (file_size < 0) {
-		LOG_DEBUG("Error determining file size");
+		LOG_ERROR("Error determining file size");
 		fclose(file);
 		return -1;
 	}
@@ -725,14 +1082,18 @@ static int32_t decrypt_ace_eca_file(const char *eca_file_name, char **plaintext,
 
 	/* Read IV */
 	/* IV is always allocated at the first 16 chars (bytes) at line four */
-	fread(iv, 1, sizeof(iv), file);
+	if (fread(iv, 1, sizeof(iv), file) != sizeof(iv)) {
+		LOG_ERROR("Error reading file (iv)");
+		fclose(file);
+		return -1;
+	}
 
 	/* Read ciphertext */
 	size_t data_size = file_size - ftell(file);
 	uint8_t *data = (uint8_t *)malloc(data_size + 1);
 	size_t bytes_read = fread(data, 1, data_size, file);
 	if (bytes_read != data_size) {
-		LOG_DEBUG("Error reading file");
+		LOG_ERROR("Error reading file");
 		free(data);
 		fclose(file);
 		return -1;
@@ -740,7 +1101,7 @@ static int32_t decrypt_ace_eca_file(const char *eca_file_name, char **plaintext,
 
 	/* Decrypt the data to JSON format if the data is 16-bytes aligned */
 	if (data_size % 16 != 0) {
-		LOG_DEBUG("Incorrect ECA format (content size does not align to 16 bytes)");
+		LOG_ERROR("Incorrect ECA format (content size does not align to 16 bytes)");
 		free(data);
 		fclose(file);
 		return -1;
@@ -753,7 +1114,7 @@ static int32_t decrypt_ace_eca_file(const char *eca_file_name, char **plaintext,
 	/* Remove PKCS#7 padding */
 	size_t padding = data[data_size - 1];
 	if (padding > 16 || padding > data_size) {
-		LOG_DEBUG("Incorrect ECA format (cannot find padding size info)");
+		LOG_ERROR("Incorrect ECA format (cannot find padding size info)");
 		free(data);
 		fclose(file);
 		return -1;
@@ -771,7 +1132,7 @@ static int32_t decrypt_ace_eca_file(const char *eca_file_name, char **plaintext,
 
 #if defined(DEBUG_DUMP)
 
-// Function declarations
+/* Function declarations */
 static void print_ace_info(Ace_Info_t *info) {
     if (!info) return;
     printf("Ace_Info: { acr_reg_count: %d, acr_type_count: %d }\n", info->acr_reg_count, info->acr_type_count);
@@ -791,45 +1152,49 @@ static void print_acx_code(Acx_Code_t *code) {
     }
 }
 
-static void print_acx_patch_tupple(Acx_Patch_tupple_t *tupple) {
-    while (tupple) {
-        printf("Acx_Patch_Tupple: { right: %u, left: %u, len: %u }\n", tupple->right, tupple->left, tupple->len);
-        tupple = (Acx_Patch_tupple_t *)tupple->next;
-    }
+static void print_acx_patch_tupple(Acx_Patch_Tuple_t *tuple)
+{
+	while (tuple) {
+		printf("Acx_Patch_Tupple: { target_bit_offset: %u, source_bit_offset: %u, bit_length: %u }\n",
+				tuple->target_bit_offset, tuple->source_bit_offset, tuple->bit_length);
+		tuple = (Acx_Patch_Tuple_t *)tuple->next;
+	}
 }
 
 static void print_acx_patch(Acx_Patch_t *patch) {
-    while (patch) {
+	while (patch) {
         printf("Acx_Patch: {\n");
-        print_acx_patch_tupple(patch->tupple);
-        printf("}\n");
-        patch = (Acx_Patch_t *)patch->next;
+		print_acx_patch_tupple(patch->tuple);
+		printf("}\n");
+		patch = (Acx_Patch_t *)patch->next;
     }
 }
 
 static void print_acx_access(Acx_Access_t *access) {
-    if (!access) return;
-    printf("Acx_Access: {\n");
-    printf("  Code Len: %llu\n", access->code_len);
-    printf("  Code:\n");
-    print_acx_code(access->code);
-    printf("  Patch Len: %llu\n", access->patch_len);
-    printf("  Patch:\n");
-    print_acx_patch(access->patch);
-    printf("}\n");
+	if (!access)
+		return;
+	printf("Acx_Access: {\n");
+	printf("  Code Len: %llu\n", access->code_len);
+	printf("  Code:\n");
+	print_acx_code(access->code);
+	printf("  Patch Len: %llu\n", access->patch_len);
+	printf("  Patch:\n");
+	print_acx_patch(access->patch);
+	printf("}\n");
 }
 
 static void print_ace_acx(Ace_Acx_t *acx) {
-    while (acx) {
-        printf("Ace_Acx: { name: %.*s, len: %zu, width: %u, number: %u }\n", acx->len, acx->name, acx->len, acx->width, acx->number);
-        printf("  Type:\n");
-        print_acx_type(acx->type);
-        printf("  Get:\n");
-        print_acx_access(&acx->get);
-        printf("  Set:\n");
-        print_acx_access(&acx->set);
-        acx = (Ace_Acx_t *)acx->next;
-    }
+	while (acx) {
+		printf("Ace_Acx: { name: %.*s, len: %zu, width: %u, number: %u }\n", acx->len, acx->name,
+				acx->len, acx->width, acx->number);
+		printf("  Type:\n");
+		print_acx_type(acx->type);
+		printf("  Get:\n");
+		print_acx_access(&acx->get);
+		printf("  Set:\n");
+		print_acx_access(&acx->set);
+		acx = (Ace_Acx_t *)acx->next;
+	}
 }
 
 static void print_ace_struct(Ace_Context_t *a) {
@@ -855,7 +1220,8 @@ static int32_t handle_ace_eca_file(const char *eac_file_path)
 		return decrypt_ret;
 
 	/* parse JSON content */
-	parse_json_content(json_file_content, json_content_length);
+	if (parse_json_content(json_file_content, json_content_length) != ERROR_OK)
+		return ERROR_FAIL;
 
 #if defined(DEBUG_DUMP)
 	print_ace_struct(&ace);
@@ -906,9 +1272,10 @@ int32_t nds32_ace_init_v5(const char *aceconf)
 	LOG_DEBUG("ext_conf cmp = %d", strcmp(ext + 1, ext_conf));
 
 	if (strcmp(ext + 1, ext_eca) == 0) {
-		return handle_ace_eca_file(aceconf);
+		int32_t ret = handle_ace_eca_file(aceconf);
+		return ret == ERROR_OK ? ERROR_OK : -1;
 	} else if (strcmp(ext + 1, ext_conf) == 0) {
-		LOG_DEBUG("The configuration input (e.g., ICEman.conf) is no longer supported. Please specify the path to libacedbg.eca.");
+		LOG_ERROR("The configuration input (e.g., ICEman.conf) is no longer supported. Please specify the path to libacedbg.eca.");
 		return -1;
 	}
 
@@ -933,7 +1300,7 @@ int32_t get_ace_file_name_for_gdb_v5(const char *aceconf, const char *platform,
 		/* use size as filename to do fopen */
 		sprintf(ace_gas_eca_file_name, "%u", *ace_gas_eca_length_for_gdb_client);
 
-		FILE *fd = fopen(ace_gas_eca_file_name, "w");
+		FILE *fd = fopen(ace_gas_eca_file_name, "wb");
 		if (fd == NULL) {
 			ret = -2;
 		} else {

@@ -1873,7 +1873,7 @@ int aice_issue_reset_hold(struct target *target)
 
 	/* clear no_dbgi_pin */
 	aice_read_ctrl(AICE_READ_CTRL_GET_JTAG_PIN_STATUS, &pin_status);
-	if (pin_status | 0x4)
+	if (pin_status & 0x4)
 		aice_write_ctrl(AICE_WRITE_CTRL_JTAG_PIN_STATUS, pin_status & (~0x4));
 
 	if (aice_set_edm_passcode(target, nds32->edm_passcode) != ERROR_OK)

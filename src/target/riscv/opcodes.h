@@ -296,7 +296,14 @@ static uint32_t xori(unsigned int dest, unsigned int src, uint16_t imm)
 static uint32_t srli(unsigned int dest, unsigned int src, uint8_t shamt) __attribute__ ((unused));
 static uint32_t srli(unsigned int dest, unsigned int src, uint8_t shamt)
 {
+#if _NDS_V5_ONLY_
+	return (bits(shamt, 5, 0) << 20) |
+		(src << 15) |
+		(dest << 7) |
+		MATCH_SRLI;
+#else
 	return inst_rs2(shamt) | inst_rs1(src) | inst_rd(dest) | MATCH_SRLI;
+#endif
 }
 
 static uint32_t fence(void) __attribute__((unused));

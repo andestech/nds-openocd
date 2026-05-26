@@ -425,9 +425,12 @@ int rtos_thread_packet(struct connection *connection, char const *packet, int pa
 		return GDB_THREAD_PACKET_NOT_CONSUMED;
 	} else if (strncmp(packet, "qC", 2) == 0) {
 		if (target->rtos) {
+			threadid_t threadid = target->rtos->current_threadid;
+			if (threadid <= 0)
+				threadid = target->rtos->current_thread;
 			char buffer[19];
 			int size;
-			size = snprintf(buffer, 19, "QC%016" PRIx64, target->rtos->current_thread);
+			size = snprintf(buffer, 19, "QC%016" PRIx64, threadid);
 			gdb_put_packet(connection, buffer, size);
 		} else
 			gdb_put_packet(connection, "QC0", 3);
